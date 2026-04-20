@@ -1,0 +1,72 @@
+# ai-image pipeline configuration template
+# Run `make config` to generate config.yaml with auto-detected values.
+# This file is version-controlled. config.yaml is generated and gitignored.
+
+paths:
+  root: auto          # auto: parent directory of this file
+  lancedb: auto       # auto: {root}/lancedb
+  comfyui: auto       # auto: {root}/loop/ComfyUI
+  output: auto        # auto: {root}/loop/output
+  scorers: auto       # auto: {root}/loop/scorers
+
+models:
+  vlm:
+    dir: auto                                      # auto: {scorers}/models/vlm
+    filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+    n_gpu_layers: -1   # -1 = all layers on GPU; 0 = CPU only
+    context_length: 4096
+  artifact_detector:
+    dir: auto          # auto: {scorers}/models/artifact-detector
+  clip:
+    name: ViT-L-14
+    pretrained: openai
+
+gpu:
+  backend: auto
+  # auto | mps | cuda | rocm | cpu
+  #
+  # macOS: uses Metal Performance Shaders (MPS). When an eGPU is connected,
+  # Metal's MTLCreateSystemDefaultDevice selects the most capable device,
+  # which is typically the eGPU. No additional config required.
+  #
+  # NVIDIA eGPU on Apple Silicon: Apple has begun signing NVIDIA compute
+  # drivers. If CUDA is available on macOS, set backend: cuda manually —
+  # auto-detection does not yet probe for this case.
+  #
+  # Linux NVIDIA: cuda. Linux AMD: rocm. No GPU: cpu.
+
+thresholds:
+  clip: 0.25
+  artifact: 0.50
+  score_timeout_secs: 60
+  # NOTE: The Rust aggregator binary (loop/scorers/aggregator/) has these
+  # values compiled in as const defaults. It reads AI_IMAGE_CLIP_THRESHOLD,
+  # AI_IMAGE_ARTIFACT_THRESHOLD, and AI_IMAGE_SCORE_TIMEOUT from the
+  # environment at startup to override them. config.sh exports these vars.
+
+broker:
+  rabbitmq_url: amqp://guest:guest@localhost:5672
+  redis_url: redis://localhost:6379
+  comfyui_url: http://127.0.0.1:8188
+  comfyui_ws: ws://127.0.0.1:8188/ws
+
+system:
+  package_manager: auto   # auto | homebrew | apt | dnf | pacman | zypper
+  homebrew_prefix: auto   # auto | /opt/homebrew (Apple Silicon) | /usr/local (Intel)
+
+tactical:
+  model:
+    dir: auto         # auto: {paths.scorers}/models/tactical
+    filename: Qwen2.5-14B-Instruct-Q5_K_M.gguf
+    n_gpu_layers: -1  # -1 = all on GPU
+    context_length: 8192
+    temperature: 0.1  # low for deterministic decisions
+    max_tokens: 512
+  decisions:
+    max_retries: 3    # retry budget per session
+    max_inpaints: 2   # inpaint budget per session
+    accept_vlm_mean_min: 7.0   # minimum mean VLM score to accept a candidate
+    accept_clip_min: 0.30      # minimum CLIP score to accept a candidate
+  retrieval:
+    similar_sessions_k: 5      # top-K similar past Loop records for context
+    session_history_limit: 10  # max prior images from current session to include

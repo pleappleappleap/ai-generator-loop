@@ -1,0 +1,333 @@
+"""Session orchestration entry point for the ai-image pipeline.
+
+Creates a new generation session, initialises tactical LLM budget state
+in Redis, writes the session record to LanceDB, and publishes the first
+generation request to the ``loop.request`` queue.
+
+Usage::
+
+    python session.py --prompt "..."
+    python session.py --prompt "..." --workflow /path/to/workflow.json
+    python session.py --prompt "..." --max-retries 5 --max-inpaints 3
+    python session.py --prompt "..." --monitor
+
+The ``--monitor`` flag blocks until the session is resolved (accept or
+give_up verdict), polling Redis for the budget state.
+
+This script does not need to run inside the scorers venv — it only uses
+the root venv (pika, redis, lancedb, open_clip, torch) and the shared
+config.py module.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+import lancedb
+import pika
+import redis as redis_lib
+import torch
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import load as _load_config  # noqa: E402
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "loop" / "scorers"))
+
+import open_clip  # noqa: E402 — available in scorers venv, accessed via sys.path
+
+_cfg  = _load_config()
+_tac  = _cfg.tactical
+_dec  = _tac.get("decisions", {})
+
+_MAX_RETRIES:  int = _dec.get("max_retries",  3)
+_MAX_INPAINTS: int = _dec.get("max_inpaints", 2)
+_BUDGET_TTL:   int = 86400  # 24h
+
+
+# ── CLIP embedding ────────────────────────────────────────────────────────────
+
+
+def _embed_prompt(prompt: str) -> list[float]:
+    """Return the 512-dimensional normalised CLIP text embedding for a prompt.
+
+    Args:
+        prompt: Natural language prompt to embed.
+
+    Returns:
+        List of 512 floats.
+    """
+    clip_cfg = _cfg.models["clip"]
+    model, _, _ = open_clip.create_model_and_transforms(
+        clip_cfg["name"], pretrained=clip_cfg["pretrained"]
+    )
+    tokenizer = open_clip.get_tokenizer(clip_cfg["name"])
+
+    backend = _cfg.gpu["backend"]
+    device = (
+        torch.device("mps")  if backend == "mps" else
+        torch.device("cuda") if backend in ("cuda", "rocm") else
+        torch.device("cpu")
+    )
+    model = model.to(device)
+
+    tokens = tokenizer([prompt]).to(device)
+    with torch.no_grad():
+        features = model.encode_text(tokens)
+        features = features / features.norm(dim=-1, keepdim=True)
+    return features.squeeze().tolist()
+
+
+# ── LanceDB session record ────────────────────────────────────────────────────
+
+
+def _create_session_record(
+    session_uuid: str,
+    prompt: str,
+    prompt_embedding: list[float],
+) -> None:
+    """Write a Session record to LanceDB.
+
+    Creates the sessions table if it does not already exist.
+
+    Args:
+        session_uuid: UUID string for this session.
+        prompt: The user-supplied prompt.
+        prompt_embedding: Normalised CLIP text embedding of the prompt.
+    """
+    from lancedb_schema import CLIP_EMBEDDING_DIM, Session  # noqa: E402
+
+    db = lancedb.connect(_cfg.paths["lancedb"])
+    if "sessions" not in db.table_names():
+        db.create_table("sessions", schema=Session.to_arrow_schema())
+
+    table = db.open_table("sessions")
+    record = Session(
+        session_uuid=session_uuid,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        user_prompt=prompt,
+        prompt_embedding=prompt_embedding,
+    )
+    table.add([record.model_dump()])
+
+
+# ── Redis budget ──────────────────────────────────────────────────────────────
+
+
+def _init_budget(
+    r: redis_lib.Redis,
+    session_uuid: str,
+    max_retries: int,
+    max_inpaints: int,
+) -> None:
+    """Initialise the tactical budget record for a session in Redis.
+
+    Args:
+        r: Redis client.
+        session_uuid: UUID string for this session.
+        max_retries: Maximum number of retry generations allowed.
+        max_inpaints: Maximum number of inpaint passes allowed.
+    """
+    key = f"tactical:budget:{session_uuid}"
+    budget = {
+        "retries_used":  0,
+        "inpaints_used": 0,
+        "max_retries":   max_retries,
+        "max_inpaints":  max_inpaints,
+    }
+    r.setex(key, _BUDGET_TTL, json.dumps(budget))
+
+
+# ── RabbitMQ request ──────────────────────────────────────────────────────────
+
+
+def _publish_request(
+    channel: pika.channel.Channel,
+    session_uuid: str,
+    image_uuid: str,
+    workflow_path: str,
+    prompt: str,
+    workflow_params: dict,
+) -> None:
+    """Publish the first generation request to the loop.request queue.
+
+    Args:
+        channel: Open pika channel.
+        session_uuid: UUID string for this session.
+        image_uuid: UUID string for the first generated image.
+        workflow_path: Absolute path to the ComfyUI workflow JSON.
+        prompt: The user-supplied prompt.
+        workflow_params: Optional dict of workflow parameter overrides.
+    """
+    channel.queue_declare(queue="loop.request", durable=True)
+    request = {
+        "image_uuid":      image_uuid,
+        "session_uuid":    session_uuid,
+        "sequence_number": 1,
+        "workflow_path":   workflow_path,
+        "prompt":          prompt,
+        "workflow_params": workflow_params,
+    }
+    channel.basic_publish(
+        exchange="",
+        routing_key="loop.request",
+        body=json.dumps(request),
+        properties=pika.BasicProperties(delivery_mode=2),
+    )
+
+
+# ── Monitor ───────────────────────────────────────────────────────────────────
+
+
+def _monitor(r: redis_lib.Redis, session_uuid: str, poll_interval: float = 2.0) -> None:
+    """Block until the session resolves, printing budget status each tick.
+
+    A session is considered resolved when the tactical LLM has either
+    accepted an image (budget still has headroom) or exhausted all budgets.
+    Since there is no explicit "session complete" signal in the current
+    architecture, resolution is detected by the absence of any pending
+    images (i.e. the budget counter stops changing for 30 seconds).
+
+    Args:
+        r: Redis client.
+        session_uuid: UUID string of the session to monitor.
+        poll_interval: Seconds between Redis polls.
+    """
+    key     = f"tactical:budget:{session_uuid}"
+    last    = None
+    stable  = 0.0
+    timeout = 30.0
+
+    print(f"\nMonitoring session {session_uuid} …  (Ctrl-C to detach)\n")
+
+    try:
+        while True:
+            raw = r.get(key)
+            if raw:
+                budget = json.loads(raw)
+                status = (
+                    f"  retries:  {budget['retries_used']}/{budget['max_retries']}  "
+                    f"inpaints: {budget['inpaints_used']}/{budget['max_inpaints']}"
+                )
+                print(f"\r{status}", end="", flush=True)
+
+                exhausted = (
+                    budget["retries_used"]  >= budget["max_retries"] and
+                    budget["inpaints_used"] >= budget["max_inpaints"]
+                )
+                if exhausted:
+                    print(f"\nSession {session_uuid}: all budgets exhausted.")
+                    break
+
+                if raw == last:
+                    stable += poll_interval
+                else:
+                    stable = 0.0
+                    last = raw
+
+                if stable >= timeout:
+                    print(f"\nNo budget changes for {timeout}s — assuming session resolved.")
+                    break
+            else:
+                print(f"\nBudget key expired — session {session_uuid} likely completed.")
+                break
+
+            time.sleep(poll_interval)
+
+    except KeyboardInterrupt:
+        print("\nDetached from monitor.")
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+
+def main() -> None:
+    """Parse CLI arguments, create session, and publish first request."""
+    parser = argparse.ArgumentParser(
+        description="Start a new ai-image generation session."
+    )
+    parser.add_argument(
+        "--prompt", required=True,
+        help="Natural language prompt for image generation.",
+    )
+    parser.add_argument(
+        "--workflow",
+        default=str(Path(_cfg.paths["comfyui"]) / "workflows" / "default.json"),
+        help="Path to ComfyUI API-format workflow JSON.",
+    )
+    parser.add_argument(
+        "--max-retries", type=int, default=_MAX_RETRIES,
+        help=f"Maximum retry count for this session (default: {_MAX_RETRIES}).",
+    )
+    parser.add_argument(
+        "--max-inpaints", type=int, default=_MAX_INPAINTS,
+        help=f"Maximum inpaint passes for this session (default: {_MAX_INPAINTS}).",
+    )
+    parser.add_argument(
+        "--monitor", action="store_true",
+        help="Block after publishing and monitor budget state.",
+    )
+    parser.add_argument(
+        "--workflow-params", type=json.loads, default={},
+        metavar="JSON",
+        help='JSON dict of workflow parameter overrides, e.g. \'{"cfg": 7.5}\'.',
+    )
+    args = parser.parse_args()
+
+    session_uuid = str(uuid.uuid4())
+    image_uuid   = str(uuid.uuid4())
+
+    print(f"Session UUID:  {session_uuid}")
+    print(f"Image UUID:    {image_uuid}")
+    print(f"Prompt:        {args.prompt[:80]}")
+    print(f"Workflow:      {args.workflow}")
+    print(f"Max retries:   {args.max_retries}")
+    print(f"Max inpaints:  {args.max_inpaints}")
+
+    # Embed prompt for LanceDB session record
+    print("Embedding prompt …")
+    try:
+        embedding = _embed_prompt(args.prompt)
+    except Exception as exc:
+        print(f"Warning: could not embed prompt ({exc}); storing zero vector.")
+        embedding = [0.0] * 512
+
+    # Write session record to LanceDB
+    try:
+        _create_session_record(session_uuid, args.prompt, embedding)
+        print("Session record written to LanceDB.")
+    except Exception as exc:
+        print(f"Warning: could not write session record ({exc}). Continuing.")
+
+    # Initialise budget in Redis
+    r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
+    _init_budget(r, session_uuid, args.max_retries, args.max_inpaints)
+    print("Budget initialised in Redis.")
+
+    # Publish first generation request
+    connection = pika.BlockingConnection(
+        pika.URLParameters(_cfg.broker["rabbitmq_url"])
+    )
+    channel = connection.channel()
+    _publish_request(
+        channel,
+        session_uuid,
+        image_uuid,
+        args.workflow,
+        args.prompt,
+        args.workflow_params,
+    )
+    connection.close()
+    print(f"Generation request published → loop.request")
+
+    if args.monitor:
+        _monitor(r, session_uuid)
+
+
+if __name__ == "__main__":
+    main()

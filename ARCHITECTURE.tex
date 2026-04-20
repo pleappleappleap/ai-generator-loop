@@ -1,0 +1,287 @@
+\documentclass[11pt,letterpaper]{article}
+
+\usepackage{newtxtext,newtxmath}
+\usepackage{microtype}
+\usepackage[margin=1.25in]{geometry}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black]{hyperref}
+
+\title{\textbf{AI Image Generation Pipeline}\\[0.5em]\large System Architecture}
+\author{Srið{}ar Ayengar}
+\date{\today}
+
+\tikzset{
+  component/.style={rectangle,rounded corners=3pt,draw=black,thick,fill=gray!10,
+    minimum width=2.4cm,minimum height=0.7cm,font=\small\ttfamily,text centered},
+  queue/.style={rectangle,draw=black,thick,fill=white,
+    minimum width=2.4cm,minimum height=0.6cm,font=\small\ttfamily,text centered},
+  exchange/.style={diamond,draw=black,thick,fill=gray!20,
+    minimum width=2.2cm,minimum height=0.7cm,font=\small\ttfamily,text centered,aspect=2.5},
+  store/.style={cylinder,draw=black,thick,fill=gray!15,shape border rotate=90,
+    minimum width=1.8cm,minimum height=0.8cm,font=\small\ttfamily,text centered},
+  arrow/.style={->,>=Stealth,thick},
+  lbl/.style={font=\footnotesize\ttfamily,midway}
+}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Overview}
+
+The AI image generation pipeline is an autonomous system that accepts a
+natural language prompt and iteratively generates, scores, and refines
+images until a candidate meeting all quality thresholds is accepted by a
+tactical large language model (LLM).
+
+The pipeline is designed around three principles:
+
+\begin{enumerate}
+  \item \textbf{Observable}: every message, score, and verdict flows through
+        inspectable queues and exchanges. RabbitMQ's management interface
+        provides real-time visibility into all message flows.
+  \item \textbf{Scalable}: each component is independently deployable. The
+        message broker provides natural decoupling. Adding scorer capacity
+        requires only adding subscriber processes.
+  \item \textbf{Persistent}: every generated image is recorded in LanceDB as
+        a vector embedding alongside full scorer results and generation
+        parameters. This long-term memory enables the strategic LLM to
+        identify patterns across sessions.
+\end{enumerate}
+
+\section{Component Architecture}
+
+\subsection{Language Selection}
+
+Two components are implemented in Rust rather than Python:
+
+\begin{description}
+  \item[Router] Zero business logic, no ML dependencies. A compiled binary
+        with negligible memory footprint ($\sim$5\,MB) is appropriate for
+        pure message routing.
+  \item[Aggregator] Manages concurrent state across multiple incoming message
+        streams. Rust's ownership model prevents data races at compile time.
+\end{description}
+
+All components with ML model dependencies are Python.
+
+\subsection{Component Diagram}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.9cm and 1.8cm]
+  \node[component] (worker) {comfyui\_worker};
+  \node[component,below=0.5cm of worker] (comfyui) {ComfyUI};
+  \node[component,right=2.0cm of worker] (router) {router (Rust)};
+  \node[component,right=2.0cm of router,yshift=1.4cm] (clip) {clip\_scorer};
+  \node[component,right=2.0cm of router] (artifact) {artifact\_scorer};
+  \node[component,right=2.0cm of router,yshift=-1.4cm] (vlm) {vlm\_scorer};
+  \node[component,right=2.0cm of artifact] (agg) {aggregator};
+  \node[component,right=2.0cm of agg,yshift=1.0cm] (tactical) {tactical LLM};
+  \node[component,right=2.0cm of agg,yshift=-1.0cm] (ldb) {lancedb\_mgr};
+  \node[store,below=1.2cm of ldb] (lancedb) {LanceDB};
+  \node[store,right=0.4cm of lancedb] (redis) {Redis};
+
+  \draw[arrow] (worker) -- (router) node[lbl,above] {loop.events};
+  \draw[arrow] (router) -- (clip) node[lbl,above,xshift=-3mm] {scorer.requests};
+  \draw[arrow] (router) -- (artifact);
+  \draw[arrow] (router) -- (vlm);
+  \draw[arrow] (clip) -- (agg) node[lbl,above,xshift=3mm] {scorer.results};
+  \draw[arrow] (artifact) -- (agg);
+  \draw[arrow] (vlm) -- (agg);
+  \draw[arrow] (agg) -- (tactical) node[lbl,above] {scorer.result};
+  \draw[arrow] (agg) -- (ldb);
+  \draw[arrow] (ldb) -- (lancedb);
+  \draw[arrow] (worker) -- (comfyui) node[lbl,right] {HTTP/WS};
+\end{tikzpicture}
+\end{center}
+
+\section{Queue and Exchange Topology}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Name} & \textbf{Type} & \textbf{Publisher} & \textbf{Consumer(s)} \\
+\midrule
+\texttt{loop.request} & Queue & tactical LLM & comfyui\_worker \\
+\texttt{loop.events} & Topic & comfyui\_worker & router \\
+\texttt{scorer.requests} & Topic & router & all scorers \\
+\texttt{scorer.events} & Topic & aggregator & all scorers, lancedb\_mgr \\
+\texttt{scorer.results} & Topic & all scorers & aggregator, lancedb\_mgr \\
+\texttt{scorer.result} & Queue & aggregator & tactical LLM \\
+\texttt{loop.accepted} & Topic & tactical LLM & lancedb\_mgr \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Data Flow}
+
+\begin{enumerate}
+  \item Tactical LLM publishes to \texttt{loop.request}.
+  \item \texttt{comfyui\_worker} submits workflow to ComfyUI, awaits WebSocket completion.
+  \item On completion, publishes to \texttt{loop.events} with routing key \texttt{loop.complete.<uuid>}.
+  \item Rust \texttt{router} fans out to \texttt{scorer.requests} with routing key \texttt{score.<uuid>}.
+  \item All three scorers receive the message simultaneously and begin scoring in parallel.
+  \item As results arrive, the Rust \texttt{aggregator} accumulates them in Redis (\texttt{agg:session:<uuid>}, TTL 60s).
+  \item Threshold evaluation on each arrival:
+    \begin{itemize}
+      \item CLIP score below threshold: \texttt{GETDEL}, publish cancel, emit rejected verdict.
+      \item Artifact confidence above threshold: same cancel and reject flow.
+      \item All three results within bounds: \texttt{GETDEL}, emit candidate verdict.
+    \end{itemize}
+  \item \texttt{lancedb\_manager} independently accumulates scorer results in Redis (\texttt{ldb:session:<uuid>}, TTL 120s).
+        Writes to LanceDB on cancel (rejected) or \texttt{loop.accepted} (candidate) events.
+\end{enumerate}
+
+\subsection{Cancel Flow}
+
+\begin{center}
+\begin{tikzpicture}[node distance=0.7cm]
+  \node[component] (clip) {CLIP score};
+  \node[component,below=of clip] (clipcheck) {$<0.25$?};
+  \node[component,right=2.2cm of clipcheck] (artifact) {Artifact score};
+  \node[component,below=of artifact] (artcheck) {$>0.50$?};
+  \node[component,right=2.2cm of artcheck] (vlm) {VLM score};
+  \node[component,below=of vlm] (candidate) {candidate};
+  \node[component,left=1.6cm of clipcheck,yshift=-0.8cm] (r1) {rejected};
+  \node[component,left=1.6cm of artcheck,yshift=-0.8cm] (r2) {rejected};
+
+  \draw[arrow] (clip) -- (clipcheck);
+  \draw[arrow] (clipcheck) -- node[lbl,above] {no} (artifact);
+  \draw[arrow] (clipcheck) -- node[lbl,left] {yes} (r1);
+  \draw[arrow] (artifact) -- (artcheck);
+  \draw[arrow] (artcheck) -- node[lbl,above] {no} (vlm);
+  \draw[arrow] (artcheck) -- node[lbl,left] {yes} (r2);
+  \draw[arrow] (vlm) -- (candidate);
+\end{tikzpicture}
+\end{center}
+
+\section{Persistence Layer}
+
+\subsection{LanceDB Schema}
+
+\subsubsection{sessions table}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{session\_uuid} & string & Primary key \\
+\texttt{created\_at} & string & ISO 8601 \\
+\texttt{user\_prompt} & string & Original user prompt \\
+\texttt{prompt\_embedding} & vector[512] & CLIP text encoding \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{loop table}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{image\_uuid} & string & Primary key \\
+\texttt{session\_uuid} & string & FK to sessions \\
+\texttt{sequence\_number} & int32 & Position within session \\
+\texttt{created\_at} & string & ISO 8601 \\
+\texttt{prompt} & string & Generation prompt \\
+\texttt{prompt\_embedding} & vector[512] & CLIP text encoding \\
+\texttt{image\_embedding} & vector[512] & CLIP image encoding \\
+\texttt{workflow\_path} & string & Workflow file path \\
+\texttt{workflow\_params} & string & JSON generation params \\
+\texttt{clip\_score} & float32 & CLIP similarity \\
+\texttt{artifact\_score} & float32 & AI artifact confidence \\
+\texttt{vlm\_photorealism} & float32 & 0--10 \\
+\texttt{vlm\_anatomical} & float32 & 0--10 \\
+\texttt{vlm\_interaction} & float32 & 0--10 \\
+\texttt{vlm\_lighting} & float32 & 0--10 \\
+\texttt{vlm\_prompt} & float32 & 0--10 \\
+\texttt{vlm\_issues} & string & JSON list \\
+\texttt{vlm\_recommendations} & string & JSON list \\
+\texttt{verdict} & string & candidate $|$ rejected \\
+\texttt{rejection\_reason} & string? & null for candidates \\
+\texttt{image\_path} & string? & null for rejected \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Redis Key Namespaces}
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Key prefix} & \textbf{Owner} & \textbf{TTL} & \textbf{Purpose} \\
+\midrule
+\texttt{agg:session:<uuid>} & aggregator & 60s & Scorer result accumulation \\
+\texttt{ldb:session:<uuid>} & lancedb\_manager & 120s & LanceDB write accumulation \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{Memory Budget}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Component} & \textbf{Role} & \textbf{Memory} \\
+\midrule
+ComfyUI + SDXL & Image generation & $\sim$14\,GB \\
+comfyui\_worker & Loop queue consumer & $\sim$50\,MB \\
+router (Rust) & Generation event fanout & $\sim$5\,MB \\
+clip\_scorer & Prompt adherence + embedding & $\sim$1.7\,GB \\
+artifact\_scorer & Photorealism scoring & $\sim$500\,MB \\
+vlm\_scorer & Holistic image evaluation & $\sim$6\,GB \\
+aggregator (Rust) & Result collection and verdict & $\sim$5\,MB \\
+lancedb\_manager & LanceDB write manager & $\sim$1.7\,GB \\
+RabbitMQ & Message broker & $\sim$150\,MB \\
+Redis & Correlation state & $\sim$2\,MB \\
+Tactical LLM (32B Q4) & Prompt tuning and orchestration & $\sim$20\,GB \\
+OS/UI & System overhead & $\sim$12\,GB \\
+\midrule
+\textbf{Total} & & $\sim$56\,GB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Approximately 40\,GB headroom remains in a 96\,GB unified memory system.
+
+\section{Threshold Calibration}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Threshold} & \textbf{Value} & \textbf{Semantics} \\
+\midrule
+\texttt{CLIP\_THRESHOLD} & 0.25 & Reject if CLIP score $< 0.25$ \\
+\texttt{ARTIFACT\_THRESHOLD} & 0.50 & Reject if AI confidence $> 0.50$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Both values are placeholders. Calibration procedure:
+
+\begin{enumerate}
+  \item Run the loop permissively (\texttt{CLIP\_THRESHOLD = 0.0}, \texttt{ARTIFACT\_THRESHOLD = 1.0}).
+  \item Query the \texttt{loop} table and examine score distributions.
+  \item Set \texttt{CLIP\_THRESHOLD} at the point below which VLM scores are consistently poor.
+  \item Set \texttt{ARTIFACT\_THRESHOLD} at the point above which photorealism scores are consistently poor.
+  \item Iterate: thresholds too aggressive waste good candidates; too permissive waste VLM compute.
+\end{enumerate}
+
+\section{Scale-Out Path}
+
+\begin{description}
+  \item[Multiple ComfyUI workers] Add consumers on \texttt{loop.request}.
+  \item[Multiple scorer instances] Add subscribers on scorer request queues.
+  \item[Remote scoring nodes] Change RabbitMQ connection string.
+  \item[Managed broker] Migrate to Amazon MQ (AMQP 0-9-1 compatible).
+  \item[Distributed Redis] Migrate to Amazon ElastiCache.
+  \item[Cloud LanceDB] Change connection path to S3 URI.
+\end{description}
+
+\end{document}
