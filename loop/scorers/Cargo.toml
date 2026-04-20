@@ -3,8 +3,9 @@ members = [
     "router",
     "aggregator",
     "db",
+    "coordinator",
 ]
-# coordinator and lancedb_manager are added in steps 7 and 8.
+# lancedb_manager is added in step 8.
 
 [workspace.dependencies]
 sqlx             = { version = "0.7", features = ["sqlite", "runtime-tokio", "macros"] }
