@@ -4,17 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-lapin = "2"
-futures-lite = "2"
-redis = { version = "0.25", features = ["tokio-comp"] }
-tracing = "0.1"
-tracing-subscriber = "0.3"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-async-trait = "0.1"
+tokio            = { workspace = true }
+lapin            = "2"
+futures-lite     = { workspace = true }
+redis            = { version = "0.25", features = ["tokio-comp"] }
+tracing          = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde            = { workspace = true }
+serde_json       = { workspace = true }
+serde_yaml       = { workspace = true }
+async-trait      = { workspace = true }
 
 [dev-dependencies]
-mockall = "0.13"
-tokio = { version = "1", features = ["test-util"] }
+mockall = { workspace = true }
+tokio   = { workspace = true, features = ["test-util"] }
