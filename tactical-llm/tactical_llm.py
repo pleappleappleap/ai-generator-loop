@@ -13,8 +13,8 @@ Every decision is published to the ``tactical.decisions`` topic exchange
 for auditing and eventual strategic LLM consumption.
 
 Budget state (retries_used, inpaints_used) is tracked per session in
-Redis under ``tactical:budget:{session_uuid}``. The session entry point
-(:mod:`tactical-llm.session`) initialises this key when a session starts.
+the coordinator's SQLite ``tactical_budget`` table, accessed via a Unix
+domain socket at ``{database.path}.sock``.
 
 The LLM model is loaded once at process startup and held resident in GPU
 memory. The inference loop runs on the main thread; RabbitMQ consumption
@@ -38,6 +38,7 @@ Queue publications:
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import uuid
 from pathlib import Path
@@ -46,7 +47,6 @@ from typing import Any
 import pika
 import pika.channel
 import pika.spec
-import redis as redis_lib
 from llama_cpp import Llama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -60,7 +60,7 @@ _tac = _cfg.tactical
 _model_cfg = _tac.get("model", {})
 _decision_cfg = _tac.get("decisions", {})
 
-_r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
+_COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
 
 # ── LLM initialisation ────────────────────────────────────────────────────────
 
@@ -83,14 +83,41 @@ _MAX_INPAINTS: int   = _decision_cfg.get("max_inpaints", 2)
 _VLM_MEAN_MIN: float = _decision_cfg.get("accept_vlm_mean_min", 7.0)
 _CLIP_MIN:     float = _decision_cfg.get("accept_clip_min",     0.30)
 
-_BUDGET_TTL: int = 86400  # 24h; sessions shouldn't run longer than this
+
+# ── Coordinator socket helpers ────────────────────────────────────────────────
 
 
-# ── Redis budget helpers ──────────────────────────────────────────────────────
+def _coordinator_call(req: dict) -> dict:
+    """Send a JSON request to the coordinator Unix socket and return the response.
+
+    Each request/response is a newline-terminated JSON object.
+
+    Args:
+        req: Dict to send as JSON.
+
+    Returns:
+        Parsed response dict.
+    """
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(_COORDINATOR_SOCK)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        return json.loads(buf.split(b"\n")[0])
+    finally:
+        sock.close()
 
 
 def _get_budget(session_uuid: str) -> dict:
-    """Return the budget record for a session, creating a default if absent.
+    """Return the budget record for a session from the coordinator.
+
+    If no budget record exists (session started before tactical LLM was
+    running), initialises one with configured defaults and returns them.
 
     Args:
         session_uuid: The session UUID.
@@ -99,43 +126,37 @@ def _get_budget(session_uuid: str) -> dict:
         Dict with ``retries_used``, ``inpaints_used``, ``max_retries``,
         and ``max_inpaints``.
     """
-    key = f"tactical:budget:{session_uuid}"
-    raw = _r.get(key)
-    if raw:
-        return json.loads(raw)
-    # No budget record — session started before tactical LLM was running.
-    # Use configured defaults.
-    budget = {
+    resp = _coordinator_call({"op": "BudgetGet", "session_uuid": session_uuid})
+    if resp.get("ok") and "retries_used" in resp:
+        return {
+            "retries_used":  resp["retries_used"],
+            "inpaints_used": resp["inpaints_used"],
+            "max_retries":   resp["max_retries"],
+            "max_inpaints":  resp["max_inpaints"],
+        }
+    # No budget record — init with configured defaults.
+    _coordinator_call({
+        "op":          "BudgetInit",
+        "session_uuid": session_uuid,
+        "max_retries":  _MAX_RETRIES,
+        "max_inpaints": _MAX_INPAINTS,
+    })
+    return {
         "retries_used":  0,
         "inpaints_used": 0,
         "max_retries":   _MAX_RETRIES,
         "max_inpaints":  _MAX_INPAINTS,
     }
-    _r.setex(key, _BUDGET_TTL, json.dumps(budget))
-    return budget
-
-
-def _save_budget(session_uuid: str, budget: dict) -> None:
-    """Persist an updated budget record to Redis.
-
-    Args:
-        session_uuid: The session UUID.
-        budget: Updated budget dict.
-    """
-    key = f"tactical:budget:{session_uuid}"
-    _r.setex(key, _BUDGET_TTL, json.dumps(budget))
 
 
 def _increment_budget(session_uuid: str, field: str) -> None:
-    """Increment a budget counter in Redis.
+    """Atomically increment a budget counter via the coordinator.
 
     Args:
         session_uuid: The session UUID.
         field: One of ``"retries_used"`` or ``"inpaints_used"``.
     """
-    budget = _get_budget(session_uuid)
-    budget[field] = budget.get(field, 0) + 1
-    _save_budget(session_uuid, budget)
+    _coordinator_call({"op": "BudgetUpdate", "session_uuid": session_uuid, "field": field})
 
 
 # ── LLM inference ─────────────────────────────────────────────────────────────
