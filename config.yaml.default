@@ -42,8 +42,11 @@ thresholds:
   # The Rust aggregator reads these from config.yaml via serde_yaml.
 
 broker:
-  rabbitmq_url: amqp://guest:guest@localhost:5672
-  redis_url: redis://localhost:6379
+  rabbitmq_url: amqp://guest:guest@localhost:5672  # remove after Artemis migration complete
+  redis_url: redis://localhost:6379                 # remove after SQLite migration complete
+  stomp_url: stomp://localhost:61613               # Artemis STOMP (Python processes, step 12)
+  artemis_console: http://localhost:8161           # replaces RabbitMQ mgmt UI on 15672
+  artemis_data: auto                               # auto: {paths.root}/loop/artemis-broker
   comfyui_url: http://127.0.0.1:8188
   comfyui_ws: ws://127.0.0.1:8188/ws
 

@@ -1,0 +1,13 @@
+<!--
+  AMQP 0-9-1 compatibility acceptor for ActiveMQ Artemis.
+
+  Add this <acceptor> block inside the <acceptors> section of
+  loop/artemis-broker/etc/broker.xml after running:
+
+      artemis create "$AI_IMAGE_ROOT/loop/artemis-broker"
+
+  This shim allows all existing pika-based Python processes to connect
+  without code changes (Step 3 of the RabbitMQ → Artemis migration).
+  Remove after Python processes are ported to stomp.py (Step 12).
+-->
+<acceptor name="amqp091">tcp://0.0.0.0:5672?protocols=AMQP;amqpCredits=1000</acceptor>

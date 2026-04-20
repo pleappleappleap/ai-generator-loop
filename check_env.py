@@ -135,10 +135,15 @@ def main() -> None:
 
     # ── Services ──────────────────────────────────────────────────────
     print(f"\n{_BOLD}Services:{_RESET}")
-    check("RabbitMQ reachable  (localhost:5672)",
+    artemis_console = broker.get("artemis_console", "http://localhost:8161")
+    try:
+        console_port = int(artemis_console.rstrip("/").split(":")[-1])
+    except ValueError:
+        console_port = 8161
+    check("Artemis AMQP reachable  (localhost:5672)",
           _tcp_open("127.0.0.1", 5672))
-    check("RabbitMQ mgmt UI  (localhost:15672)",
-          _tcp_open("127.0.0.1", 15672),
+    check(f"Artemis console reachable  ({artemis_console})",
+          _tcp_open("127.0.0.1", console_port),
           warn_only=True)
     check("Redis reachable  (localhost:6379)",
           _tcp_open("127.0.0.1", 6379))
