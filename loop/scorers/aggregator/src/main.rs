@@ -1,29 +1,15 @@
 //! Aggregator — scorer result collection, threshold logic, and verdict emission.
+//! (AMQP 1.0 / Artemis)
 //!
-//! Subscribes to all three scorer result queues via the `scorer.results`
-//! topic exchange. Accumulates results per image in the `scorer_session`
-//! SQLite table using `BEGIN IMMEDIATE` for serialised writer semantics.
+//! Subscribes to all three scorer result queues via Artemis AMQP 1.0.
+//! Accumulates results in `scorer_session` SQLite using `BEGIN IMMEDIATE`.
 //!
-//! Applies cascade threshold logic as results arrive:
-//!
-//! 1. CLIP score below `clip_threshold` → publish cancel, emit rejected verdict.
-//! 2. Artifact confidence above `artifact_threshold` → publish cancel, emit rejected verdict.
-//! 3. All three scores collected → emit candidate verdict, write verdict to scorer_session.
-//!
-//! `BEGIN IMMEDIATE` on each update ensures only one aggregator instance
-//! writes at a time per row. The `busy_timeout` in the pool options makes
-//! contention block rather than fail.
-//!
-//! Config is read from `config.yaml` via serde_yaml; set `AI_IMAGE_ROOT` in
-//! the environment to locate `config.yaml`, falling back to `./config.yaml`.
-//!
-//! XA coordinator integration (2PC for AMQP + SQLite) is wired in step 7.
+//! XA coordinator integration (2PC for AMQP + SQLite) is wired in step 7
+//! using the coordinator's internal channel API.
 
 use async_trait::async_trait;
-use futures_lite::StreamExt;
-use lapin::{
-    options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties,
-};
+use bytes::Bytes;
+use fe2o3_amqp::{Connection, Receiver, Sender, Session};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::SqlitePool;
@@ -59,25 +45,18 @@ struct Config {
 
 // ── Publisher trait ───────────────────────────────────────────────────────────
 
-/// Publishes a message to a RabbitMQ exchange or queue.
 #[async_trait]
 #[cfg_attr(test, mockall::automock)]
 pub trait Publisher: Send + Sync {
     async fn publish(
         &self,
-        exchange: &str,
-        routing_key: &str,
+        address: &str,
         payload: &[u8],
     ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-// ── Core logic ────────────────────────────────────────────────────────────────
+// ── Handlers (unchanged from step 6 — just Publisher signature updated) ───────
 
-/// Handle a CLIP scorer result.
-///
-/// Loads the `scorer_session` row for this image, merges the CLIP result,
-/// and applies the threshold. Below threshold → cancel + rejected verdict.
-/// Otherwise updates the row and calls `try_aggregate`.
 pub async fn handle_clip_result(
     pool: &SqlitePool,
     publisher: &dyn Publisher,
@@ -90,7 +69,6 @@ pub async fn handle_clip_result(
     let clip_score = result["clip_score"].as_f64().unwrap_or(0.0);
 
     if clip_score < clip_threshold {
-        // Threshold failure: fetch-and-mark atomically.
         let session = fetch_and_reject(pool, image_uuid, "clip_threshold", &clip_json, "clip").await?;
         if let Some(session) = session {
             publish_cancel(publisher, image_uuid).await?;
@@ -99,7 +77,6 @@ pub async fn handle_clip_result(
         return Ok(());
     }
 
-    // Merge CLIP result and attempt aggregation.
     let updated = merge_scorer_result(pool, image_uuid, "clip", &clip_json, score_timeout_secs).await?;
     if let Some(session) = updated {
         try_aggregate(pool, publisher, image_uuid, &session).await?;
@@ -107,7 +84,6 @@ pub async fn handle_clip_result(
     Ok(())
 }
 
-/// Handle an artifact scorer result.
 pub async fn handle_artifact_result(
     pool: &SqlitePool,
     publisher: &dyn Publisher,
@@ -135,7 +111,6 @@ pub async fn handle_artifact_result(
     Ok(())
 }
 
-/// Handle a VLM scorer result. Never triggers rejection.
 pub async fn handle_vlm_result(
     pool: &SqlitePool,
     publisher: &dyn Publisher,
@@ -152,63 +127,42 @@ pub async fn handle_vlm_result(
     Ok(())
 }
 
-// ── SQLite helpers ────────────────────────────────────────────────────────────
+// ── SQLite helpers (identical to step 6) ──────────────────────────────────────
 
-/// Merge a scorer result column into scorer_session using BEGIN IMMEDIATE.
-///
-/// Returns the updated row as a JSON Value, or None if the row is absent
-/// or expired. The caller is responsible for deciding what to do next.
 async fn merge_scorer_result(
     pool: &SqlitePool,
     image_uuid: &str,
-    column: &str,   // "clip" | "artifact" | "vlm"
+    column: &str,
     json_value: &str,
     score_timeout_secs: i64,
 ) -> Result<Option<Value>, Box<dyn std::error::Error>> {
     let now = db::now_unix();
-
     let mut tx = pool.begin().await?;
 
-    // Fetch current row under exclusive lock.
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
-                clip, artifact, vlm, verdict, expires_at
+                clip, artifact, vlm
          FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2",
         image_uuid, now
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let row = match row {
-        Some(r) => r,
-        None => {
-            tx.rollback().await?;
-            return Ok(None);
-        }
-    };
+    let row = match row { Some(r) => r, None => { tx.rollback().await?; return Ok(None); } };
 
-    // Build the updated JSON session object for the caller.
     let clip     = if column == "clip"     { Some(json_value) } else { row.clip.as_deref() };
     let artifact = if column == "artifact" { Some(json_value) } else { row.artifact.as_deref() };
     let vlm      = if column == "vlm"     { Some(json_value) } else { row.vlm.as_deref() };
-
     let new_expires = now + score_timeout_secs;
 
-    // Write the updated column back.
     match column {
-        "clip" => sqlx::query!(
-            "UPDATE scorer_session SET clip = ?1, expires_at = ?2 WHERE image_uuid = ?3",
-            json_value, new_expires, image_uuid
-        ).execute(&mut *tx).await?,
-        "artifact" => sqlx::query!(
-            "UPDATE scorer_session SET artifact = ?1, expires_at = ?2 WHERE image_uuid = ?3",
-            json_value, new_expires, image_uuid
-        ).execute(&mut *tx).await?,
-        "vlm" => sqlx::query!(
-            "UPDATE scorer_session SET vlm = ?1, expires_at = ?2 WHERE image_uuid = ?3",
-            json_value, new_expires, image_uuid
-        ).execute(&mut *tx).await?,
-        _ => unreachable!(),
+        "clip"     => sqlx::query!("UPDATE scorer_session SET clip = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+                                   json_value, new_expires, image_uuid).execute(&mut *tx).await?,
+        "artifact" => sqlx::query!("UPDATE scorer_session SET artifact = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+                                   json_value, new_expires, image_uuid).execute(&mut *tx).await?,
+        "vlm"      => sqlx::query!("UPDATE scorer_session SET vlm = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+                                   json_value, new_expires, image_uuid).execute(&mut *tx).await?,
+        _          => unreachable!(),
     };
 
     tx.commit().await?;
@@ -223,14 +177,9 @@ async fn merge_scorer_result(
         "artifact":        artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "vlm":             vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
     });
-
     Ok(Some(session))
 }
 
-/// Atomically mark a session as rejected (sets verdict + rejection_reason).
-///
-/// Returns the final session Value for publishing the verdict, or None if
-/// the row is missing or already resolved.
 async fn fetch_and_reject(
     pool: &SqlitePool,
     image_uuid: &str,
@@ -244,57 +193,37 @@ async fn fetch_and_reject(
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
                 clip, artifact, vlm
-         FROM scorer_session
-         WHERE image_uuid = ?1 AND expires_at > ?2 AND verdict IS NULL",
+         FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2 AND verdict IS NULL",
         image_uuid, now
     )
     .fetch_optional(&mut *tx)
     .await?;
 
-    let row = match row {
-        Some(r) => r,
-        None => {
-            tx.rollback().await?;
-            return Ok(None);
-        }
-    };
+    let row = match row { Some(r) => r, None => { tx.rollback().await?; return Ok(None); } };
 
-    sqlx::query!(
-        "UPDATE scorer_session SET verdict = 'rejected', rejection_reason = ?1 WHERE image_uuid = ?2",
-        reason, image_uuid
-    )
-    .execute(&mut *tx)
-    .await?;
-
+    sqlx::query!("UPDATE scorer_session SET verdict = 'rejected', rejection_reason = ?1 WHERE image_uuid = ?2",
+                 reason, image_uuid)
+        .execute(&mut *tx).await?;
     tx.commit().await?;
 
     let clip     = if scorer_column == "clip"     { Some(scorer_json) } else { row.clip.as_deref() };
     let artifact = if scorer_column == "artifact" { Some(scorer_json) } else { row.artifact.as_deref() };
     let vlm      = if scorer_column == "vlm"     { Some(scorer_json) } else { row.vlm.as_deref() };
 
-    let session = json!({
-        "image_uuid":      image_uuid,
-        "session_uuid":    row.session_uuid,
-        "sequence_number": row.sequence_number,
-        "prompt":          row.prompt.as_deref().unwrap_or(""),
-        "workflow_path":   row.workflow_path.as_deref().unwrap_or(""),
-        "verdict":         "rejected",
+    Ok(Some(json!({
+        "image_uuid":       image_uuid,
+        "session_uuid":     row.session_uuid,
+        "sequence_number":  row.sequence_number,
+        "prompt":           row.prompt.as_deref().unwrap_or(""),
+        "workflow_path":    row.workflow_path.as_deref().unwrap_or(""),
+        "verdict":          "rejected",
         "rejection_reason": reason,
-        "clip":            clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "artifact":        artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
-        "vlm":             vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
-    });
-
-    Ok(Some(session))
+        "clip":     clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "artifact": artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "vlm":      vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+    })))
 }
 
-// ── Aggregation ───────────────────────────────────────────────────────────────
-
-/// Emit a candidate verdict if all three scorer results have arrived.
-///
-/// Writes verdict = 'candidate' to scorer_session within a transaction so
-/// only one aggregator instance emits the verdict (the second writer on the
-/// same row sees verdict IS NOT NULL and bails out).
 async fn try_aggregate(
     pool: &SqlitePool,
     publisher: &dyn Publisher,
@@ -304,35 +233,26 @@ async fn try_aggregate(
     if session["clip"].is_null() || session["artifact"].is_null() || session["vlm"].is_null() {
         return Ok(());
     }
-
     let mut tx = pool.begin().await?;
     let rows_affected = sqlx::query!(
-        "UPDATE scorer_session SET verdict = 'candidate'
-         WHERE image_uuid = ?1 AND verdict IS NULL",
+        "UPDATE scorer_session SET verdict = 'candidate' WHERE image_uuid = ?1 AND verdict IS NULL",
         image_uuid
     )
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
+    .execute(&mut *tx).await?.rows_affected();
 
-    if rows_affected == 0 {
-        tx.rollback().await?;
-        return Ok(()); // Another aggregator instance already emitted the verdict.
-    }
-
+    if rows_affected == 0 { tx.rollback().await?; return Ok(()); }
     tx.commit().await?;
     publish_verdict(publisher, image_uuid, session, "candidate", None).await?;
     Ok(())
 }
 
-// ── Publications ──────────────────────────────────────────────────────────────
+// ── Publications (AMQP 1.0 addresses) ────────────────────────────────────────
 
-async fn publish_cancel(
-    publisher: &dyn Publisher,
-    image_uuid: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn publish_cancel(publisher: &dyn Publisher, image_uuid: &str)
+    -> Result<(), Box<dyn std::error::Error>>
+{
     let payload = serde_json::to_vec(&json!({"image_uuid": image_uuid}))?;
-    publisher.publish("scorer.events", &format!("cancel.{}", image_uuid), &payload).await
+    publisher.publish(&format!("scorer.events/cancel.{}", image_uuid), &payload).await
 }
 
 async fn publish_verdict(
@@ -351,11 +271,9 @@ async fn publish_verdict(
         "workflow_path":   session["workflow_path"].as_str().unwrap_or(""),
         "sequence_number": session["sequence_number"].as_i64().unwrap_or(0),
     });
-    if let Some(r) = reason {
-        output["reason"] = json!(r);
-    }
+    if let Some(r) = reason { output["reason"] = json!(r); }
     let payload = serde_json::to_vec(&output)?;
-    publisher.publish("", "scorer.result", &payload).await
+    publisher.publish("scorer.result", &payload).await
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
@@ -375,102 +293,85 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!(clip_threshold, artifact_threshold, score_timeout, "Aggregator starting");
 
-    // Open SQLite pool.
     let pool = db::open_pool(&cfg.database.path, cfg.database.busy_timeout_ms).await?;
     db::init_schema(&pool).await?;
     db::spawn_cleanup_task(pool.clone(), cfg.database.cleanup_interval_secs);
 
-    // Connect to AMQP broker.
-    let conn = Connection::connect(&cfg.broker.rabbitmq_url, ConnectionProperties::default()).await?;
-    let channel = conn.create_channel().await?;
+    let mut connection = Connection::open("aggregator", &cfg.broker.rabbitmq_url[..]).await?;
+    let mut session = Session::begin(&mut connection).await?;
 
-    channel
-        .exchange_declare("scorer.results", lapin::ExchangeKind::Topic,
-            ExchangeDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
-        .await?;
-    channel
-        .exchange_declare("scorer.events", lapin::ExchangeKind::Topic,
-            ExchangeDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
-        .await?;
-    channel
-        .queue_declare("scorer.result",
-            QueueDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
-        .await?;
+    let sender = Sender::attach(&mut session, "aggregator-sender", "scorer.result").await?;
+    let events_sender = Sender::attach(&mut session, "aggregator-events", "scorer.events").await?;
 
-    for (queue, binding) in &[
-        ("aggregator.clip.queue",     "clip.*"),
-        ("aggregator.artifact.queue", "artifact.*"),
-        ("aggregator.vlm.queue",      "vlm.*"),
-    ] {
-        channel
-            .queue_declare(queue, QueueDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
-            .await?;
-        channel
-            .queue_bind(queue, "scorer.results", binding, QueueBindOptions::default(), FieldTable::default())
-            .await?;
+    let mut clip_receiver = Receiver::attach(
+        &mut session, "aggregator-clip", "aggregator.clip.queue").await?;
+    let mut artifact_receiver = Receiver::attach(
+        &mut session, "aggregator-artifact", "aggregator.artifact.queue").await?;
+    let mut vlm_receiver = Receiver::attach(
+        &mut session, "aggregator-vlm", "aggregator.vlm.queue").await?;
+
+    // Sender wrapper that maps AMQP 1.0 addresses to the right sender.
+    struct AmqpPublisher {
+        verdict_sender: std::sync::Arc<tokio::sync::Mutex<Sender>>,
+        events_sender:  std::sync::Arc<tokio::sync::Mutex<Sender>>,
     }
-
-    // Shared publisher wrapper.
-    struct ChanPublisher(lapin::Channel);
     #[async_trait]
-    impl Publisher for ChanPublisher {
-        async fn publish(&self, exchange: &str, routing_key: &str, payload: &[u8])
+    impl Publisher for AmqpPublisher {
+        async fn publish(&self, address: &str, payload: &[u8])
             -> Result<(), Box<dyn std::error::Error>>
         {
-            self.0
-                .basic_publish(exchange, routing_key, BasicPublishOptions::default(),
-                    payload, BasicProperties::default())
-                .await?;
+            let msg = fe2o3_amqp::types::messaging::Message::builder()
+                .properties(
+                    fe2o3_amqp::types::messaging::Properties::builder()
+                        .subject(address.to_string())
+                        .build()
+                )
+                .data(payload.to_vec())
+                .build();
+
+            if address.starts_with("scorer.events") {
+                self.events_sender.lock().await.send(msg).await??;
+            } else {
+                self.verdict_sender.lock().await.send(msg).await??;
+            }
             Ok(())
         }
     }
-    let publisher = std::sync::Arc::new(ChanPublisher(channel.clone()));
 
-    // Consume from all three queues concurrently.
-    channel.basic_qos(1, BasicQosOptions::default()).await?;
+    let publisher = std::sync::Arc::new(AmqpPublisher {
+        verdict_sender: std::sync::Arc::new(tokio::sync::Mutex::new(sender)),
+        events_sender:  std::sync::Arc::new(tokio::sync::Mutex::new(events_sender)),
+    });
 
-    let mut clip_consumer = channel
-        .basic_consume("aggregator.clip.queue", "aggregator-clip",
-            BasicConsumeOptions::default(), FieldTable::default())
-        .await?;
-    let mut artifact_consumer = channel
-        .basic_consume("aggregator.artifact.queue", "aggregator-artifact",
-            BasicConsumeOptions::default(), FieldTable::default())
-        .await?;
-    let mut vlm_consumer = channel
-        .basic_consume("aggregator.vlm.queue", "aggregator-vlm",
-            BasicConsumeOptions::default(), FieldTable::default())
-        .await?;
-
-    info!("Aggregator ready");
+    info!("Aggregator ready (AMQP 1.0)");
 
     loop {
         tokio::select! {
-            Some(delivery) = clip_consumer.next() => {
+            delivery = clip_receiver.recv::<Bytes>() => {
                 let delivery = delivery?;
-                let result: Value = serde_json::from_slice(&delivery.data)?;
+                let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_clip_result(&pool, publisher.as_ref(), result,
                                                    clip_threshold, score_timeout).await {
-                    tracing::error!("clip handler error: {}", e);
+                    tracing::error!("clip error: {}", e);
                 }
-                delivery.ack(BasicAckOptions::default()).await?;
+                delivery.accept().await?;
             }
-            Some(delivery) = artifact_consumer.next() => {
+            delivery = artifact_receiver.recv::<Bytes>() => {
                 let delivery = delivery?;
-                let result: Value = serde_json::from_slice(&delivery.data)?;
+                let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_artifact_result(&pool, publisher.as_ref(), result,
                                                        artifact_threshold, score_timeout).await {
-                    tracing::error!("artifact handler error: {}", e);
+                    tracing::error!("artifact error: {}", e);
                 }
-                delivery.ack(BasicAckOptions::default()).await?;
+                delivery.accept().await?;
             }
-            Some(delivery) = vlm_consumer.next() => {
+            delivery = vlm_receiver.recv::<Bytes>() => {
                 let delivery = delivery?;
-                let result: Value = serde_json::from_slice(&delivery.data)?;
+                let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_vlm_result(&pool, publisher.as_ref(), result, score_timeout).await {
-                    tracing::error!("vlm handler error: {}", e);
+                    tracing::error!("vlm error: {}", e);
                 }
-                delivery.ack(BasicAckOptions::default()).await?;
+                delivery.accept().await?;
             }
         }
     }

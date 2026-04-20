@@ -30,10 +30,8 @@
 //! | `loop.accepted` | `accepted.*` | `lancedb.accepted.queue` |
 //! | `scorer.events` | `cancel.*`   | `lancedb.cancel.queue`   |
 
-use futures_lite::StreamExt;
-use lapin::{
-    options::*, types::{AMQPValue, FieldTable}, BasicProperties, Connection, ConnectionProperties,
-};
+use bytes::Bytes;
+use fe2o3_amqp::{Connection, Receiver, Sender, Session};
 use lancedb::{connect, Table};
 use serde::Deserialize;
 use serde_json::Value;
@@ -216,15 +214,6 @@ async fn delete_session(pool: &SqlitePool, image_uuid: &str) -> Result<(), sqlx:
     Ok(())
 }
 
-// ── DLX helper ────────────────────────────────────────────────────────────────
-
-/// Build a FieldTable that declares `x-dead-letter-exchange` on a queue.
-fn dlx_args() -> FieldTable {
-    let mut args = FieldTable::default();
-    args.insert("x-dead-letter-exchange".into(), AMQPValue::LongString("pipeline.dlx".into()));
-    args
-}
-
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -242,59 +231,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let loop_table = open_loop_table(&cfg.paths.lancedb).await?;
 
-    let conn = Connection::connect(&cfg.broker.rabbitmq_url, ConnectionProperties::default()).await?;
-    let channel = conn.create_channel().await?;
+    let mut connection = Connection::open("lancedb-manager", &cfg.broker.rabbitmq_url[..]).await?;
+    let mut session = Session::begin(&mut connection).await?;
 
-    // Declare exchanges.
-    for (name, kind) in &[
-        ("loop.accepted", lapin::ExchangeKind::Topic),
-        ("scorer.events", lapin::ExchangeKind::Topic),
-        ("pipeline.dlx",  lapin::ExchangeKind::Fanout),
-    ] {
-        channel.exchange_declare(
-            name, kind.clone(),
-            ExchangeDeclareOptions { durable: true, ..Default::default() },
-            FieldTable::default(),
-        ).await?;
-    }
+    // Dead-letter sender (pipeline.dlx).
+    let dlx_sender = Sender::attach(&mut session, "lancedb-dlx", "pipeline.dlx").await?;
+    let dlx_sender = std::sync::Arc::new(tokio::sync::Mutex::new(dlx_sender));
 
-    // Dead-letter queue.
-    channel.queue_declare("pipeline.dead",
-        QueueDeclareOptions { durable: true, ..Default::default() },
-        FieldTable::default()).await?;
-    channel.queue_bind("pipeline.dead", "pipeline.dlx", "#",
-        QueueBindOptions::default(), FieldTable::default()).await?;
+    let mut accepted_receiver = Receiver::attach(
+        &mut session, "lancedb-accepted", "lancedb.accepted.queue").await?;
+    let mut cancel_receiver = Receiver::attach(
+        &mut session, "lancedb-cancel", "lancedb.cancel.queue").await?;
 
-    // Declare and bind working queues with DLX.
-    for (queue, exchange, binding) in &[
-        ("lancedb.accepted.queue", "loop.accepted", "accepted.*"),
-        ("lancedb.cancel.queue",   "scorer.events", "cancel.*"),
-    ] {
-        channel.queue_declare(queue,
-            QueueDeclareOptions { durable: true, ..Default::default() },
-            dlx_args()).await?;
-        channel.queue_bind(queue, exchange, binding,
-            QueueBindOptions::default(), FieldTable::default()).await?;
-    }
-
-    channel.basic_qos(1, BasicQosOptions::default()).await?;
-
-    let mut accepted_consumer = channel
-        .basic_consume("lancedb.accepted.queue", "lancedb-accepted",
-            BasicConsumeOptions::default(), FieldTable::default())
-        .await?;
-    let mut cancel_consumer = channel
-        .basic_consume("lancedb.cancel.queue", "lancedb-cancel",
-            BasicConsumeOptions::default(), FieldTable::default())
-        .await?;
-
-    info!("LanceDB manager ready");
+    info!("LanceDB manager ready (AMQP 1.0)");
 
     loop {
         tokio::select! {
-            Some(delivery) = accepted_consumer.next() => {
+            delivery = accepted_receiver.recv::<Bytes>() => {
                 let delivery = delivery?;
-                let msg: Value = serde_json::from_slice(&delivery.data)?;
+                let msg: Value = serde_json::from_slice(delivery.body())?;
                 let image_uuid = msg["image_uuid"].as_str().unwrap_or("").to_string();
                 let image_path = msg["image_path"].as_str().map(|s| s.to_string());
 
@@ -302,22 +257,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &pool, &loop_table, &image_uuid,
                     image_path.as_deref(), "candidate", None,
                 ).await {
-                    Ok(true)  => { delivery.ack(BasicAckOptions::default()).await?; }
-                    Ok(false) => {
-                        // Row missing — already processed or never existed; ack and move on.
-                        warn!("lancedb accepted: session {} not found, acking", image_uuid);
-                        delivery.ack(BasicAckOptions::default()).await?;
-                    }
+                    Ok(_) => { delivery.accept().await?; }
                     Err(e) => {
                         error!("lancedb accepted write failed (unrecoverable): {}", e);
-                        delivery.nack(BasicNackOptions { requeue: false, ..Default::default() }).await?;
+                        // Nack to DLX by sending to pipeline.dlx before rejecting.
+                        let _ = dlx_sender.lock().await
+                            .send(fe2o3_amqp::types::messaging::Message::builder()
+                                .data(delivery.body().to_vec()).build())
+                            .await;
+                        delivery.reject(Default::default()).await?;
                     }
                 }
             }
 
-            Some(delivery) = cancel_consumer.next() => {
+            delivery = cancel_receiver.recv::<Bytes>() => {
                 let delivery = delivery?;
-                let msg: Value = serde_json::from_slice(&delivery.data)?;
+                let msg: Value = serde_json::from_slice(delivery.body())?;
                 let image_uuid = msg["image_uuid"].as_str().unwrap_or("").to_string();
                 let reason     = msg["reason"].as_str().map(|s| s.to_string());
 
@@ -325,14 +280,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &pool, &loop_table, &image_uuid,
                     None, "rejected", reason.as_deref(),
                 ).await {
-                    Ok(true)  => { delivery.ack(BasicAckOptions::default()).await?; }
-                    Ok(false) => {
-                        warn!("lancedb cancel: session {} not found, acking", image_uuid);
-                        delivery.ack(BasicAckOptions::default()).await?;
-                    }
+                    Ok(_) => { delivery.accept().await?; }
                     Err(e) => {
                         error!("lancedb cancel write failed (unrecoverable): {}", e);
-                        delivery.nack(BasicNackOptions { requeue: false, ..Default::default() }).await?;
+                        let _ = dlx_sender.lock().await
+                            .send(fe2o3_amqp::types::messaging::Message::builder()
+                                .data(delivery.body().to_vec()).build())
+                            .await;
+                        delivery.reject(Default::default()).await?;
                     }
                 }
             }

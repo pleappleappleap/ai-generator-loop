@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 tokio            = { workspace = true }
-lapin            = "2"
+fe2o3-amqp       = { workspace = true }
+fe2o3-amqp-types = "0.8"
 futures-lite     = { workspace = true }
 tracing          = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -13,6 +14,7 @@ serde            = { workspace = true }
 serde_json       = { workspace = true }
 serde_yaml       = { workspace = true }
 async-trait      = { workspace = true }
+bytes            = "1"
 
 [dev-dependencies]
 mockall = { workspace = true }
