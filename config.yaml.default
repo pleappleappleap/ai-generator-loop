@@ -50,6 +50,11 @@ broker:
   comfyui_url: http://127.0.0.1:8188
   comfyui_ws: ws://127.0.0.1:8188/ws
 
+database:
+  path: auto              # auto: {paths.root}/pipeline.db
+  busy_timeout_ms: 5000
+  cleanup_interval_secs: 300
+
 system:
   package_manager: auto   # auto | homebrew | apt | dnf | pacman | zypper
   homebrew_prefix: auto   # auto | /opt/homebrew (Apple Silicon) | /usr/local (Intel)

@@ -2,6 +2,7 @@
 members = [
     "router",
     "aggregator",
+    "db",
 ]
 # coordinator and lancedb_manager are added in steps 7 and 8.
 

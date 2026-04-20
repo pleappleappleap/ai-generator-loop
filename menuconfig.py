@@ -136,6 +136,11 @@ def _build_defaults() -> dict:
             "comfyui_url":     "http://127.0.0.1:8188",
             "comfyui_ws":      "ws://127.0.0.1:8188/ws",
         },
+        "database": {
+            "path":                  f"{root}/pipeline.db",
+            "busy_timeout_ms":       5000,
+            "cleanup_interval_secs": 300,
+        },
         "system": {
             "package_manager": pkg_mgr,
             "homebrew_prefix": homebrew_prefix,
@@ -335,6 +340,19 @@ MENU_SCHEMA = [
                      "help": "Max prior images from current session to include"},
                 ],
             },
+        ],
+    },
+    {
+        "label": "Database",
+        "key": "database",
+        "help": "SQLite WAL operational state store (replaces Redis)",
+        "children": [
+            {"label": "DB path",              "key": "path",                   "type": "string",
+             "help": "Absolute path to pipeline.db (auto: {paths.root}/pipeline.db)"},
+            {"label": "Busy timeout (ms)",    "key": "busy_timeout_ms",        "type": "int",
+             "help": "SQLite busy_timeout — how long a blocked write waits before failing"},
+            {"label": "Cleanup interval (s)", "key": "cleanup_interval_secs",  "type": "int",
+             "help": "How often to delete expired scorer_session and tactical_budget rows"},
         ],
     },
     {

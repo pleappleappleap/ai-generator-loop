@@ -54,7 +54,8 @@ class Config:
         models: Model file locations and inference parameters.
         gpu: GPU backend selection.
         thresholds: Scorer acceptance thresholds.
-        broker: RabbitMQ, Redis, and ComfyUI connection parameters.
+        broker: Artemis, Redis (migration target), and ComfyUI connection parameters.
+        database: SQLite operational state store configuration.
         system: Host system parameters (package manager, Homebrew prefix).
     """
 
@@ -85,6 +86,11 @@ class Config:
     def broker(self) -> dict:
         """Message broker and service connection parameters."""
         return self._data["broker"]
+
+    @property
+    def database(self) -> dict:
+        """SQLite operational state store configuration."""
+        return self._data.get("database", {})
 
     @property
     def system(self) -> dict:
