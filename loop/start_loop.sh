@@ -20,17 +20,19 @@ cd "$COMFYUI"
 source venv/bin/activate
 python "$AI_IMAGE_ROOT/loop/comfyui_worker.py" &
 
-# Start Rust router
-"$SCORERS/router/target/release/router" &
+# Start Rust binaries
+"$SCORERS/target/release/coordinator" &
+sleep 1   # coordinator must bind its Unix socket before other processes start
+"$SCORERS/target/release/router" &
+"$SCORERS/target/release/aggregator" &
+"$SCORERS/target/release/lancedb_manager" &
 
-# Start Python scorers and managers
+# Start Python scorers
 cd "$SCORERS"
 source venv/bin/activate
 python clip_scorer.py &
 python artifact_scorer.py &
 python vlm_scorer.py &
-python scorer_aggregator.py &
-python "$AI_IMAGE_ROOT/lancedb_manager.py" &
 
 # Start tactical LLM (shares the scorers venv)
 cd "$AI_IMAGE_ROOT/tactical-llm"

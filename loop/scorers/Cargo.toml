@@ -4,8 +4,8 @@ members = [
     "aggregator",
     "db",
     "coordinator",
+    "lancedb_manager",
 ]
-# lancedb_manager is added in step 8.
 
 [workspace.dependencies]
 sqlx             = { version = "0.7", features = ["sqlite", "runtime-tokio", "macros"] }
