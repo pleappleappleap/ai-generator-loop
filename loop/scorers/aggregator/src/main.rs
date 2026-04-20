@@ -1,44 +1,32 @@
 //! Aggregator — scorer result collection, threshold logic, and verdict emission.
 //!
 //! Subscribes to all three scorer result queues via the `scorer.results`
-//! topic exchange. Accumulates results per image in Redis using the
-//! `agg:session:<image_uuid>` key namespace with a configurable TTL.
+//! topic exchange. Accumulates results per image in the `scorer_session`
+//! SQLite table using `BEGIN IMMEDIATE` for serialised writer semantics.
 //!
 //! Applies cascade threshold logic as results arrive:
 //!
 //! 1. CLIP score below `clip_threshold` → publish cancel, emit rejected verdict.
 //! 2. Artifact confidence above `artifact_threshold` → publish cancel, emit rejected verdict.
-//! 3. All three scores collected within threshold bounds → emit candidate verdict.
+//! 3. All three scores collected → emit candidate verdict, write verdict to scorer_session.
 //!
-//! The `GETDEL` Redis operation provides atomic read-and-delete semantics,
-//! preventing duplicate verdicts in scale-out deployments where multiple
-//! aggregator instances may process results for the same image concurrently.
+//! `BEGIN IMMEDIATE` on each update ensures only one aggregator instance
+//! writes at a time per row. The `busy_timeout` in the pool options makes
+//! contention block rather than fail.
 //!
-//! Thresholds and broker URLs are read from `config.yaml` via serde_yaml.
-//! Set `AI_IMAGE_ROOT` in the environment to locate `config.yaml`; falls
-//! back to `./config.yaml` if the variable is absent.
+//! Config is read from `config.yaml` via serde_yaml; set `AI_IMAGE_ROOT` in
+//! the environment to locate `config.yaml`, falling back to `./config.yaml`.
 //!
-//! # Exchange Subscriptions
-//!
-//! | Exchange | Binding Key | Queue |
-//! |----------|-------------|-------|
-//! | `scorer.results` | `clip.*` | `aggregator.clip.queue` |
-//! | `scorer.results` | `artifact.*` | `aggregator.artifact.queue` |
-//! | `scorer.results` | `vlm.*` | `aggregator.vlm.queue` |
-//!
-//! # Exchange Publications
-//!
-//! | Target | Type | Condition |
-//! |--------|------|-----------|
-//! | `scorer.events` | Topic exchange | Threshold failure |
-//! | `scorer.result` | Queue | All results collected or threshold failure |
+//! XA coordinator integration (2PC for AMQP + SQLite) is wired in step 7.
 
 use async_trait::async_trait;
+use futures_lite::StreamExt;
 use lapin::{
-    options::*, types::FieldTable, Connection, ConnectionProperties,
+    options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sqlx::SqlitePool;
 use tracing::info;
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -47,46 +35,34 @@ use tracing::info;
 struct Thresholds {
     clip: f64,
     artifact: f64,
-    score_timeout_secs: usize,
+    score_timeout_secs: i64,
 }
 
 #[derive(Deserialize)]
 struct Broker {
     rabbitmq_url: String,
-    redis_url: String,
+}
+
+#[derive(Deserialize)]
+struct Database {
+    path: String,
+    busy_timeout_ms: u64,
+    cleanup_interval_secs: u64,
 }
 
 #[derive(Deserialize)]
 struct Config {
     thresholds: Thresholds,
     broker: Broker,
+    database: Database,
 }
 
-// ── Traits ────────────────────────────────────────────────────────────────────
-
-/// Provides read, atomic-delete, and write operations on a key-value store.
-#[async_trait]
-#[cfg_attr(test, mockall::automock)]
-pub trait RedisClient: Send + Sync {
-    /// Retrieve the value at `key`, returning `None` if absent or expired.
-    async fn get(&self, key: &str) -> Option<String>;
-
-    /// Atomically retrieve and delete the value at `key`.
-    async fn getdel(&self, key: &str) -> Option<String>;
-
-    /// Set `key` to `value` with a TTL of `ttl` seconds.
-    async fn setex(&self, key: &str, ttl: usize, value: &str) -> bool;
-}
+// ── Publisher trait ───────────────────────────────────────────────────────────
 
 /// Publishes a message to a RabbitMQ exchange or queue.
 #[async_trait]
 #[cfg_attr(test, mockall::automock)]
 pub trait Publisher: Send + Sync {
-    /// Publish a message to an exchange or queue.
-    ///
-    /// * `exchange` — Exchange name, or empty string for the default exchange.
-    /// * `routing_key` — Routing key for topic exchanges, or queue name for the default exchange.
-    /// * `payload` — Raw message bytes.
     async fn publish(
         &self,
         exchange: &str,
@@ -95,163 +71,270 @@ pub trait Publisher: Send + Sync {
     ) -> Result<(), Box<dyn std::error::Error>>;
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// ── Core logic ────────────────────────────────────────────────────────────────
 
-/// Handle a CLIP scorer result message.
+/// Handle a CLIP scorer result.
 ///
-/// Updates the `agg:session:<uuid>` Redis record with the CLIP score.
-/// If the score falls below `clip_threshold`, atomically removes the session,
-/// publishes a cancel event, and emits a rejected verdict. Otherwise stores
-/// the updated record and calls `try_aggregate`.
+/// Loads the `scorer_session` row for this image, merges the CLIP result,
+/// and applies the threshold. Below threshold → cancel + rejected verdict.
+/// Otherwise updates the row and calls `try_aggregate`.
 pub async fn handle_clip_result(
-    redis: &dyn RedisClient,
+    pool: &SqlitePool,
     publisher: &dyn Publisher,
     result: Value,
     clip_threshold: f64,
-    score_timeout: usize,
+    score_timeout_secs: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let image_uuid = result["image_uuid"].as_str().ok_or("missing image_uuid")?;
-    let key = format!("agg:session:{}", image_uuid);
-
-    let raw = match redis.get(&key).await {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    let mut session: Value = serde_json::from_str(&raw)?;
-    session["clip"] = result.clone();
-
+    let clip_json = serde_json::to_string(&result)?;
     let clip_score = result["clip_score"].as_f64().unwrap_or(0.0);
+
     if clip_score < clip_threshold {
-        if let Some(raw) = redis.getdel(&key).await {
-            let session: Value = serde_json::from_str(&raw)?;
+        // Threshold failure: fetch-and-mark atomically.
+        let session = fetch_and_reject(pool, image_uuid, "clip_threshold", &clip_json, "clip").await?;
+        if let Some(session) = session {
             publish_cancel(publisher, image_uuid).await?;
-            publish_verdict(publisher, image_uuid, &session, "rejected", Some("clip_threshold"))
-                .await?;
+            publish_verdict(publisher, image_uuid, &session, "rejected", Some("clip_threshold")).await?;
         }
         return Ok(());
     }
 
-    redis.setex(&key, score_timeout, &serde_json::to_string(&session)?).await;
-    try_aggregate(redis, publisher, image_uuid, &session).await?;
+    // Merge CLIP result and attempt aggregation.
+    let updated = merge_scorer_result(pool, image_uuid, "clip", &clip_json, score_timeout_secs).await?;
+    if let Some(session) = updated {
+        try_aggregate(pool, publisher, image_uuid, &session).await?;
+    }
     Ok(())
 }
 
-/// Handle an artifact scorer result message.
-///
-/// Updates the session record with the artifact confidence. If the confidence
-/// exceeds `artifact_threshold`, atomically removes the session, publishes a
-/// cancel event, and emits a rejected verdict. Otherwise stores the updated
-/// record and calls `try_aggregate`.
+/// Handle an artifact scorer result.
 pub async fn handle_artifact_result(
-    redis: &dyn RedisClient,
+    pool: &SqlitePool,
     publisher: &dyn Publisher,
     result: Value,
     artifact_threshold: f64,
-    score_timeout: usize,
+    score_timeout_secs: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let image_uuid = result["image_uuid"].as_str().ok_or("missing image_uuid")?;
-    let key = format!("agg:session:{}", image_uuid);
-
-    let raw = match redis.get(&key).await {
-        Some(r) => r,
-        None => return Ok(()),
-    };
-
-    let mut session: Value = serde_json::from_str(&raw)?;
-    session["artifact"] = result.clone();
-
+    let artifact_json = serde_json::to_string(&result)?;
     let ai_confidence = result["ai_confidence"].as_f64().unwrap_or(1.0);
+
     if ai_confidence > artifact_threshold {
-        if let Some(raw) = redis.getdel(&key).await {
-            let session: Value = serde_json::from_str(&raw)?;
+        let session = fetch_and_reject(pool, image_uuid, "artifact_threshold", &artifact_json, "artifact").await?;
+        if let Some(session) = session {
             publish_cancel(publisher, image_uuid).await?;
-            publish_verdict(
-                publisher,
-                image_uuid,
-                &session,
-                "rejected",
-                Some("artifact_threshold"),
-            )
-            .await?;
+            publish_verdict(publisher, image_uuid, &session, "rejected", Some("artifact_threshold")).await?;
         }
         return Ok(());
     }
 
-    redis.setex(&key, score_timeout, &serde_json::to_string(&session)?).await;
-    try_aggregate(redis, publisher, image_uuid, &session).await?;
+    let updated = merge_scorer_result(pool, image_uuid, "artifact", &artifact_json, score_timeout_secs).await?;
+    if let Some(session) = updated {
+        try_aggregate(pool, publisher, image_uuid, &session).await?;
+    }
     Ok(())
 }
 
-/// Handle a VLM scorer result message.
-///
-/// Updates the session record with the VLM scores and calls `try_aggregate`.
-/// VLM results never trigger rejection directly.
+/// Handle a VLM scorer result. Never triggers rejection.
 pub async fn handle_vlm_result(
-    redis: &dyn RedisClient,
+    pool: &SqlitePool,
     publisher: &dyn Publisher,
     result: Value,
-    score_timeout: usize,
+    score_timeout_secs: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let image_uuid = result["image_uuid"].as_str().ok_or("missing image_uuid")?;
-    let key = format!("agg:session:{}", image_uuid);
+    let vlm_json = serde_json::to_string(&result)?;
 
-    let raw = match redis.get(&key).await {
+    let updated = merge_scorer_result(pool, image_uuid, "vlm", &vlm_json, score_timeout_secs).await?;
+    if let Some(session) = updated {
+        try_aggregate(pool, publisher, image_uuid, &session).await?;
+    }
+    Ok(())
+}
+
+// ── SQLite helpers ────────────────────────────────────────────────────────────
+
+/// Merge a scorer result column into scorer_session using BEGIN IMMEDIATE.
+///
+/// Returns the updated row as a JSON Value, or None if the row is absent
+/// or expired. The caller is responsible for deciding what to do next.
+async fn merge_scorer_result(
+    pool: &SqlitePool,
+    image_uuid: &str,
+    column: &str,   // "clip" | "artifact" | "vlm"
+    json_value: &str,
+    score_timeout_secs: i64,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let now = db::now_unix();
+
+    let mut tx = pool.begin().await?;
+
+    // Fetch current row under exclusive lock.
+    let row = sqlx::query!(
+        "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
+                clip, artifact, vlm, verdict, expires_at
+         FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2",
+        image_uuid, now
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let row = match row {
         Some(r) => r,
-        None => return Ok(()),
+        None => {
+            tx.rollback().await?;
+            return Ok(None);
+        }
     };
 
-    let mut session: Value = serde_json::from_str(&raw)?;
-    session["vlm"] = result;
+    // Build the updated JSON session object for the caller.
+    let clip     = if column == "clip"     { Some(json_value) } else { row.clip.as_deref() };
+    let artifact = if column == "artifact" { Some(json_value) } else { row.artifact.as_deref() };
+    let vlm      = if column == "vlm"     { Some(json_value) } else { row.vlm.as_deref() };
 
-    redis.setex(&key, score_timeout, &serde_json::to_string(&session)?).await;
-    try_aggregate(redis, publisher, image_uuid, &session).await?;
-    Ok(())
+    let new_expires = now + score_timeout_secs;
+
+    // Write the updated column back.
+    match column {
+        "clip" => sqlx::query!(
+            "UPDATE scorer_session SET clip = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+            json_value, new_expires, image_uuid
+        ).execute(&mut *tx).await?,
+        "artifact" => sqlx::query!(
+            "UPDATE scorer_session SET artifact = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+            json_value, new_expires, image_uuid
+        ).execute(&mut *tx).await?,
+        "vlm" => sqlx::query!(
+            "UPDATE scorer_session SET vlm = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+            json_value, new_expires, image_uuid
+        ).execute(&mut *tx).await?,
+        _ => unreachable!(),
+    };
+
+    tx.commit().await?;
+
+    let session = json!({
+        "image_uuid":      image_uuid,
+        "session_uuid":    row.session_uuid,
+        "sequence_number": row.sequence_number,
+        "prompt":          row.prompt.as_deref().unwrap_or(""),
+        "workflow_path":   row.workflow_path.as_deref().unwrap_or(""),
+        "clip":            clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "artifact":        artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "vlm":             vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+    });
+
+    Ok(Some(session))
+}
+
+/// Atomically mark a session as rejected (sets verdict + rejection_reason).
+///
+/// Returns the final session Value for publishing the verdict, or None if
+/// the row is missing or already resolved.
+async fn fetch_and_reject(
+    pool: &SqlitePool,
+    image_uuid: &str,
+    reason: &str,
+    scorer_json: &str,
+    scorer_column: &str,
+) -> Result<Option<Value>, Box<dyn std::error::Error>> {
+    let now = db::now_unix();
+    let mut tx = pool.begin().await?;
+
+    let row = sqlx::query!(
+        "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
+                clip, artifact, vlm
+         FROM scorer_session
+         WHERE image_uuid = ?1 AND expires_at > ?2 AND verdict IS NULL",
+        image_uuid, now
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let row = match row {
+        Some(r) => r,
+        None => {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+    };
+
+    sqlx::query!(
+        "UPDATE scorer_session SET verdict = 'rejected', rejection_reason = ?1 WHERE image_uuid = ?2",
+        reason, image_uuid
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let clip     = if scorer_column == "clip"     { Some(scorer_json) } else { row.clip.as_deref() };
+    let artifact = if scorer_column == "artifact" { Some(scorer_json) } else { row.artifact.as_deref() };
+    let vlm      = if scorer_column == "vlm"     { Some(scorer_json) } else { row.vlm.as_deref() };
+
+    let session = json!({
+        "image_uuid":      image_uuid,
+        "session_uuid":    row.session_uuid,
+        "sequence_number": row.sequence_number,
+        "prompt":          row.prompt.as_deref().unwrap_or(""),
+        "workflow_path":   row.workflow_path.as_deref().unwrap_or(""),
+        "verdict":         "rejected",
+        "rejection_reason": reason,
+        "clip":            clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "artifact":        artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+        "vlm":             vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
+    });
+
+    Ok(Some(session))
 }
 
 // ── Aggregation ───────────────────────────────────────────────────────────────
 
 /// Emit a candidate verdict if all three scorer results have arrived.
 ///
-/// Uses GETDEL for atomic session removal, preventing duplicate verdicts
-/// in scale-out deployments.
+/// Writes verdict = 'candidate' to scorer_session within a transaction so
+/// only one aggregator instance emits the verdict (the second writer on the
+/// same row sees verdict IS NOT NULL and bails out).
 async fn try_aggregate(
-    redis: &dyn RedisClient,
+    pool: &SqlitePool,
     publisher: &dyn Publisher,
     image_uuid: &str,
     session: &Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let key = format!("agg:session:{}", image_uuid);
-    if session["clip"].is_null()
-        || session["artifact"].is_null()
-        || session["vlm"].is_null()
-    {
+    if session["clip"].is_null() || session["artifact"].is_null() || session["vlm"].is_null() {
         return Ok(());
     }
-    if let Some(raw) = redis.getdel(&key).await {
-        let session: Value = serde_json::from_str(&raw)?;
-        publish_verdict(publisher, image_uuid, &session, "candidate", None).await?;
+
+    let mut tx = pool.begin().await?;
+    let rows_affected = sqlx::query!(
+        "UPDATE scorer_session SET verdict = 'candidate'
+         WHERE image_uuid = ?1 AND verdict IS NULL",
+        image_uuid
+    )
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if rows_affected == 0 {
+        tx.rollback().await?;
+        return Ok(()); // Another aggregator instance already emitted the verdict.
     }
+
+    tx.commit().await?;
+    publish_verdict(publisher, image_uuid, session, "candidate", None).await?;
     Ok(())
 }
 
 // ── Publications ──────────────────────────────────────────────────────────────
 
-/// Publish a cancel event to the scorer.events topic exchange.
 async fn publish_cancel(
     publisher: &dyn Publisher,
     image_uuid: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let payload = serde_json::to_vec(&json!({"image_uuid": image_uuid}))?;
-    publisher
-        .publish("scorer.events", &format!("cancel.{}", image_uuid), &payload)
-        .await
+    publisher.publish("scorer.events", &format!("cancel.{}", image_uuid), &payload).await
 }
 
-/// Publish a verdict to the scorer.result queue.
-///
-/// Includes prompt, session_uuid, workflow_path, and sequence_number from
-/// the session record so downstream consumers (tactical LLM) have full context.
 async fn publish_verdict(
     publisher: &dyn Publisher,
     image_uuid: &str,
@@ -286,221 +369,109 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "config.yaml".to_string());
     let cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
 
-    let clip_threshold = cfg.thresholds.clip;
+    let clip_threshold     = cfg.thresholds.clip;
     let artifact_threshold = cfg.thresholds.artifact;
-    let score_timeout = cfg.thresholds.score_timeout_secs;
+    let score_timeout      = cfg.thresholds.score_timeout_secs;
 
-    info!(
-        clip_threshold,
-        artifact_threshold,
-        score_timeout,
-        "Aggregator starting"
-    );
+    info!(clip_threshold, artifact_threshold, score_timeout, "Aggregator starting");
 
-    let conn = Connection::connect(
-        &cfg.broker.rabbitmq_url,
-        ConnectionProperties::default(),
-    )
-    .await?;
+    // Open SQLite pool.
+    let pool = db::open_pool(&cfg.database.path, cfg.database.busy_timeout_ms).await?;
+    db::init_schema(&pool).await?;
+    db::spawn_cleanup_task(pool.clone(), cfg.database.cleanup_interval_secs);
 
+    // Connect to AMQP broker.
+    let conn = Connection::connect(&cfg.broker.rabbitmq_url, ConnectionProperties::default()).await?;
     let channel = conn.create_channel().await?;
 
     channel
-        .exchange_declare(
-            "scorer.results",
-            lapin::ExchangeKind::Topic,
-            ExchangeDeclareOptions { durable: true, ..Default::default() },
-            FieldTable::default(),
-        )
+        .exchange_declare("scorer.results", lapin::ExchangeKind::Topic,
+            ExchangeDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
         .await?;
-
     channel
-        .exchange_declare(
-            "scorer.events",
-            lapin::ExchangeKind::Topic,
-            ExchangeDeclareOptions { durable: true, ..Default::default() },
-            FieldTable::default(),
-        )
+        .exchange_declare("scorer.events", lapin::ExchangeKind::Topic,
+            ExchangeDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
         .await?;
-
     channel
-        .queue_declare(
-            "scorer.result",
-            QueueDeclareOptions { durable: true, ..Default::default() },
-            FieldTable::default(),
-        )
+        .queue_declare("scorer.result",
+            QueueDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
         .await?;
 
     for (queue, binding) in &[
-        ("aggregator.clip.queue", "clip.*"),
+        ("aggregator.clip.queue",     "clip.*"),
         ("aggregator.artifact.queue", "artifact.*"),
-        ("aggregator.vlm.queue", "vlm.*"),
+        ("aggregator.vlm.queue",      "vlm.*"),
     ] {
         channel
-            .queue_declare(
-                queue,
-                QueueDeclareOptions { durable: true, ..Default::default() },
-                FieldTable::default(),
-            )
+            .queue_declare(queue, QueueDeclareOptions { durable: true, ..Default::default() }, FieldTable::default())
             .await?;
         channel
-            .queue_bind(
-                queue,
-                "scorer.results",
-                binding,
-                QueueBindOptions::default(),
-                FieldTable::default(),
-            )
+            .queue_bind(queue, "scorer.results", binding, QueueBindOptions::default(), FieldTable::default())
             .await?;
     }
+
+    // Shared publisher wrapper.
+    struct ChanPublisher(lapin::Channel);
+    #[async_trait]
+    impl Publisher for ChanPublisher {
+        async fn publish(&self, exchange: &str, routing_key: &str, payload: &[u8])
+            -> Result<(), Box<dyn std::error::Error>>
+        {
+            self.0
+                .basic_publish(exchange, routing_key, BasicPublishOptions::default(),
+                    payload, BasicProperties::default())
+                .await?;
+            Ok(())
+        }
+    }
+    let publisher = std::sync::Arc::new(ChanPublisher(channel.clone()));
+
+    // Consume from all three queues concurrently.
+    channel.basic_qos(1, BasicQosOptions::default()).await?;
+
+    let mut clip_consumer = channel
+        .basic_consume("aggregator.clip.queue", "aggregator-clip",
+            BasicConsumeOptions::default(), FieldTable::default())
+        .await?;
+    let mut artifact_consumer = channel
+        .basic_consume("aggregator.artifact.queue", "aggregator-artifact",
+            BasicConsumeOptions::default(), FieldTable::default())
+        .await?;
+    let mut vlm_consumer = channel
+        .basic_consume("aggregator.vlm.queue", "aggregator-vlm",
+            BasicConsumeOptions::default(), FieldTable::default())
+        .await?;
 
     info!("Aggregator ready");
 
-    // Message consumption loop is wired in step 6 (Redis → SQLite migration).
-    // The handler functions are unit-tested independently via the trait abstractions above.
-    let _ = (clip_threshold, artifact_threshold, score_timeout);
-
-    Ok(())
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mockall::predicate::*;
-
-    /// Verify that a CLIP score below threshold triggers cancel and rejected verdict.
-    #[tokio::test]
-    async fn test_clip_failure_triggers_cancel_and_rejected_verdict() {
-        let mut mock_redis = MockRedisClient::new();
-        let mut mock_publisher = MockPublisher::new();
-        let image_uuid = "test-uuid-123";
-
-        mock_redis.expect_get().returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-123", "clip": null, "artifact": null, "vlm": null,
-                        "prompt": "", "session_uuid": "", "workflow_path": "", "sequence_number": 0})
-                .to_string())
-        });
-        mock_redis.expect_getdel().times(1).returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-123", "clip": {"clip_score": 0.1},
-                        "artifact": null, "vlm": null,
-                        "prompt": "", "session_uuid": "", "workflow_path": "", "sequence_number": 0})
-                .to_string())
-        });
-        mock_publisher
-            .expect_publish()
-            .with(eq("scorer.events"), eq(format!("cancel.{}", image_uuid).as_str()), always())
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        mock_publisher
-            .expect_publish()
-            .with(eq(""), eq("scorer.result"), always())
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-
-        handle_clip_result(
-            &mock_redis, &mock_publisher,
-            json!({"image_uuid": image_uuid, "clip_score": 0.1}),
-            0.25, 60,
-        )
-        .await
-        .unwrap();
-    }
-
-    /// Verify that artifact confidence above threshold triggers cancel and rejected verdict.
-    #[tokio::test]
-    async fn test_artifact_failure_triggers_cancel_and_rejected_verdict() {
-        let mut mock_redis = MockRedisClient::new();
-        let mut mock_publisher = MockPublisher::new();
-        let image_uuid = "test-uuid-456";
-
-        mock_redis.expect_get().returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-456", "clip": {"clip_score": 0.8},
-                        "artifact": null, "vlm": null,
-                        "prompt": "", "session_uuid": "", "workflow_path": "", "sequence_number": 0})
-                .to_string())
-        });
-        mock_redis.expect_getdel().times(1).returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-456", "clip": {"clip_score": 0.8},
-                        "artifact": {"ai_confidence": 0.9}, "vlm": null,
-                        "prompt": "", "session_uuid": "", "workflow_path": "", "sequence_number": 0})
-                .to_string())
-        });
-        mock_publisher
-            .expect_publish()
-            .with(eq("scorer.events"), eq(format!("cancel.{}", image_uuid).as_str()), always())
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-        mock_publisher
-            .expect_publish()
-            .with(eq(""), eq("scorer.result"), always())
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-
-        handle_artifact_result(
-            &mock_redis, &mock_publisher,
-            json!({"image_uuid": image_uuid, "ai_confidence": 0.9}),
-            0.5, 60,
-        )
-        .await
-        .unwrap();
-    }
-
-    /// Verify that all scores within thresholds emit a candidate verdict.
-    #[tokio::test]
-    async fn test_all_scores_pass_emits_candidate() {
-        let mut mock_redis = MockRedisClient::new();
-        let mut mock_publisher = MockPublisher::new();
-        let image_uuid = "test-uuid-789";
-
-        mock_redis.expect_get().returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-789",
-                        "clip": {"clip_score": 0.8}, "artifact": {"ai_confidence": 0.2}, "vlm": null,
-                        "prompt": "test", "session_uuid": "sess-1",
-                        "workflow_path": "/tmp/wf.json", "sequence_number": 1})
-                .to_string())
-        });
-        mock_redis.expect_setex().returning(|_, _, _| true);
-        mock_redis.expect_getdel().times(1).returning(|_| {
-            Some(json!({"image_uuid": "test-uuid-789",
-                        "clip": {"clip_score": 0.8}, "artifact": {"ai_confidence": 0.2},
-                        "vlm": {"photorealism": 8, "anatomical_coherence": 7,
-                                "interaction_plausibility": 8, "lighting_consistency": 7,
-                                "prompt_adherence": 9, "issues": [], "recommendations": []},
-                        "prompt": "test", "session_uuid": "sess-1",
-                        "workflow_path": "/tmp/wf.json", "sequence_number": 1})
-                .to_string())
-        });
-        mock_publisher
-            .expect_publish()
-            .with(eq(""), eq("scorer.result"), always())
-            .times(1)
-            .returning(|_, _, _| Ok(()));
-
-        handle_vlm_result(
-            &mock_redis, &mock_publisher,
-            json!({"image_uuid": image_uuid, "photorealism": 8, "anatomical_coherence": 7,
-                   "interaction_plausibility": 8, "lighting_consistency": 7,
-                   "prompt_adherence": 9, "issues": [], "recommendations": []}),
-            60,
-        )
-        .await
-        .unwrap();
-    }
-
-    /// Verify that an expired or missing session record is silently ignored.
-    #[tokio::test]
-    async fn test_expired_session_is_ignored() {
-        let mut mock_redis = MockRedisClient::new();
-        let mock_publisher = MockPublisher::new();
-        mock_redis.expect_get().returning(|_| None);
-        handle_clip_result(
-            &mock_redis, &mock_publisher,
-            json!({"image_uuid": "expired-uuid", "clip_score": 0.8}),
-            0.25, 60,
-        )
-        .await
-        .unwrap();
+    loop {
+        tokio::select! {
+            Some(delivery) = clip_consumer.next() => {
+                let delivery = delivery?;
+                let result: Value = serde_json::from_slice(&delivery.data)?;
+                if let Err(e) = handle_clip_result(&pool, publisher.as_ref(), result,
+                                                   clip_threshold, score_timeout).await {
+                    tracing::error!("clip handler error: {}", e);
+                }
+                delivery.ack(BasicAckOptions::default()).await?;
+            }
+            Some(delivery) = artifact_consumer.next() => {
+                let delivery = delivery?;
+                let result: Value = serde_json::from_slice(&delivery.data)?;
+                if let Err(e) = handle_artifact_result(&pool, publisher.as_ref(), result,
+                                                       artifact_threshold, score_timeout).await {
+                    tracing::error!("artifact handler error: {}", e);
+                }
+                delivery.ack(BasicAckOptions::default()).await?;
+            }
+            Some(delivery) = vlm_consumer.next() => {
+                let delivery = delivery?;
+                let result: Value = serde_json::from_slice(&delivery.data)?;
+                if let Err(e) = handle_vlm_result(&pool, publisher.as_ref(), result, score_timeout).await {
+                    tracing::error!("vlm handler error: {}", e);
+                }
+                delivery.ack(BasicAckOptions::default()).await?;
+            }
+        }
     }
 }

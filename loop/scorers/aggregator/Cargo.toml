@@ -4,10 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+db               = { path = "../db" }
 tokio            = { workspace = true }
 lapin            = "2"
 futures-lite     = { workspace = true }
-redis            = { version = "0.25", features = ["tokio-comp"] }
+sqlx             = { workspace = true }
 tracing          = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde            = { workspace = true }

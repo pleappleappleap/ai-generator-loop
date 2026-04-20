@@ -20,6 +20,8 @@ import sys
 import uuid
 from pathlib import Path
 
+import sqlite3
+
 import pika
 import pika.channel
 import pika.spec
@@ -39,7 +41,10 @@ COMFYUI_WS: str = _cfg.broker["comfyui_ws"]
 """WebSocket URL for ComfyUI completion events."""
 
 _r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
-"""Redis connection for writing in-flight session records."""
+"""Redis connection for writing in-flight session records (removed in step 10)."""
+
+_DB_PATH: str = _cfg.database.get("path", "pipeline.db")
+"""Path to the SQLite operational database."""
 
 
 def setup_exchanges(channel: pika.channel.Channel) -> None:
@@ -199,6 +204,8 @@ def on_request(
         "prompt":          request.get("prompt", ""),
         "image_path":      None,
     }
+
+    # Redis writes (removed in step 10 when coordinator API replaces them).
     _r.setex(
         f"agg:session:{request['image_uuid']}",
         ttl,
@@ -209,6 +216,31 @@ def on_request(
         ttl * 2,
         json.dumps(session_record),
     )
+
+    # SQLite write — direct in step 6; replaced by coordinator API in step 10.
+    import time as _time
+    now = int(_time.time())
+    expires_at = now + ttl
+    con = sqlite3.connect(_DB_PATH, timeout=5)
+    with con:
+        con.execute(
+            """INSERT OR IGNORE INTO scorer_session
+               (image_uuid, session_uuid, sequence_number, prompt, workflow_path,
+                workflow_params, created_at, expires_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (
+                request["image_uuid"],
+                request["session_uuid"],
+                request["sequence_number"],
+                request.get("prompt", ""),
+                request["workflow_path"],
+                json.dumps(request.get("workflow_params", {})),
+                now,
+                expires_at,
+            ),
+        )
+    con.close()
+
     ch.basic_publish(
         exchange="loop.events",
         routing_key=f"loop.complete.{request['image_uuid']}",
