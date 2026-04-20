@@ -39,10 +39,7 @@ thresholds:
   clip: 0.25
   artifact: 0.50
   score_timeout_secs: 60
-  # NOTE: The Rust aggregator binary (loop/scorers/aggregator/) has these
-  # values compiled in as const defaults. It reads AI_IMAGE_CLIP_THRESHOLD,
-  # AI_IMAGE_ARTIFACT_THRESHOLD, and AI_IMAGE_SCORE_TIMEOUT from the
-  # environment at startup to override them. config.sh exports these vars.
+  # The Rust aggregator reads these from config.yaml via serde_yaml.
 
 broker:
   rabbitmq_url: amqp://guest:guest@localhost:5672

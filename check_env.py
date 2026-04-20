@@ -162,6 +162,7 @@ def main() -> None:
         )
     check("rabbitmq-server", _cmd_exists("rabbitmq-server"))
     check("redis-server",    _cmd_exists("redis-server"))
+    check("yq",              _cmd_exists("yq"))
 
     # ── Rust binaries ─────────────────────────────────────────────────
     print(f"\n{_BOLD}Rust binaries:{_RESET}")

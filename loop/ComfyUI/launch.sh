@@ -1,12 +1,14 @@
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../../config.sh
-source "$SCRIPT_DIR/../../config.sh"
+AI_IMAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+CFG="$AI_IMAGE_ROOT/config.yaml"
 
-cd "$AI_IMAGE_COMFYUI"
+COMFYUI=$(yq '.paths.comfyui' "$CFG")
+GPU_BACKEND=$(yq '.gpu.backend' "$CFG")
+
+cd "$COMFYUI"
 source venv/bin/activate
 
-case "$AI_IMAGE_GPU_BACKEND" in
+case "$GPU_BACKEND" in
     mps)  EXTRA_ARGS="--use-mps" ;;
     cuda) EXTRA_ARGS="" ;;
     rocm) EXTRA_ARGS="" ;;

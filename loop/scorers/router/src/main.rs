@@ -26,8 +26,19 @@ use futures_lite::StreamExt;
 use lapin::{
     options::*, types::FieldTable, BasicProperties, Connection, ConnectionProperties,
 };
+use serde::Deserialize;
 use serde_json::Value;
 use tracing::info;
+
+#[derive(Deserialize)]
+struct Broker {
+    rabbitmq_url: String,
+}
+
+#[derive(Deserialize)]
+struct Config {
+    broker: Broker,
+}
 
 /// Publishes a message to a RabbitMQ exchange.
 ///
@@ -96,11 +107,13 @@ pub async fn route_message(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let amqp_url = std::env::var("AI_IMAGE_RABBITMQ_URL")
-        .unwrap_or_else(|_| "amqp://guest:guest@localhost:5672".to_string());
+    let config_path = std::env::var("AI_IMAGE_ROOT")
+        .map(|root| format!("{}/config.yaml", root))
+        .unwrap_or_else(|_| "config.yaml".to_string());
+    let cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
 
     let conn = Connection::connect(
-        &amqp_url,
+        &cfg.broker.rabbitmq_url,
         ConnectionProperties::default(),
     )
     .await?;

@@ -2,8 +2,8 @@
 """menuconfig-style TUI for ai-image pipeline configuration.
 
 Presents a Linux kernel menuconfig-inspired interface for generating
-config.yaml and config.sh. Auto-detects GPU backend, package manager,
-and all repository paths; every value can be overridden.
+config.yaml. Auto-detects GPU backend, package manager, and all
+repository paths; every value can be overridden.
 
 Usage::
 
@@ -14,7 +14,7 @@ Keys:
     ↑ / ↓       Navigate items
     → / Enter   Enter submenu or edit value
     ← / Esc     Return to parent menu
-    S           Save config.yaml + config.sh and exit
+    S           Save config.yaml and exit
     Q           Quit without saving
 """
 
@@ -31,7 +31,6 @@ import yaml
 
 REPO_ROOT = Path(__file__).parent
 CONFIG_PATH = REPO_ROOT / "config.yaml"
-CONFIG_SH_PATH = REPO_ROOT / "config.sh"
 
 # ─── Auto-detection ──────────────────────────────────────────────────────────
 
@@ -259,7 +258,7 @@ MENU_SCHEMA = [
             {"label": "Artifact maximum",    "key": "artifact",           "type": "float",
              "help": "Maximum AI-artifact confidence (0–1). Above this: reject after CLIP passes."},
             {"label": "Score timeout (sec)", "key": "score_timeout_secs", "type": "int",
-             "help": "Redis TTL for in-flight scorer sessions. Also exported for Rust aggregator."},
+             "help": "SQLite TTL for in-flight scorer sessions (scorer_session.expires_at)."},
         ],
     },
     {
@@ -389,45 +388,10 @@ def _set_nested(cfg: dict, value: Any, *keys: str) -> None:
     node[keys[-1]] = value
 
 
-def _write_config_sh(cfg: dict) -> None:
-    """Generate config.sh from the saved config dict."""
-    thresholds = cfg.get("thresholds", {})
-    lines = [
-        "#!/bin/bash",
-        "# Generated from config.yaml by menuconfig.py — do not edit manually.",
-        "# Regenerate with: make config",
-        "",
-        f'AI_IMAGE_ROOT="{cfg["paths"]["root"]}"',
-        f'AI_IMAGE_LANCEDB="{cfg["paths"]["lancedb"]}"',
-        f'AI_IMAGE_COMFYUI="{cfg["paths"]["comfyui"]}"',
-        f'AI_IMAGE_OUTPUT="{cfg["paths"]["output"]}"',
-        f'AI_IMAGE_SCORERS="{cfg["paths"]["scorers"]}"',
-        f'AI_IMAGE_GPU_BACKEND="{cfg["gpu"]["backend"]}"',
-        f'AI_IMAGE_RABBITMQ_URL="{cfg["broker"]["rabbitmq_url"]}"',
-        f'AI_IMAGE_REDIS_URL="{cfg["broker"]["redis_url"]}"',
-        f'AI_IMAGE_COMFYUI_URL="{cfg["broker"]["comfyui_url"]}"',
-        f'AI_IMAGE_HOMEBREW_PREFIX="{cfg["system"].get("homebrew_prefix", "")}"',
-        # Threshold env vars consumed by the Rust aggregator binary
-        f'AI_IMAGE_CLIP_THRESHOLD="{thresholds.get("clip", 0.25)}"',
-        f'AI_IMAGE_ARTIFACT_THRESHOLD="{thresholds.get("artifact", 0.50)}"',
-        f'AI_IMAGE_SCORE_TIMEOUT="{thresholds.get("score_timeout_secs", 60)}"',
-        "",
-        "export AI_IMAGE_ROOT AI_IMAGE_LANCEDB AI_IMAGE_COMFYUI",
-        "export AI_IMAGE_OUTPUT AI_IMAGE_SCORERS AI_IMAGE_GPU_BACKEND",
-        "export AI_IMAGE_RABBITMQ_URL AI_IMAGE_REDIS_URL AI_IMAGE_COMFYUI_URL",
-        "export AI_IMAGE_HOMEBREW_PREFIX",
-        "export AI_IMAGE_CLIP_THRESHOLD AI_IMAGE_ARTIFACT_THRESHOLD AI_IMAGE_SCORE_TIMEOUT",
-    ]
-    with open(CONFIG_SH_PATH, "w") as f:
-        f.write("\n".join(lines) + "\n")
-    CONFIG_SH_PATH.chmod(0o644)
-
-
 def save_config(cfg: dict) -> None:
-    """Write config.yaml and regenerate config.sh."""
+    """Write config.yaml."""
     with open(CONFIG_PATH, "w") as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
-    _write_config_sh(cfg)
 
 
 # ─── Curses UI ───────────────────────────────────────────────────────────────
@@ -704,7 +668,7 @@ class MenuUI:
     def _confirm_save(self) -> bool:
         """Modal yes/no save confirmation dialog."""
         h, w = self.stdscr.getmaxyx()
-        msg = "  Save config.yaml and config.sh?  [Y / n]  "
+        msg = "  Save config.yaml?  [Y / n]  "
         dw = len(msg) + 4
         dh = 3
         dy = (h - dh) // 2
@@ -775,8 +739,7 @@ def main() -> None:
 
     if result is not None:
         save_config(result)
-        print(f"Saved:     {CONFIG_PATH}")
-        print(f"Generated: {CONFIG_SH_PATH}")
+        print(f"Saved: {CONFIG_PATH}")
         print()
         print(f"GPU backend:     {result['gpu']['backend']}")
         print(f"Package manager: {result['system']['package_manager']}")

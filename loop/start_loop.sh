@@ -1,26 +1,30 @@
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../config.sh
-source "$SCRIPT_DIR/../config.sh"
+AI_IMAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CFG="$AI_IMAGE_ROOT/config.yaml"
+export AI_IMAGE_ROOT
+
+COMFYUI=$(yq '.paths.comfyui' "$CFG")
+SCORERS=$(yq '.paths.scorers' "$CFG")
+LANCEDB=$(yq '.paths.lancedb' "$CFG")
 
 # Start infrastructure
-"$SCRIPT_DIR/start_broker.sh"
+"$AI_IMAGE_ROOT/loop/start_broker.sh"
 sleep 3
 
 # Start ComfyUI
-"$AI_IMAGE_COMFYUI/launch.sh" &
+"$COMFYUI/launch.sh" &
 sleep 5
 
 # Start ComfyUI MQ worker
-cd "$AI_IMAGE_COMFYUI"
+cd "$COMFYUI"
 source venv/bin/activate
-python "$SCRIPT_DIR/comfyui_worker.py" &
+python "$AI_IMAGE_ROOT/loop/comfyui_worker.py" &
 
 # Start Rust router
-"$AI_IMAGE_SCORERS/router/target/release/router" &
+"$SCORERS/router/target/release/router" &
 
 # Start Python scorers and managers
-cd "$AI_IMAGE_SCORERS"
+cd "$SCORERS"
 source venv/bin/activate
 python clip_scorer.py &
 python artifact_scorer.py &
@@ -53,7 +57,7 @@ echo "  Redis keys:"
 echo "    agg:session:<uuid>    aggregator correlation state"
 echo "    ldb:session:<uuid>    lancedb manager correlation state"
 echo ""
-echo "  LanceDB: $AI_IMAGE_LANCEDB"
+echo "  LanceDB: $LANCEDB"
 echo "    tables: sessions, loop"
 echo ""
 echo "Management UI: http://localhost:15672 (guest/guest)"

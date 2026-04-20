@@ -1,8 +1,8 @@
 #!/bin/bash
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../config.sh
-source "$SCRIPT_DIR/../config.sh"
+AI_IMAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CFG="$AI_IMAGE_ROOT/config.yaml"
 
-export PATH="$PATH:$AI_IMAGE_HOMEBREW_PREFIX/sbin"
+HOMEBREW_PREFIX=$(yq '.system.homebrew_prefix' "$CFG")
+export PATH="$PATH:$HOMEBREW_PREFIX/sbin"
 rabbitmq-server -detached
 redis-server --daemonize yes
