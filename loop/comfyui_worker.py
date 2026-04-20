@@ -23,6 +23,7 @@ from pathlib import Path
 import pika
 import pika.channel
 import pika.spec
+import redis as redis_lib
 import requests
 import websocket
 
@@ -36,6 +37,9 @@ COMFYUI_URL: str = _cfg.broker["comfyui_url"]
 
 COMFYUI_WS: str = _cfg.broker["comfyui_ws"]
 """WebSocket URL for ComfyUI completion events."""
+
+_r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
+"""Redis connection for writing in-flight session records."""
 
 
 def setup_exchanges(channel: pika.channel.Channel) -> None:
@@ -185,6 +189,26 @@ def on_request(
         "workflow_path": request["workflow_path"],
         "workflow_params": request.get("workflow_params", {}),
     }
+    ttl = _cfg.thresholds["score_timeout_secs"]
+    session_record = {
+        "image_uuid":      request["image_uuid"],
+        "session_uuid":    request["session_uuid"],
+        "sequence_number": request["sequence_number"],
+        "workflow_path":   request["workflow_path"],
+        "workflow_params": request.get("workflow_params", {}),
+        "prompt":          request.get("prompt", ""),
+        "image_path":      None,
+    }
+    _r.setex(
+        f"agg:session:{request['image_uuid']}",
+        ttl,
+        json.dumps(session_record),
+    )
+    _r.setex(
+        f"ldb:session:{request['image_uuid']}",
+        ttl * 2,
+        json.dumps(session_record),
+    )
     ch.basic_publish(
         exchange="loop.events",
         routing_key=f"loop.complete.{request['image_uuid']}",

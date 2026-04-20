@@ -112,9 +112,13 @@ def publish_verdict(
             None for candidates.
     """
     output: dict[str, Any] = {
-        "image_uuid": image_uuid,
-        "verdict": verdict,
-        "scores": session,
+        "image_uuid":      image_uuid,
+        "verdict":         verdict,
+        "scores":          session,
+        "prompt":          session.get("prompt", ""),
+        "session_uuid":    session.get("session_uuid", ""),
+        "workflow_path":   session.get("workflow_path", ""),
+        "sequence_number": session.get("sequence_number", 0),
     }
     if reason:
         output["reason"] = reason
