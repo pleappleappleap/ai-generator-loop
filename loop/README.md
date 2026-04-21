@@ -1,21 +1,23 @@
 # Loop Subsystem
 
 The generation loop subsystem. Accepts generation requests via the
-`loop.request` queue, generates images via ComfyUI, scores them in
-parallel, and emits verdicts to the `scorer.result` queue for the
+`loop.request` anycast queue, generates images via ComfyUI, scores them
+in parallel, and emits verdicts to the `scorer.result` queue for the
 tactical LLM to act on.
 
 ## Components
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `comfyui_worker.py` | Python | Consumes `loop.request`, drives ComfyUI API, publishes to `loop.events` |
-| `scorers/router` | Rust | Consumes `loop.events`, fans out to `scorer.requests` topic |
-| `scorers/clip_scorer.py` | Python | CLIP semantic similarity scoring |
-| `scorers/artifact_scorer.py` | Python | AI artifact detection |
-| `scorers/vlm_scorer.py` | Python | VLM holistic image evaluation |
-| `scorers/aggregator` | Rust | Aggregates scorer results, emits verdicts, publishes cancels |
-| `scorers/lancedb_manager.py` | Python | Writes generation records to LanceDB |
+| `comfyui_worker.py` | Python (STOMP) | Consumes `loop.request`, registers image with coordinator, drives ComfyUI API, publishes to `loop.events` |
+| `monitor.py` | Python (STOMP) | Dead-letter consumer — logs all messages in `pipeline.dead` |
+| `scorers/router` | Rust (AMQP 1.0) | Consumes `loop.events`, fans out to `scorer.requests` multicast |
+| `scorers/clip_scorer.py` | Python (STOMP) | CLIP semantic similarity scoring |
+| `scorers/artifact_scorer.py` | Python (STOMP) | AI artifact detection |
+| `scorers/vlm_scorer.py` | Python (STOMP) | VLM holistic image evaluation |
+| `scorers/aggregator` | Rust (AMQP 1.0) | Accumulates scorer results in SQLite, emits verdicts, publishes cancels |
+| `scorers/coordinator` | Rust (Unix socket) | XA 2PC coordinator; Python budget API |
+| `scorers/lancedb_manager` | Rust (AMQP 1.0) | Reads scorer_session from SQLite, writes Loop records to LanceDB |
 
 ## Starting the Loop
 
@@ -30,42 +32,49 @@ pkill -f comfyui_worker
 pkill -f clip_scorer
 pkill -f artifact_scorer
 pkill -f vlm_scorer
-pkill -f scorer_aggregator
-pkill -f lancedb_manager
+pkill -f tactical_llm
+pkill -f monitor
 pkill -f router
 pkill -f aggregator
-rabbitmqctl stop
-redis-cli shutdown
+pkill -f coordinator
+pkill -f lancedb_manager
+"$ARTEMIS_DATA/bin/artemis" stop
 ```
 
 ## Monitoring
 
-RabbitMQ management UI: http://localhost:15672 (guest/guest)
+Artemis management console: http://localhost:8161
+
+Dead-letter messages land in `pipeline.dead`. Start the monitor to watch:
 
 ```bash
-redis-cli keys "agg:session:*"   # aggregator in-flight sessions
-redis-cli keys "ldb:session:*"   # lancedb manager in-flight sessions
+python ~/ai-image/loop/monitor.py
 ```
 
-## Queue Topology
-
-See ~/ai-image/MESSAGES.md for full message schemas.
+## Address Topology
 
 ```
-loop.request          [queue]  → comfyui_worker
-loop.events           [topic]  → router
-scorer.requests       [topic]  → clip, artifact, vlm scorers
-scorer.events         [topic]  → all scorers (cancel)
-scorer.results        [topic]  → aggregator, lancedb_manager
-scorer.result         [queue]  → tactical LLM
-loop.accepted         [topic]  → lancedb_manager
+loop.request             [anycast  / STOMP]    session.py, tactical_llm → comfyui_worker
+loop.events              [multicast / STOMP+AMQP] comfyui_worker → router
+scorer.requests          [multicast / AMQP 1.0]  router → all scorers
+scorer.events            [multicast / AMQP 1.0]  aggregator → all scorers, lancedb_manager
+aggregator.clip.queue    [anycast  / STOMP+AMQP] clip_scorer → aggregator
+aggregator.artifact.queue [anycast / STOMP+AMQP] artifact_scorer → aggregator
+aggregator.vlm.queue     [anycast  / STOMP+AMQP] vlm_scorer → aggregator
+scorer.result            [anycast  / AMQP 1.0]   aggregator → tactical_llm
+loop.accepted            [multicast / STOMP+AMQP] tactical_llm → lancedb_manager
+pipeline.dead            [anycast  / AMQP 1.0]   DLX → monitor
 ```
 
 ## Threshold Configuration
 
-```python
-CLIP_THRESHOLD = 0.25      # minimum CLIP similarity score
-ARTIFACT_THRESHOLD = 0.5   # maximum AI artifact confidence
+Thresholds are set in `config.yaml` — no rebuild required:
+
+```yaml
+thresholds:
+  clip:               0.25   # reject if CLIP score < this
+  artifact:           0.50   # reject if AI confidence > this
+  score_timeout_secs: 60
 ```
 
-Placeholder values requiring calibration. See ARCHITECTURE.pdf.
+See ARCHITECTURE.pdf for calibration procedure.

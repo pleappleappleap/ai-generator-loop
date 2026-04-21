@@ -1,21 +1,29 @@
 # Router
 
-Rust component. Subscribes to the `loop.events` topic exchange and
-fans out generation complete events to the `scorer.requests` topic
-exchange, triggering all three scorers simultaneously.
+Rust component (AMQP 1.0 / Artemis). Subscribes to the `loop.events`
+multicast address and fans out generation complete events to the
+`scorer.requests` multicast address, triggering all three scorers
+simultaneously.
 
-No business logic. Message payload is forwarded unchanged.
+No business logic. Message payload is forwarded unchanged with subject
+property set to `score.<image_uuid>`.
 
 ## Build and Run
 
 ```bash
-make build
-./target/release/router
+cd ~/ai-image/loop/scorers
+cargo build --release -p router
+AI_IMAGE_ROOT=~/ai-image ./target/release/router
 ```
 
-## Exchange Subscriptions
+## Address Subscriptions (AMQP 1.0)
 
-| Exchange | Binding Key | Role |
-|----------|-------------|------|
-| `loop.events` | `loop.complete.*` | Receives generation complete events |
-| `scorer.requests` | — | Publishes score requests |
+| Address | Type | Role |
+|---------|------|------|
+| `loop.events` | multicast | Receives generation complete events from `comfyui_worker` |
+
+## Address Publications (AMQP 1.0)
+
+| Address | Type | Subject | Role |
+|---------|------|---------|------|
+| `scorer.requests` | multicast | `score.<image_uuid>` | Fans out to all scorer durable subscriptions |

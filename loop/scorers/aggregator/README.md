@@ -1,31 +1,42 @@
 # Aggregator
 
-Rust component. Accumulates results from all three scorers per image
-using Redis for correlation state. Applies cascade threshold logic
-and emits verdicts.
+Rust component (AMQP 1.0 / Artemis). Accumulates results from all three
+scorers per image using the `scorer_session` SQLite table. Applies cascade
+threshold logic and emits verdicts to `scorer.result`.
 
 ## Threshold Logic
 
-1. CLIP score below `CLIP_THRESHOLD` → cancel + rejected
-2. Artifact confidence above `ARTIFACT_THRESHOLD` → cancel + rejected
-3. All three pass → candidate
+1. CLIP score below `thresholds.clip` → mark rejected in SQLite, publish
+   `cancel.*` to `scorer.events`, emit rejected verdict to `scorer.result`
+2. Artifact confidence above `thresholds.artifact` → same cancel and reject flow
+3. All three results within bounds → mark candidate in SQLite, emit candidate
+   verdict to `scorer.result`
 
-## Redis Key Namespace
+## SQLite State
 
-Uses `agg:session:<image_uuid>` prefix. LanceDB manager uses
-`ldb:session:<image_uuid>`. Distinct to avoid collision.
+Uses the `scorer_session` table in `pipeline.db` (owned by coordinator).
+Merges results with `BEGIN IMMEDIATE` transactions. Rows expire via
+`score_timeout_secs` and are cleaned up by the coordinator's background task.
 
 ## Build and Run
 
 ```bash
-make build
-./target/release/aggregator
+cd ~/ai-image/loop/scorers
+cargo build --release -p aggregator
+AI_IMAGE_ROOT=~/ai-image ./target/release/aggregator
 ```
 
-## Queue Subscriptions
+## Address Subscriptions (AMQP 1.0)
 
-| Queue | Exchange | Binding |
-|-------|----------|---------|
-| `aggregator.clip.queue` | `scorer.results` | `clip.*` |
-| `aggregator.artifact.queue` | `scorer.results` | `artifact.*` |
-| `aggregator.vlm.queue` | `scorer.results` | `vlm.*` |
+| Queue | Source address | Role |
+|-------|----------------|------|
+| `aggregator.clip.queue` | `scorer.requests` multicast | CLIP results |
+| `aggregator.artifact.queue` | `scorer.requests` multicast | Artifact results |
+| `aggregator.vlm.queue` | `scorer.requests` multicast | VLM results |
+
+## Address Publications (AMQP 1.0)
+
+| Address | Type | Content |
+|---------|------|---------|
+| `scorer.result` | anycast | Final verdict with all scorer results |
+| `scorer.events` | multicast | Cancel events (`cancel.<image_uuid>`) |
