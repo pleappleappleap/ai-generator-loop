@@ -16,16 +16,14 @@ Exchange publications:
 """
 
 import json
+import socket
 import sys
 import uuid
 from pathlib import Path
 
-import sqlite3
-
 import pika
 import pika.channel
 import pika.spec
-import redis as redis_lib
 import requests
 import websocket
 
@@ -40,11 +38,25 @@ COMFYUI_URL: str = _cfg.broker["comfyui_url"]
 COMFYUI_WS: str = _cfg.broker["comfyui_ws"]
 """WebSocket URL for ComfyUI completion events."""
 
-_r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
-"""Redis connection for writing in-flight session records (removed in step 10)."""
+_COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
+"""Unix socket path for the coordinator API."""
 
-_DB_PATH: str = _cfg.database.get("path", "pipeline.db")
-"""Path to the SQLite operational database."""
+
+def _coordinator_call(req: dict) -> dict:
+    """Send a JSON request to the coordinator Unix socket and return the response."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(_COORDINATOR_SOCK)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        return json.loads(buf.split(b"\n")[0])
+    finally:
+        sock.close()
 
 
 def setup_exchanges(channel: pika.channel.Channel) -> None:
@@ -194,52 +206,19 @@ def on_request(
         "workflow_path": request["workflow_path"],
         "workflow_params": request.get("workflow_params", {}),
     }
-    ttl = _cfg.thresholds["score_timeout_secs"]
-    session_record = {
-        "image_uuid":      request["image_uuid"],
-        "session_uuid":    request["session_uuid"],
-        "sequence_number": request["sequence_number"],
-        "workflow_path":   request["workflow_path"],
-        "workflow_params": request.get("workflow_params", {}),
-        "prompt":          request.get("prompt", ""),
-        "image_path":      None,
-    }
+    score_timeout_secs = int(_cfg.thresholds["score_timeout_secs"])
 
-    # Redis writes (removed in step 10 when coordinator API replaces them).
-    _r.setex(
-        f"agg:session:{request['image_uuid']}",
-        ttl,
-        json.dumps(session_record),
-    )
-    _r.setex(
-        f"ldb:session:{request['image_uuid']}",
-        ttl * 2,
-        json.dumps(session_record),
-    )
-
-    # SQLite write — direct in step 6; replaced by coordinator API in step 10.
-    import time as _time
-    now = int(_time.time())
-    expires_at = now + ttl
-    con = sqlite3.connect(_DB_PATH, timeout=5)
-    with con:
-        con.execute(
-            """INSERT OR IGNORE INTO scorer_session
-               (image_uuid, session_uuid, sequence_number, prompt, workflow_path,
-                workflow_params, created_at, expires_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (
-                request["image_uuid"],
-                request["session_uuid"],
-                request["sequence_number"],
-                request.get("prompt", ""),
-                request["workflow_path"],
-                json.dumps(request.get("workflow_params", {})),
-                now,
-                expires_at,
-            ),
-        )
-    con.close()
+    # Register image session with coordinator (writes scorer_session row).
+    _coordinator_call({
+        "op":                "SessionInit",
+        "image_uuid":        request["image_uuid"],
+        "session_uuid":      request["session_uuid"],
+        "sequence_number":   request["sequence_number"],
+        "prompt":            request.get("prompt", ""),
+        "workflow_path":     request["workflow_path"],
+        "workflow_params":   json.dumps(request.get("workflow_params", {})),
+        "score_timeout_secs": score_timeout_secs,
+    })
 
     ch.basic_publish(
         exchange="loop.events",

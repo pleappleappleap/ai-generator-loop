@@ -1,8 +1,8 @@
 """Session orchestration entry point for the ai-image pipeline.
 
 Creates a new generation session, initialises tactical LLM budget state
-in Redis, writes the session record to LanceDB, and publishes the first
-generation request to the ``loop.request`` queue.
+via the coordinator Unix socket, writes the session record to LanceDB,
+and publishes the first generation request to the ``loop.request`` queue.
 
 Usage::
 
@@ -12,10 +12,10 @@ Usage::
     python session.py --prompt "..." --monitor
 
 The ``--monitor`` flag blocks until the session is resolved (accept or
-give_up verdict), polling Redis for the budget state.
+give_up verdict), polling the coordinator for the budget state.
 
 This script does not need to run inside the scorers venv — it only uses
-the root venv (pika, redis, lancedb, open_clip, torch) and the shared
+the root venv (pika, lancedb, open_clip, torch) and the shared
 config.py module.
 """
 
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import socket
 import sys
 import time
 import uuid
@@ -31,7 +32,6 @@ from pathlib import Path
 
 import lancedb
 import pika
-import redis as redis_lib
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -47,7 +47,8 @@ _dec  = _tac.get("decisions", {})
 
 _MAX_RETRIES:  int = _dec.get("max_retries",  3)
 _MAX_INPAINTS: int = _dec.get("max_inpaints", 2)
-_BUDGET_TTL:   int = 86400  # 24h
+
+_COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
 
 
 # ── CLIP embedding ────────────────────────────────────────────────────────────
@@ -116,31 +117,40 @@ def _create_session_record(
     table.add([record.model_dump()])
 
 
-# ── Redis budget ──────────────────────────────────────────────────────────────
+# ── Coordinator budget ────────────────────────────────────────────────────────
 
 
-def _init_budget(
-    r: redis_lib.Redis,
-    session_uuid: str,
-    max_retries: int,
-    max_inpaints: int,
-) -> None:
-    """Initialise the tactical budget record for a session in Redis.
+def _coordinator_call(req: dict) -> dict:
+    """Send a JSON request to the coordinator Unix socket and return the response."""
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.connect(_COORDINATOR_SOCK)
+        sock.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        return json.loads(buf.split(b"\n")[0])
+    finally:
+        sock.close()
+
+
+def _init_budget(session_uuid: str, max_retries: int, max_inpaints: int) -> None:
+    """Initialise the tactical budget record for a session via the coordinator.
 
     Args:
-        r: Redis client.
         session_uuid: UUID string for this session.
         max_retries: Maximum number of retry generations allowed.
         max_inpaints: Maximum number of inpaint passes allowed.
     """
-    key = f"tactical:budget:{session_uuid}"
-    budget = {
-        "retries_used":  0,
-        "inpaints_used": 0,
-        "max_retries":   max_retries,
-        "max_inpaints":  max_inpaints,
-    }
-    r.setex(key, _BUDGET_TTL, json.dumps(budget))
+    _coordinator_call({
+        "op":           "BudgetInit",
+        "session_uuid": session_uuid,
+        "max_retries":  max_retries,
+        "max_inpaints": max_inpaints,
+    })
 
 
 # ── RabbitMQ request ──────────────────────────────────────────────────────────
@@ -184,7 +194,7 @@ def _publish_request(
 # ── Monitor ───────────────────────────────────────────────────────────────────
 
 
-def _monitor(r: redis_lib.Redis, session_uuid: str, poll_interval: float = 2.0) -> None:
+def _monitor(session_uuid: str, poll_interval: float = 2.0) -> None:
     """Block until the session resolves, printing budget status each tick.
 
     A session is considered resolved when the tactical LLM has either
@@ -194,12 +204,10 @@ def _monitor(r: redis_lib.Redis, session_uuid: str, poll_interval: float = 2.0) 
     images (i.e. the budget counter stops changing for 30 seconds).
 
     Args:
-        r: Redis client.
         session_uuid: UUID string of the session to monitor.
-        poll_interval: Seconds between Redis polls.
+        poll_interval: Seconds between coordinator polls.
     """
-    key     = f"tactical:budget:{session_uuid}"
-    last    = None
+    last_snapshot: dict | None = None
     stable  = 0.0
     timeout = 30.0
 
@@ -207,34 +215,39 @@ def _monitor(r: redis_lib.Redis, session_uuid: str, poll_interval: float = 2.0) 
 
     try:
         while True:
-            raw = r.get(key)
-            if raw:
-                budget = json.loads(raw)
-                status = (
-                    f"  retries:  {budget['retries_used']}/{budget['max_retries']}  "
-                    f"inpaints: {budget['inpaints_used']}/{budget['max_inpaints']}"
-                )
-                print(f"\r{status}", end="", flush=True)
+            resp = _coordinator_call({"op": "BudgetGet", "session_uuid": session_uuid})
+            if not resp.get("ok"):
+                print(f"\nBudget record not found — session {session_uuid} likely completed.")
+                break
 
-                exhausted = (
-                    budget["retries_used"]  >= budget["max_retries"] and
-                    budget["inpaints_used"] >= budget["max_inpaints"]
-                )
-                if exhausted:
-                    print(f"\nSession {session_uuid}: all budgets exhausted.")
-                    break
+            budget = {
+                "retries_used":  resp["retries_used"],
+                "inpaints_used": resp["inpaints_used"],
+                "max_retries":   resp["max_retries"],
+                "max_inpaints":  resp["max_inpaints"],
+            }
+            status = (
+                f"  retries:  {budget['retries_used']}/{budget['max_retries']}  "
+                f"inpaints: {budget['inpaints_used']}/{budget['max_inpaints']}"
+            )
+            print(f"\r{status}", end="", flush=True)
 
-                if raw == last:
-                    stable += poll_interval
-                else:
-                    stable = 0.0
-                    last = raw
+            exhausted = (
+                budget["retries_used"]  >= budget["max_retries"] and
+                budget["inpaints_used"] >= budget["max_inpaints"]
+            )
+            if exhausted:
+                print(f"\nSession {session_uuid}: all budgets exhausted.")
+                break
 
-                if stable >= timeout:
-                    print(f"\nNo budget changes for {timeout}s — assuming session resolved.")
-                    break
+            if budget == last_snapshot:
+                stable += poll_interval
             else:
-                print(f"\nBudget key expired — session {session_uuid} likely completed.")
+                stable = 0.0
+                last_snapshot = budget
+
+            if stable >= timeout:
+                print(f"\nNo budget changes for {timeout}s — assuming session resolved.")
                 break
 
             time.sleep(poll_interval)
@@ -304,10 +317,9 @@ def main() -> None:
     except Exception as exc:
         print(f"Warning: could not write session record ({exc}). Continuing.")
 
-    # Initialise budget in Redis
-    r = redis_lib.Redis.from_url(_cfg.broker["redis_url"], decode_responses=True)
-    _init_budget(r, session_uuid, args.max_retries, args.max_inpaints)
-    print("Budget initialised in Redis.")
+    # Initialise budget via coordinator
+    _init_budget(session_uuid, args.max_retries, args.max_inpaints)
+    print("Budget initialised in coordinator.")
 
     # Publish first generation request
     connection = pika.BlockingConnection(
@@ -326,7 +338,7 @@ def main() -> None:
     print(f"Generation request published → loop.request")
 
     if args.monitor:
-        _monitor(r, session_uuid)
+        _monitor(session_uuid)
 
 
 if __name__ == "__main__":
