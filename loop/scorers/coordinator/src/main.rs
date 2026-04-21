@@ -384,3 +384,349 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_socket_server(pool, &socket_path).await?;
     Ok(())
 }
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    /// Open a fresh in-memory SQLite pool with the pipeline schema applied.
+    async fn make_pool() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory pool");
+        db::init_schema(&pool).await.expect("init_schema");
+        pool
+    }
+
+    // ── BudgetInit ────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_budget_init_creates_row() {
+        let pool = make_pool().await;
+        let resp = handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(),
+            max_retries:  3,
+            max_inpaints: 2,
+        }).await;
+        assert!(resp.ok);
+
+        // Verify row exists via BudgetGet
+        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
+            session_uuid: "sess-1".into(),
+        }).await;
+        assert!(get.ok);
+        assert_eq!(get.max_retries,   Some(3));
+        assert_eq!(get.max_inpaints,  Some(2));
+        assert_eq!(get.retries_used,  Some(0));
+        assert_eq!(get.inpaints_used, Some(0));
+    }
+
+    #[tokio::test]
+    async fn test_budget_init_idempotent() {
+        let pool = make_pool().await;
+        // First insert
+        handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
+        }).await;
+        // Second insert with different params — INSERT OR IGNORE keeps first
+        let resp = handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(), max_retries: 99, max_inpaints: 99,
+        }).await;
+        assert!(resp.ok);
+
+        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
+            session_uuid: "sess-1".into(),
+        }).await;
+        assert_eq!(get.max_retries, Some(3)); // original value preserved
+    }
+
+    // ── BudgetGet ─────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_budget_get_missing_session_returns_error() {
+        let pool = make_pool().await;
+        let resp = handle_api_request(&pool, ApiRequest::BudgetGet {
+            session_uuid: "nonexistent".into(),
+        }).await;
+        assert!(!resp.ok);
+        assert!(resp.error.is_some());
+    }
+
+    // ── BudgetUpdate ──────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_budget_update_retries_increments() {
+        let pool = make_pool().await;
+        handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
+        }).await;
+
+        handle_api_request(&pool, ApiRequest::BudgetUpdate {
+            session_uuid: "sess-1".into(),
+            field:        "retries_used".into(),
+        }).await;
+        handle_api_request(&pool, ApiRequest::BudgetUpdate {
+            session_uuid: "sess-1".into(),
+            field:        "retries_used".into(),
+        }).await;
+
+        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
+            session_uuid: "sess-1".into(),
+        }).await;
+        assert_eq!(get.retries_used,  Some(2));
+        assert_eq!(get.inpaints_used, Some(0)); // unchanged
+    }
+
+    #[tokio::test]
+    async fn test_budget_update_inpaints_increments() {
+        let pool = make_pool().await;
+        handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
+        }).await;
+
+        handle_api_request(&pool, ApiRequest::BudgetUpdate {
+            session_uuid: "sess-1".into(),
+            field:        "inpaints_used".into(),
+        }).await;
+
+        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
+            session_uuid: "sess-1".into(),
+        }).await;
+        assert_eq!(get.inpaints_used, Some(1));
+        assert_eq!(get.retries_used,  Some(0)); // unchanged
+    }
+
+    #[tokio::test]
+    async fn test_budget_update_unknown_field_returns_error() {
+        let pool = make_pool().await;
+        handle_api_request(&pool, ApiRequest::BudgetInit {
+            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
+        }).await;
+
+        let resp = handle_api_request(&pool, ApiRequest::BudgetUpdate {
+            session_uuid: "sess-1".into(),
+            field:        "nonexistent_field".into(),
+        }).await;
+        assert!(!resp.ok);
+    }
+
+    // ── SessionInit ───────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_session_init_inserts_row() {
+        let pool = make_pool().await;
+        let resp = handle_api_request(&pool, ApiRequest::SessionInit {
+            image_uuid:         "img-1".into(),
+            session_uuid:       "sess-1".into(),
+            sequence_number:    1,
+            prompt:             "a tiger".into(),
+            workflow_path:      "/workflows/default.json".into(),
+            workflow_params:    "{}".into(),
+            score_timeout_secs: 60,
+        }).await;
+        assert!(resp.ok);
+
+        let row = sqlx::query!(
+            "SELECT image_uuid, prompt FROM scorer_session WHERE image_uuid = 'img-1'"
+        )
+        .fetch_optional(&pool).await.unwrap();
+        assert!(row.is_some());
+        assert_eq!(row.unwrap().prompt.unwrap_or_default(), "a tiger");
+    }
+
+    #[tokio::test]
+    async fn test_session_init_idempotent() {
+        let pool = make_pool().await;
+        for _ in 0..3 {
+            let resp = handle_api_request(&pool, ApiRequest::SessionInit {
+                image_uuid:         "img-1".into(),
+                session_uuid:       "sess-1".into(),
+                sequence_number:    1,
+                prompt:             "a tiger".into(),
+                workflow_path:      "/workflows/default.json".into(),
+                workflow_params:    "{}".into(),
+                score_timeout_secs: 60,
+            }).await;
+            assert!(resp.ok);
+        }
+        let count: i32 = sqlx::query_scalar!(
+            "SELECT COUNT(*) FROM scorer_session WHERE image_uuid = 'img-1'"
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(count, 1);
+    }
+
+    // ── recover_prepared_transactions ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_recover_no_prepared_is_no_op() {
+        let pool = make_pool().await;
+        // Insert a committed transaction — should not be touched
+        sqlx::query!(
+            "INSERT INTO xa_log (xid, state, participants, created_at)
+             VALUES ('xid-1', 'committed', '[]', 1000)"
+        )
+        .execute(&pool).await.unwrap();
+
+        recover_prepared_transactions(&pool).await.unwrap();
+
+        let state: String = sqlx::query_scalar!(
+            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(state, "committed");
+    }
+
+    #[tokio::test]
+    async fn test_recover_prepared_rolls_back_all() {
+        let pool = make_pool().await;
+        for xid in &["xid-1", "xid-2"] {
+            sqlx::query!(
+                "INSERT INTO xa_log (xid, state, participants, created_at)
+                 VALUES (?1, 'prepared', '[]', 1000)",
+                xid
+            )
+            .execute(&pool).await.unwrap();
+        }
+
+        recover_prepared_transactions(&pool).await.unwrap();
+
+        let states: Vec<String> = sqlx::query_scalar!(
+            "SELECT state FROM xa_log WHERE xid IN ('xid-1', 'xid-2') ORDER BY xid"
+        )
+        .fetch_all(&pool).await.unwrap();
+        assert_eq!(states, vec!["rolledback", "rolledback"]);
+    }
+
+    // ── XA state machine ──────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_xa_begin_creates_log_entry() {
+        let pool = make_pool().await;
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
+
+        let row = sqlx::query!("SELECT xid, state FROM xa_log WHERE xid = 'xid-1'")
+            .fetch_optional(&pool).await.unwrap();
+        assert!(row.is_some());
+
+        let guard = registry.lock().await;
+        assert!(guard.contains_key("xid-1"));
+        assert_eq!(guard["xid-1"].state, XaState::Active);
+    }
+
+    #[tokio::test]
+    async fn test_xa_enlist_adds_participant() {
+        let pool = make_pool().await;
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
+        xa_enlist(&registry, "xid-1", Resource::Artemis).await.unwrap();
+
+        let guard = registry.lock().await;
+        assert!(guard["xid-1"].participants.contains(&"Artemis".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_xa_prepare_updates_state_to_prepared() {
+        let pool = make_pool().await;
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
+        xa_prepare(&pool, &registry, "xid-1").await.unwrap();
+
+        let guard = registry.lock().await;
+        assert_eq!(guard["xid-1"].state, XaState::Prepared);
+    }
+
+    #[tokio::test]
+    async fn test_xa_commit_removes_from_registry() {
+        let pool = make_pool().await;
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
+        xa_prepare(&pool, &registry, "xid-1").await.unwrap();
+        xa_commit(&pool, &registry, "xid-1").await.unwrap();
+
+        assert!(!registry.lock().await.contains_key("xid-1"));
+
+        let state: String = sqlx::query_scalar!(
+            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(state, "committed");
+    }
+
+    #[tokio::test]
+    async fn test_xa_rollback_removes_from_registry() {
+        let pool = make_pool().await;
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
+        xa_rollback(&pool, &registry, "xid-1").await.unwrap();
+
+        assert!(!registry.lock().await.contains_key("xid-1"));
+
+        let state: String = sqlx::query_scalar!(
+            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
+        )
+        .fetch_one(&pool).await.unwrap();
+        assert_eq!(state, "rolledback");
+    }
+
+    #[tokio::test]
+    async fn test_xa_enlist_unknown_xid_returns_error() {
+        let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let result = xa_enlist(&registry, "nonexistent", Resource::Sqlite).await;
+        assert!(result.is_err());
+    }
+
+    // ── JSON round-trip (ApiRequest deserialisation) ──────────────────────────
+
+    #[test]
+    fn test_budget_init_request_deserialises() {
+        let json = r#"{"op":"BudgetInit","session_uuid":"s1","max_retries":3,"max_inpaints":2}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        matches!(req, ApiRequest::BudgetInit { .. });
+    }
+
+    #[test]
+    fn test_budget_get_request_deserialises() {
+        let json = r#"{"op":"BudgetGet","session_uuid":"s1"}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        matches!(req, ApiRequest::BudgetGet { .. });
+    }
+
+    #[test]
+    fn test_budget_update_request_deserialises() {
+        let json = r#"{"op":"BudgetUpdate","session_uuid":"s1","field":"retries_used"}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        matches!(req, ApiRequest::BudgetUpdate { .. });
+    }
+
+    #[test]
+    fn test_session_init_request_deserialises() {
+        let json = r#"{"op":"SessionInit","image_uuid":"i1","session_uuid":"s1",
+                       "sequence_number":1,"prompt":"p","workflow_path":"w",
+                       "workflow_params":"{}","score_timeout_secs":60}"#;
+        let req: ApiRequest = serde_json::from_str(json).unwrap();
+        matches!(req, ApiRequest::SessionInit { .. });
+    }
+
+    #[test]
+    fn test_api_response_ok_serialises() {
+        let resp = ApiResponse::ok();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"ok\":true"));
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn test_api_response_err_serialises() {
+        let resp = ApiResponse::err("something broke");
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"ok\":false"));
+        assert!(json.contains("something broke"));
+    }
+}
