@@ -330,14 +330,16 @@ what you downloaded.
 
 \subsection{ComfyUI}
 
-ComfyUI is included as a submodule at \texttt{loop/ComfyUI/}. If not yet
-present:
+\texttt{make prereqs} clones ComfyUI into \texttt{loop/ComfyUI/} and
+installs its dependencies into a dedicated venv at
+\texttt{loop/ComfyUI/venv/}. To run this step manually:
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/loop
-git clone https://github.com/comfyanonymous/ComfyUI
-cd ComfyUI
-pip install -r requirements.txt
+git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
+rsync -a --ignore-existing /tmp/_comfyui_clone/ ~/ai-image/loop/ComfyUI/
+rm -rf /tmp/_comfyui_clone
+python3.11 -m venv ~/ai-image/loop/ComfyUI/venv
+~/ai-image/loop/ComfyUI/venv/bin/pip install -r ~/ai-image/loop/ComfyUI/requirements.txt
 \end{lstlisting}
 
 \subsubsection{Custom nodes}

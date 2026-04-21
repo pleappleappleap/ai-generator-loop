@@ -139,7 +139,7 @@ prereqs-system:
 # Create both Python venvs and install all packages into each.
 # Sentinel files (venv/.installed, loop/scorers/venv/.installed) let Make
 # skip reinstallation when nothing has changed.
-prereqs-python: venv/.installed loop/scorers/venv/.installed
+prereqs-python: venv/.installed loop/scorers/venv/.installed loop/ComfyUI/venv/.installed
 
 venv/.installed: requirements.txt
 	python3.11 -m venv venv
@@ -147,6 +147,21 @@ venv/.installed: requirements.txt
 	venv/bin/pip install -r requirements.txt
 	@touch venv/.installed
 	@echo "==> Root venv ready."
+
+# ComfyUI runs in its own venv. Clone the repo if main.py is not present,
+# preserving any existing files (launch.sh, workflows/, models/).
+loop/ComfyUI/main.py:
+	@echo "==> Cloning ComfyUI..."
+	git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
+	rsync -a --ignore-existing /tmp/_comfyui_clone/ loop/ComfyUI/
+	rm -rf /tmp/_comfyui_clone
+
+loop/ComfyUI/venv/.installed: loop/ComfyUI/main.py
+	python3.11 -m venv loop/ComfyUI/venv
+	loop/ComfyUI/venv/bin/pip install --upgrade pip
+	loop/ComfyUI/venv/bin/pip install -r loop/ComfyUI/requirements.txt
+	@touch loop/ComfyUI/venv/.installed
+	@echo "==> ComfyUI venv ready."
 
 # Scorers venv also serves tactical-llm (see tactical-llm/Makefile).
 # llama-cpp-python requires platform-specific CMAKE_ARGS for GPU support

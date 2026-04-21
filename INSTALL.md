@@ -238,14 +238,16 @@ downloaded.
 
 ## 7. ComfyUI
 
-ComfyUI is included as a submodule (or clone) at `loop/ComfyUI/`. If it is
-not yet present:
+`make prereqs` clones ComfyUI into `loop/ComfyUI/` and installs its
+dependencies into a dedicated venv at `loop/ComfyUI/venv/`. If you need
+to run this step manually:
 
 ```bash
-cd ~/ai-image/loop
-git clone https://github.com/comfyanonymous/ComfyUI
-cd ComfyUI
-pip install -r requirements.txt
+git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
+rsync -a --ignore-existing /tmp/_comfyui_clone/ ~/ai-image/loop/ComfyUI/
+rm -rf /tmp/_comfyui_clone
+python3.11 -m venv ~/ai-image/loop/ComfyUI/venv
+~/ai-image/loop/ComfyUI/venv/bin/pip install -r ~/ai-image/loop/ComfyUI/requirements.txt
 ```
 
 ### Custom nodes
