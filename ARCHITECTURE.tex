@@ -10,7 +10,38 @@
 \usepackage{xcolor}
 \usepackage[colorlinks=true,linkcolor=black,urlcolor=black,citecolor=black]{hyperref}
 
-\title{\textbf{AI Image Generation Pipeline}\\[0.5em]\large System Architecture}
+\lstdefinestyle{shell}{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  framerule=0.4pt,
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+}
+
+\lstdefinestyle{xml}{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  framerule=0.4pt,
+  breaklines=true,
+  language=XML,
+  showstringspaces=false,
+}
+
+\lstdefinestyle{yaml}{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!8},
+  frame=single,
+  framerule=0.4pt,
+  breaklines=true,
+  showstringspaces=false,
+}
+
+\title{\textbf{AI Image Generation Pipeline}\\[0.5em]\large Technical Manual}
 \author{Srið{}ar Ayengar}
 \date{\today}
 
@@ -33,7 +64,9 @@
 \tableofcontents
 \newpage
 
+% ============================================================
 \section{Overview}
+% ============================================================
 
 The AI image generation pipeline is an autonomous system that accepts a
 natural language prompt and iteratively generates, scores, and refines
@@ -56,7 +89,343 @@ The pipeline is designed around three principles:
         identify patterns across sessions.
 \end{enumerate}
 
+% ============================================================
+\section{Installation}
+% ============================================================
+
+\subsection{Hardware Requirements}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Requirement} & \textbf{Minimum} & \textbf{Recommended} \\
+\midrule
+Chip            & Apple Silicon (M1/M2/M3) & M3 Ultra \\
+Unified Memory  & 64\,GB                   & 96\,GB \\
+Free Disk       & 100\,GB                  & 200\,GB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+The pipeline holds approximately 44\,GB of models in unified memory
+simultaneously. A 64\,GB machine can run all components except the tactical
+LLM concurrently; with 96\,GB all components run at full quality settings.
+See Section~\ref{sec:memory} for the per-component breakdown.
+
+\subsection{System Software}
+
+\subsubsection{Xcode Command Line Tools}
+
+\begin{lstlisting}[style=shell]
+xcode-select --install
+\end{lstlisting}
+
+macOS 14 (Sonoma) or later is required for the Metal Performance Shaders
+used by the ML models.
+
+\subsubsection{Homebrew}
+
+\begin{lstlisting}[style=shell]
+/bin/bash -c "$(curl -fsSL \
+  https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+\end{lstlisting}
+
+\subsubsection{Python 3.11}
+
+\begin{lstlisting}[style=shell]
+brew install python@3.11
+\end{lstlisting}
+
+\subsubsection{Rust}
+
+\begin{lstlisting}[style=shell]
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+\end{lstlisting}
+
+\subsubsection{yq}
+
+\texttt{yq} is a YAML query tool used by the pipeline shell scripts to read
+values from \texttt{config.yaml} without a Python interpreter.
+
+\begin{lstlisting}[style=shell]
+brew install yq
+\end{lstlisting}
+
+\subsubsection{MacTeX (optional)}
+
+Required only for rendering this document.
+
+\begin{lstlisting}[style=shell]
+brew install --cask mactex
+\end{lstlisting}
+
+\subsection{ActiveMQ Artemis}
+
+The pipeline requires Artemis 2.31 or later with both STOMP and AMQP~1.0
+acceptors enabled.
+
+\subsubsection{Download and install}
+
+\begin{lstlisting}[style=shell]
+# Replace X.Y.Z with the current release version
+curl -LO https://downloads.apache.org/activemq/activemq-artemis/X.Y.Z/apache-artemis-X.Y.Z-bin.tar.gz
+tar -xzf apache-artemis-X.Y.Z-bin.tar.gz
+sudo mv apache-artemis-X.Y.Z /opt/artemis
+\end{lstlisting}
+
+\subsubsection{Create the broker instance}
+
+The pipeline scripts resolve the broker data directory from
+\texttt{config.yaml} (key \texttt{broker.artemis\_data}; default:
+\texttt{auto}, resolving to \texttt{\{repo\_root\}/loop/artemis-broker}).
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image
+/opt/artemis/bin/artemis create loop/artemis-broker \
+  --user admin \
+  --password admin \
+  --require-login \
+  --allow-anonymous false
+\end{lstlisting}
+
+\subsubsection{Configure acceptors}
+
+Edit \texttt{loop/artemis-broker/etc/broker.xml}. Ensure the
+\texttt{<acceptors>} block contains both entries:
+
+\begin{lstlisting}[style=xml]
+<!-- AMQP 1.0: Rust components (router, aggregator, coordinator, lancedb_manager) -->
+<acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
+
+<!-- STOMP: Python components (comfyui_worker, scorers, tactical_llm, monitor) -->
+<acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
+\end{lstlisting}
+
+The default Artemis template ships both acceptors commented out; uncomment
+or add them as shown.
+
+\subsection{Clone the Repository}
+
+\begin{lstlisting}[style=shell]
+git clone <repo-url> ~/ai-image
+cd ~/ai-image
+\end{lstlisting}
+
+All subsequent paths use \texttt{\textasciitilde/ai-image} as the repository
+root. The \texttt{auto} path resolution in \texttt{config.yaml} is relative
+to the location of that file, so moving the repository requires updating
+\texttt{config.yaml}.
+
+\subsection{Python Environments}
+
+There are two separate virtual environments:
+
+\begin{itemize}
+  \item \textbf{Root venv} — used by \texttt{session.py},
+        \texttt{tactical\_llm.py}, and utilities.
+  \item \textbf{Scorers venv} — used by the three scorer processes, which
+        share large ML libraries.
+\end{itemize}
+
+\subsubsection{Root environment}
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image
+python3.11 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install lancedb open_clip_torch torch stomp.py pydantic rich
+deactivate
+\end{lstlisting}
+
+\subsubsection{Scorers environment}
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/loop/scorers
+python3.11 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+
+# STOMP client and CLIP
+pip install stomp.py open_clip_torch torch torchvision
+
+# Artifact detector
+pip install transformers accelerate pillow
+
+# VLM and tactical LLM (llama.cpp with Metal)
+CMAKE_ARGS="-DLLAMA_METAL=on" \
+  pip install llama-cpp-python --no-binary llama-cpp-python
+
+# Test dependencies
+pip install pytest pytest-mock
+deactivate
+\end{lstlisting}
+
+The helper script \texttt{loop/scorers/activate.sh} activates this
+environment from any working directory:
+
+\begin{lstlisting}[style=shell]
+source ~/ai-image/loop/scorers/activate.sh
+\end{lstlisting}
+
+\subsection{Model Downloads}
+
+\subsubsection{SDXL checkpoint (ComfyUI)}
+
+Download a Stable Diffusion XL checkpoint (e.g., Absolute Reality XL) and
+place it in:
+
+\begin{lstlisting}[style=shell]
+loop/ComfyUI/models/checkpoints/
+\end{lstlisting}
+
+Workflow JSON files under \texttt{loop/workflows/} reference the checkpoint
+by filename. Update \texttt{config.yaml} if the filename differs from the
+workflow default.
+
+\subsubsection{AI artifact detector}
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/loop/scorers
+source venv/bin/activate
+python - <<'EOF'
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id="umm-maybe/AI-image-detector",
+    local_dir="models/artifact-detector"
+)
+EOF
+\end{lstlisting}
+
+\subsubsection{VLM scorer (Qwen2.5-VL-7B)}
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/ai-image/loop/scorers/models/vlm
+curl -L -o ~/ai-image/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
+  "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/\
+Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
+\end{lstlisting}
+
+Approximately 5\,GB download.
+
+\subsubsection{Tactical LLM (Qwen3-72B)}
+
+Qwen3-72B is a hybrid thinking model: it can reason step-by-step through
+ambiguous decisions (retry vs.\ inpaint, prompt diagnosis) and respond
+directly for clear-cut cases, controlled by a \texttt{<think>} token in
+the prompt.
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/ai-image/loop/scorers/models/tactical
+curl -L -o ~/ai-image/loop/scorers/models/tactical/Qwen3-72B-Q4_K_M.gguf \
+  "https://huggingface.co/bartowski/Qwen3-72B-GGUF/resolve/main/\
+Qwen3-72B-Q4_K_M.gguf"
+\end{lstlisting}
+
+Approximately 43\,GB download. Verify the filenames match
+\texttt{config.yaml.default} keys \texttt{models.vlm.filename} and
+\texttt{tactical.model.filename}, or update \texttt{config.yaml} to match
+what you downloaded.
+
+\subsection{ComfyUI}
+
+ComfyUI is included as a submodule at \texttt{loop/ComfyUI/}. If not yet
+present:
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/loop
+git clone https://github.com/comfyanonymous/ComfyUI
+cd ComfyUI
+pip install -r requirements.txt
+\end{lstlisting}
+
+\subsubsection{Custom nodes}
+
+The inpainting workflow requires ComfyUI-Manager and additional custom nodes.
+Start ComfyUI, open \texttt{http://127.0.0.1:8188}, install
+\textbf{ComfyUI-Manager} from the Manager menu, then use Manager to install:
+
+\begin{itemize}
+  \item \texttt{ComfyUI-Inpaint-Nodes}
+  \item \texttt{comfyui\_segment\_anything}
+\end{itemize}
+
+\subsubsection{Optional vision models (inpainting)}
+
+\begin{lstlisting}[style=shell]
+# Segment Anything (SAM)
+mkdir -p loop/ComfyUI/models/sam
+curl -L -o loop/ComfyUI/models/sam/sam_vit_h_4b8939.pth \
+  "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
+
+# Grounding DINO
+mkdir -p loop/ComfyUI/models/grounding-dino
+curl -L -o loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
+  "https://github.com/IDEA-Research/GroundingDINO/releases/download/\
+v0.1.0-alpha/groundingdino_swint_ogc.pth"
+\end{lstlisting}
+
+\subsection{Configuration}
+
+Copy the default template and open the interactive editor:
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image
+cp config.yaml.default config.yaml
+python menuconfig.py
+\end{lstlisting}
+
+At minimum, verify these keys in \texttt{config.yaml}:
+
+\begin{lstlisting}[style=yaml]
+broker:
+  stomp_url:    stomp://admin:admin@localhost:61613
+  artemis_data: auto   # resolves to {repo_root}/loop/artemis-broker
+
+database:
+  path: auto           # resolves to {repo_root}/pipeline.db
+
+models:
+  vlm:
+    filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+tactical:
+  model:
+    filename: Qwen2.5-14B-Instruct-Q5_K_M.gguf
+\end{lstlisting}
+
+Run the environment checker to verify all dependencies are resolvable before
+starting the pipeline:
+
+\begin{lstlisting}[style=shell]
+python check_env.py
+\end{lstlisting}
+
+\subsection{Building the Rust Binaries}
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/loop/scorers
+cargo build --release
+\end{lstlisting}
+
+This produces four binaries in \texttt{target/release/}:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Binary} & \textbf{Role} \\
+\midrule
+\texttt{router}          & Fans out \texttt{loop.events} $\to$ \texttt{scorer.requests} \\
+\texttt{aggregator}      & Merges scorer results; applies threshold logic; emits verdicts \\
+\texttt{coordinator}     & XA 2PC log; budget API for Python processes (Unix socket) \\
+\texttt{lancedb\_manager} & Writes terminal Loop records to LanceDB \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
 \section{Technology Stack}
+% ============================================================
 
 \begin{center}
 \begin{tabular}{lll}
@@ -68,14 +437,16 @@ Operational state & SQLite WAL (\texttt{pipeline.db}) & Crash-safe, zero-depende
 Vector store & LanceDB & Embedded, Arrow-native, supports ANN search \\
 Image generation & ComfyUI + SDXL & Workflow-based; supports ControlNet / LoRA \\
 Holistic scoring & Qwen2.5-VL-7B (Q5\_K\_M) & Fast local VLM; no API dependency \\
-Tactical decisions & Qwen2.5-14B-Instruct (Q4) & Local LLM for prompt revision and routing \\
+Tactical decisions & Qwen3-72B (Q4\_K\_M, hybrid thinking) & Local LLM for prompt revision and routing \\
 Rust binaries & router, aggregator, coordinator, lancedb\_manager & Zero-GIL concurrency; compile-time safety \\
 Python processes & scorers, comfyui\_worker, tactical\_llm & ML model hosting; stomp.py for STOMP \\
 \bottomrule
 \end{tabular}
 \end{center}
 
+% ============================================================
 \section{Component Architecture}
+% ============================================================
 
 \subsection{Language Selection}
 
@@ -134,7 +505,9 @@ All components with ML model dependencies are Python (STOMP via stomp.py).
 \end{tikzpicture}
 \end{center}
 
+% ============================================================
 \section{Address and Queue Topology}
+% ============================================================
 
 Artemis supports two routing types: \textsc{anycast} (queue semantics, one
 consumer receives) and \textsc{multicast} (topic semantics, all subscribers
@@ -160,7 +533,28 @@ receive). The table below lists all pipeline addresses.
 \end{tabular}
 \end{center}
 
+Python processes use STOMP durable subscriptions to the multicast addresses
+\texttt{scorer.requests} and \texttt{scorer.events}. Each scorer connects
+with a unique \texttt{client-id} header on \texttt{CONNECT} and subscribes
+with a \texttt{durable-subscription-name} header on \texttt{SUBSCRIBE}.
+Artemis creates a named durable queue bound to the multicast address,
+preserving messages across scorer restarts.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Process} & \textbf{client-id} & \textbf{Durable subscription names} \\
+\midrule
+\texttt{clip\_scorer}     & \texttt{clip-scorer}     & \texttt{scorer.clip.requests}, \texttt{scorer.clip.events} \\
+\texttt{artifact\_scorer} & \texttt{artifact-scorer} & \texttt{scorer.artifact.requests}, \texttt{scorer.artifact.events} \\
+\texttt{vlm\_scorer}      & \texttt{vlm-scorer}      & \texttt{scorer.vlm.requests}, \texttt{scorer.vlm.events} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================
 \section{Data Flow}
+% ============================================================
 
 \begin{enumerate}
   \item \texttt{session.py} initialises the tactical budget in the coordinator
@@ -226,7 +620,9 @@ receive). The table below lists all pipeline addresses.
 \end{tikzpicture}
 \end{center}
 
+% ============================================================
 \section{Persistence Layer}
+% ============================================================
 
 \subsection{SQLite Operational Database (\texttt{pipeline.db})}
 
@@ -291,7 +687,7 @@ Per-session retry and inpaint budget counters.
 \texttt{max\_retries}   & INTEGER          & Session retry ceiling \\
 \texttt{max\_inpaints}  & INTEGER          & Session inpaint ceiling \\
 \texttt{created\_at}    & INTEGER          & Unix timestamp \\
-\texttt{expires\_at}    & INTEGER          & Unix timestamp (24h TTL) \\
+\texttt{expires\_at}    & INTEGER          & Unix timestamp (24\,h TTL) \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -307,13 +703,32 @@ newline-delimited JSON objects.
 \toprule
 \textbf{Request} & \textbf{Effect} \\
 \midrule
-\texttt{BudgetInit} & Insert row into \texttt{tactical\_budget} (INSERT OR IGNORE) \\
-\texttt{BudgetGet}  & Return budget counters for a session \\
+\texttt{BudgetInit}   & Insert row into \texttt{tactical\_budget} (\texttt{INSERT OR IGNORE}) \\
+\texttt{BudgetGet}    & Return budget counters for a session \\
 \texttt{BudgetUpdate} & Atomically increment \texttt{retries\_used} or \texttt{inpaints\_used} \\
-\texttt{SessionInit}  & Insert row into \texttt{scorer\_session} (INSERT OR IGNORE) \\
+\texttt{SessionInit}  & Insert row into \texttt{scorer\_session} (\texttt{INSERT OR IGNORE}) \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+Example request/response pairs:
+
+\begin{lstlisting}[style=shell]
+# BudgetInit
+{"op":"BudgetInit","session_uuid":"...","max_retries":3,"max_inpaints":2}
+{"ok":true}
+
+# BudgetGet
+{"op":"BudgetGet","session_uuid":"..."}
+{"ok":true,"retries_used":1,"inpaints_used":0,"max_retries":3,"max_inpaints":2}
+
+# BudgetUpdate
+{"op":"BudgetUpdate","session_uuid":"...","field":"retries_used"}
+{"ok":true}
+
+# Session not found
+{"ok":false,"error":"session not found"}
+\end{lstlisting}
 
 \subsection{LanceDB Schema}
 
@@ -360,15 +775,17 @@ newline-delimited JSON objects.
 \end{tabular}
 \end{center}
 
+% ============================================================
 \section{Data-Loss Protection}
+% ============================================================
 
 \subsection{XA 2-Phase Commit}
 
 The aggregator uses a 2-phase commit protocol coordinated by the coordinator
 binary. SQLite serves as the durable XA log with \texttt{PRAGMA
-synchronous=FULL}. Phase 1 (Prepare) writes the participant list and fsync
-before any phase-2 action. Phase 2 (Commit or Rollback) updates the log entry
-and removes the transaction from the in-memory registry.
+synchronous=FULL}. Phase~1 (Prepare) writes the participant list and fsyncs
+before any phase-2 action. Phase~2 (Commit or Rollback) updates the log
+entry and removes the transaction from the in-memory registry.
 
 On startup, the coordinator scans \texttt{xa\_log} for rows in state
 \texttt{prepared} and rolls them back (conservative recovery strategy).
@@ -391,7 +808,111 @@ All pipeline queues declare \texttt{x-dead-letter-address: pipeline.dlx}
 routing to \texttt{pipeline.dead}. The \texttt{monitor.py} process subscribes
 to \texttt{pipeline.dead} and logs all arriving messages for operator review.
 
+% ============================================================
+\section{Operations}
+% ============================================================
+
+\subsection{Starting the Pipeline}
+
+Start components in the order shown; the broker must be running before any
+pipeline process connects.
+
+\begin{lstlisting}[style=shell]
+# 1. Start the Artemis broker
+~/ai-image/loop/start_broker.sh
+
+# 2. Start all pipeline components
+~/ai-image/loop/start_loop.sh
+\end{lstlisting}
+
+\texttt{start\_loop.sh} launches all Rust binaries and Python processes in
+the background. Individual components can also be started manually for
+development or debugging:
+
+\begin{lstlisting}[style=shell]
+# Rust binaries (from loop/scorers/)
+AI_IMAGE_ROOT=~/ai-image ./target/release/coordinator
+AI_IMAGE_ROOT=~/ai-image ./target/release/router
+AI_IMAGE_ROOT=~/ai-image ./target/release/aggregator
+AI_IMAGE_ROOT=~/ai-image ./target/release/lancedb_manager
+
+# Python components (activate the appropriate venv first)
+source ~/ai-image/loop/scorers/activate.sh
+python ~/ai-image/loop/comfyui_worker.py
+python ~/ai-image/loop/scorers/clip_scorer.py
+python ~/ai-image/loop/scorers/artifact_scorer.py
+python ~/ai-image/loop/scorers/vlm_scorer.py
+
+source ~/ai-image/venv/bin/activate
+python ~/ai-image/tactical-llm/tactical_llm.py
+python ~/ai-image/loop/monitor.py
+\end{lstlisting}
+
+\subsection{Submitting a Session}
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image
+source venv/bin/activate
+python tactical-llm/session.py \
+  --prompt "two people in a park, photorealistic, golden hour" \
+  --max-retries 3 \
+  --max-inpaints 2 \
+  --monitor
+\end{lstlisting}
+
+The \texttt{--monitor} flag polls the coordinator's \texttt{BudgetGet} socket
+API and prints live progress until the session resolves (accepted,
+give\_up, or budget exhausted).
+
+\subsection{Stopping the Pipeline}
+
+\begin{lstlisting}[style=shell]
+pkill -f comfyui_worker
+pkill -f clip_scorer
+pkill -f artifact_scorer
+pkill -f vlm_scorer
+pkill -f tactical_llm
+pkill -f monitor
+pkill -f router
+pkill -f aggregator
+pkill -f coordinator
+pkill -f lancedb_manager
+"$ARTEMIS_DATA/bin/artemis" stop
+\end{lstlisting}
+
+\subsection{Monitoring}
+
+\subsubsection{Artemis management console}
+
+The Artemis web console is available at \texttt{http://localhost:8161}
+(default credentials: \texttt{admin} / \texttt{admin}). It provides:
+
+\begin{itemize}
+  \item Real-time message counts per address and queue.
+  \item Consumer connection status for each durable subscription.
+  \item Manual browse, send, and drain operations on any queue.
+\end{itemize}
+
+Verify on first start that the following addresses appear under
+\textbf{Addresses}: \texttt{loop.request}, \texttt{loop.events},
+\texttt{scorer.requests}, \texttt{scorer.result}, \texttt{pipeline.dead}.
+
+\subsubsection{Dead-letter monitor}
+
+\begin{lstlisting}[style=shell]
+source ~/ai-image/venv/bin/activate
+python ~/ai-image/loop/monitor.py
+\end{lstlisting}
+
+Every message appearing in monitor output indicates a processing failure.
+The log includes the original queue name (\texttt{\_AMQ\_ORIG\_ADDRESS}
+header), message ID, and the full JSON body. Messages remain in
+\texttt{pipeline.dead} until explicitly drained or the broker is restarted.
+
+% ============================================================
 \section{Memory Budget}
+\label{sec:memory}
+% ============================================================
 
 \begin{center}
 \begin{tabular}{lll}
@@ -407,20 +928,25 @@ vlm\_scorer (Python)      & Holistic image evaluation            & $\sim$6\,GB \
 aggregator (Rust)         & Result collection and verdict        & $\sim$5\,MB \\
 coordinator (Rust)        & XA coordinator + Python budget API   & $\sim$5\,MB \\
 lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
-Tactical LLM (14B Q4)     & Prompt tuning and orchestration      & $\sim$9\,GB \\
+Tactical LLM — Qwen3-72B (Q4\_K\_M) & Prompt revision and routing  & $\sim$43\,GB \\
 ActiveMQ Artemis          & Message broker                       & $\sim$300\,MB \\
 OS/UI                     & System overhead                      & $\sim$12\,GB \\
 \midrule
-\textbf{Total}            &                                      & $\sim$44\,GB \\
+\textbf{Total}            &                                      & $\sim$78\,GB \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Approximately 52\,GB headroom remains in a 96\,GB unified memory system,
-leaving room for the VLM scorer ($\sim$6\,GB) running concurrently with a
-larger tactical LLM if desired.
+Approximately 18\,GB headroom remains in a 96\,GB unified memory system.
+The VLM scorer and tactical LLM do not run simultaneously in the hot path
+(VLM scoring completes before tactical inference begins), but both processes
+remain resident in memory throughout the session. macOS will compress cold
+regions under pressure; sustained memory usage above $\sim$90\,GB may
+introduce latency spikes.
 
+% ============================================================
 \section{Threshold Calibration}
+% ============================================================
 
 \begin{center}
 \begin{tabular}{lll}
@@ -447,7 +973,43 @@ Both values are placeholders. Calibration procedure:
 All threshold values are read from \texttt{config.yaml} at process startup.
 No code changes are required for recalibration.
 
+% ============================================================
+\section{Testing}
+% ============================================================
+
+\subsection{Rust Tests}
+
+The coordinator test suite covers the XA state machine, crash recovery,
+budget operations, and \texttt{SessionInit} idempotency. Tests run against
+an in-memory SQLite database.
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/loop/scorers
+cargo test -p coordinator
+\end{lstlisting}
+
+To run all Rust crates in the workspace:
+
+\begin{lstlisting}[style=shell]
+cargo test
+\end{lstlisting}
+
+\subsection{Python Tests}
+
+The tactical-LLM test suite covers prompt construction, LanceDB retrieval
+helpers, heuristic decision logic, budget enforcement, and the full
+\texttt{\_handle\_verdict} dispatch path. All external dependencies
+(LanceDB, Unix socket, STOMP) are mocked.
+
+\begin{lstlisting}[style=shell]
+cd ~/ai-image/tactical-llm
+source ../venv/bin/activate
+python -m pytest tests/ -v
+\end{lstlisting}
+
+% ============================================================
 \section{Scale-Out Path}
+% ============================================================
 
 \begin{description}
   \item[Multiple ComfyUI workers] Add STOMP consumers on \texttt{/queue/loop.request}.

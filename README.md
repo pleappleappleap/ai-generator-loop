@@ -1,159 +1,150 @@
 # AI Image Generation Pipeline
 
-An autonomous image generation pipeline using Stable Diffusion XL,
-multi-dimensional scoring, and a tactical LLM feedback loop to iteratively
-refine generated images toward a quality target.
+An autonomous SDXL image generation pipeline. Submit a natural language prompt;
+the pipeline generates images, scores them across three independent dimensions,
+and feeds the results to a tactical LLM that decides whether to accept the
+image, revise the prompt, schedule targeted inpainting, or give up. Every
+generated image — including rejects — is stored as a vector embedding in
+LanceDB, giving the system long-term memory across sessions.
 
-## Overview
+All inter-component communication flows through ActiveMQ Artemis (AMQP 1.0
+for Rust components, STOMP for Python). There is no Redis, no RabbitMQ, and
+no external database server. Operational state lives in a WAL-mode SQLite
+database; long-term history lives in LanceDB.
 
-The pipeline accepts a natural language prompt and autonomously generates,
-scores, and refines images until a candidate meeting all quality thresholds
-is accepted. A tactical LLM interprets scorer feedback and decides whether
-to accept a candidate, modify the prompt, adjust generation parameters, or
-trigger targeted inpainting on specific regions.
+---
 
-All generation history — including rejected candidates — is stored in
-LanceDB as vector embeddings alongside full scorer results and generation
-parameters. This long-term memory enables the strategic LLM to identify
-patterns across sessions and improve generation quality over time.
+## Architecture Documentation
 
-## Directory Structure
+The authoritative design document is `ARCHITECTURE.pdf`. It covers the
+component diagram, full address and queue topology, SQLite schema, XA 2-phase
+commit protocol, memory budget, threshold calibration procedure, and scale-out
+path.
 
-```
-~/ai-image/
-├── ARCHITECTURE.tex        LaTeX source for system architecture document
-├── ARCHITECTURE.pdf        Rendered architecture document (make doc)
-├── Makefile                Top-level build orchestration
-├── config.yaml             Single source of truth for all configuration
-├── config.yaml.default     Template for config.yaml
-├── config.py               Python config loader (serde_yaml equivalent)
-├── lancedb_schema.py       LanceDB table schema definitions (Pydantic)
-├── menuconfig.py           Interactive TUI config editor
-├── check_env.py            Dependency and environment checker
-├── loop/
-│   ├── ComfyUI/            Stable Diffusion XL generation engine
-│   ├── comfyui_worker.py   STOMP consumer wrapping the ComfyUI API
-│   ├── monitor.py          Dead-letter consumer for pipeline.dead queue
-│   ├── start_broker.sh     Starts ActiveMQ Artemis
-│   ├── start_loop.sh       Starts all loop infrastructure
-│   └── scorers/
-│       ├── clip_scorer.py       CLIP semantic similarity scorer (STOMP)
-│       ├── artifact_scorer.py   AI artifact detection scorer (STOMP)
-│       ├── vlm_scorer.py        VLM holistic image evaluator (STOMP)
-│       ├── Cargo.toml           Rust workspace root
-│       ├── router/              Generation event fanout (AMQP 1.0)
-│       ├── aggregator/          Scorer result collection and verdict (AMQP 1.0)
-│       ├── coordinator/         XA coordinator + Python budget API (Unix socket)
-│       ├── db/                  Shared SQLite helpers (WAL, schema, cleanup)
-│       └── lancedb_manager/     Terminal event LanceDB writer (AMQP 1.0)
-├── tactical-llm/
-│   ├── session.py          Session entry point (STOMP publish + budget init)
-│   ├── tactical_llm.py     Tactical decision engine (STOMP consumer)
-│   ├── prompts.py          System prompt and decision prompt construction
-│   ├── retrieval.py        LanceDB retrieval helpers (session history + ANN)
-│   └── tests/              pytest test suite
-├── lancedb/                LanceDB persistent storage (sessions, loop tables)
-└── strategic-llm/          Strategic LLM subsystem (planned)
-```
-
-## Prerequisites
-
-### Hardware
-- Apple Silicon Mac with at least 64 GB unified memory (96 GB recommended)
-- ~100 GB free disk space for models and generation output
-
-### Software
-- macOS 14 or later
-- Homebrew
-- Python 3.11+
-- Rust (installed via rustup)
-- yq (`brew install yq`) — YAML config reader for shell scripts
-- ActiveMQ Artemis — message broker (AMQP 1.0 + STOMP)
-- MacTeX (for architecture documentation: `brew install --cask mactex`)
-
-### Python packages
-- Root venv: `lancedb`, `open_clip_torch`, `torch`, `stomp.py`
-- Scorers venv: `transformers`, `llama-cpp-python`, `stomp.py`, `open_clip_torch`
-
-### Models
-See `loop/README.md` for the full model download procedure.
-
-## Configuration
-
-All configuration lives in `config.yaml`. Copy the default template and edit:
+Generate it from source:
 
 ```bash
-cp config.yaml.default config.yaml
-python menuconfig.py   # interactive TUI editor
+make doc          # requires MacTeX: brew install --cask mactex
+open ARCHITECTURE.pdf
 ```
 
-Key sections:
+The LaTeX source is `ARCHITECTURE.tex` and is version-controlled alongside
+the code.
 
-```yaml
-broker:
-  rabbitmq_url: amqp://user:pass@localhost:5672   # Artemis AMQP 1.0 URL
-  stomp_url:    stomp://user:pass@localhost:61613  # Artemis STOMP URL
-  artemis_data: /path/to/artemis-broker           # broker instance directory
+---
 
-database:
-  path:                  pipeline.db
-  busy_timeout_ms:       5000
-  cleanup_interval_secs: 300
+## Installation
 
-thresholds:
-  clip:               0.25
-  artifact:           0.50
-  score_timeout_secs: 60
-```
+Full step-by-step instructions are in **`INSTALL.md`**. The summary:
+
+1. **Hardware** — Apple Silicon Mac, 64 GB+ unified memory (96 GB recommended),
+   ~100 GB free disk.
+2. **System software** — Python 3.11, Rust (rustup), yq, ActiveMQ Artemis.
+3. **Two Python venvs** — root venv (LanceDB, CLIP, stomp.py) and scorers venv
+   (transformers, llama-cpp-python, stomp.py).
+4. **Models** — SDXL checkpoint into ComfyUI; artifact detector from
+   HuggingFace; VLM (Qwen2.5-VL-7B Q5\_K\_M) and tactical LLM
+   (Qwen2.5-14B-Instruct Q5\_K\_M) as GGUF files.
+5. **Broker** — create an Artemis instance, enable STOMP (61613) and AMQP 1.0
+   (5672) acceptors.
+6. **Configuration** — `cp config.yaml.default config.yaml`, then
+   `python menuconfig.py`.
+7. **Build** — `cargo build --release` in `loop/scorers/`.
+
+---
 
 ## Quick Start
 
-```bash
-# 1. Build Rust binaries
-cd ~/ai-image/loop/scorers
-cargo build --release
+Once installed (see `INSTALL.md`):
 
-# 2. Start the Artemis broker
+```bash
+# Start the broker
 ~/ai-image/loop/start_broker.sh
 
-# 3. Start the pipeline
+# Start the full pipeline
 ~/ai-image/loop/start_loop.sh
 
-# 4. Submit a generation session
-cd ~/ai-image
+# Submit a generation session
+source venv/bin/activate
 python tactical-llm/session.py \
   --prompt "two people in a park, photorealistic, golden hour" \
   --max-retries 3 \
   --monitor
 ```
 
-The `--monitor` flag polls the coordinator for budget state and prints
+The `--monitor` flag polls the coordinator for live budget state and prints
 progress until the session resolves.
 
-## Running Tests
+---
 
-### Rust (coordinator)
-```bash
-cd loop/scorers
-cargo test -p coordinator
+## Components
+
+| Component | Language | Role |
+|-----------|----------|------|
+| `comfyui_worker.py` | Python / STOMP | Drives ComfyUI; registers images with coordinator |
+| `clip_scorer.py` | Python / STOMP | ViT-L-14 CLIP semantic similarity |
+| `artifact_scorer.py` | Python / STOMP | AI-image-detector artifact confidence |
+| `vlm_scorer.py` | Python / STOMP | Qwen2.5-VL-7B holistic image evaluation |
+| `router` | Rust / AMQP 1.0 | Fans out `loop.events` → `scorer.requests` |
+| `aggregator` | Rust / AMQP 1.0 | Merges scorer results; applies threshold logic; emits verdicts |
+| `coordinator` | Rust / Unix socket | XA 2PC log; budget API for Python processes |
+| `lancedb_manager` | Rust / AMQP 1.0 | Writes terminal Loop records to LanceDB |
+| `tactical_llm.py` | Python / STOMP | Receives verdicts; runs local LLM; decides next action |
+| `session.py` | Python / STOMP | Session entry point; initialises budget; publishes first request |
+| `monitor.py` | Python / STOMP | Dead-letter consumer; logs `pipeline.dead` messages |
+
+---
+
+## Repository Layout
+
+```
+~/ai-image/
+├── INSTALL.md              Full installation guide
+├── ARCHITECTURE.tex        LaTeX source → ARCHITECTURE.pdf (make doc)
+├── MESSAGES.md             Message schema contracts for all addresses
+├── config.yaml             Runtime configuration (gitignored)
+├── config.yaml.default     Configuration template
+├── config.py               Python config loader
+├── lancedb_schema.py       LanceDB table definitions (Pydantic)
+├── menuconfig.py           Interactive TUI configuration editor
+├── check_env.py            Dependency and environment checker
+├── loop/
+│   ├── comfyui_worker.py
+│   ├── monitor.py
+│   ├── start_broker.sh
+│   ├── start_loop.sh
+│   └── scorers/
+│       ├── clip_scorer.py
+│       ├── artifact_scorer.py
+│       ├── vlm_scorer.py
+│       ├── router/
+│       ├── aggregator/
+│       ├── coordinator/
+│       ├── db/
+│       └── lancedb_manager/
+└── tactical-llm/
+    ├── session.py
+    ├── tactical_llm.py
+    ├── prompts.py
+    ├── retrieval.py
+    └── tests/
 ```
 
-### Python (tactical-llm)
-```bash
-cd tactical-llm
-python -m pytest tests/ -v
-```
+---
 
 ## Monitoring
 
-- Artemis management console: `http://localhost:8161` (admin/admin by default)
-- Dead-letter queue: `pipeline.dead` — start `python loop/monitor.py` to watch
+- **Artemis console** — `http://localhost:8161` (admin / admin by default)
+- **Dead-letter queue** — `python loop/monitor.py` streams all failed messages
+- **Message contracts** — `MESSAGES.md` documents every address, routing type,
+  protocol, and payload schema
 
-## Documentation
+## Tests
 
 ```bash
-make doc        # renders ARCHITECTURE.pdf
-```
+# Rust (coordinator XA state machine, budget ops, crash recovery)
+cd loop/scorers && cargo test -p coordinator
 
-See `ARCHITECTURE.pdf` for full system design including component diagram,
-address topology, SQLite schema, XA 2PC protocol, and memory budget.
+# Python (tactical LLM decisions, retrieval, prompt construction)
+cd tactical-llm && python -m pytest tests/ -v
+```
