@@ -13,7 +13,6 @@ models:
   vlm:
     dir: auto                                      # auto: {scorers}/models/vlm
     filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
-    n_gpu_layers: -1   # -1 = all layers on GPU; 0 = CPU only
     context_length: 4096
   artifact_detector:
     dir: auto          # auto: {scorers}/models/artifact-detector
@@ -21,19 +20,32 @@ models:
     name: ViT-L-14
     pretrained: openai
 
-gpu:
-  backend: auto
-  # auto | mps | cuda | rocm | cpu
+compute:
+  # Per-component compute target configuration.
+  # backend: auto | mps | cuda | rocm | cpu
+  #   auto  — detect at startup (macOS → mps; NVIDIA → cuda; AMD → rocm; else → cpu)
+  #   mps   — Apple Metal Performance Shaders (macOS / Apple Silicon)
+  #   cuda  — NVIDIA CUDA (Linux/Windows)
+  #   rocm  — AMD ROCm (Linux; uses CUDA device naming in PyTorch)
+  #   cpu   — CPU only
   #
-  # macOS: uses Metal Performance Shaders (MPS). When an eGPU is connected,
-  # Metal's MTLCreateSystemDefaultDevice selects the most capable device,
-  # which is typically the eGPU. No additional config required.
-  #
-  # NVIDIA eGPU on Apple Silicon: Apple has begun signing NVIDIA compute
-  # drivers. If CUDA is available on macOS, set backend: cuda manually —
-  # auto-detection does not yet probe for this case.
-  #
-  # Linux NVIDIA: cuda. Linux AMD: rocm. No GPU: cpu.
+  # n_gpu_layers (GGUF models only):
+  #   -1 = all layers on GPU/unified memory
+  #    0 = CPU only
+  #    N = first N transformer layers on GPU, remainder on CPU
+  #        (useful when GPU VRAM < full model size on discrete-GPU systems)
+  comfyui:
+    backend: auto
+  clip_scorer:
+    backend: auto
+  artifact_scorer:
+    backend: cpu        # fast enough on CPU; frees GPU memory for generation
+  vlm_scorer:
+    backend: auto
+    n_gpu_layers: -1
+  tactical_llm:
+    backend: auto
+    n_gpu_layers: -1
 
 thresholds:
   clip: 0.25
@@ -63,7 +75,6 @@ tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
     filename: Qwen3-72B-Q4_K_M.gguf
-    n_gpu_layers: -1  # -1 = all on GPU/unified memory; reduce if VRAM limited
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # token limit for non-thinking responses

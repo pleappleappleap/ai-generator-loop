@@ -29,13 +29,17 @@ import stomp
 from transformers import pipeline
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from config import load as _load_config  # noqa: E402
+from config import load as _load_config, resolve_backend  # noqa: E402
 
 _cfg = _load_config()
+
+_backend = resolve_backend(_cfg.compute["artifact_scorer"]["backend"])
+_device  = 0 if _backend in ("cuda", "rocm") else (_backend if _backend == "mps" else -1)
 
 detector = pipeline(
     "image-classification",
     model=_cfg.models["artifact_detector"]["dir"],
+    device=_device,
 )
 
 active_jobs: dict[str, threading.Event] = {}

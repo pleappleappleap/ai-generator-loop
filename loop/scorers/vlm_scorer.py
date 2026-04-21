@@ -38,12 +38,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import load as _load_config  # noqa: E402
 
 _cfg = _load_config()
-_vlm_cfg = _cfg.models["vlm"]
+_vlm_cfg     = _cfg.models["vlm"]
+_vlm_compute = _cfg.compute["vlm_scorer"]
 
 llm = Llama(
     model_path=str(Path(_vlm_cfg["dir"]) / _vlm_cfg["filename"]),
     n_ctx=_vlm_cfg["context_length"],
-    n_gpu_layers=_vlm_cfg["n_gpu_layers"],
+    n_gpu_layers=_vlm_compute["n_gpu_layers"],
 )
 
 active_jobs: dict[str, threading.Event] = {}

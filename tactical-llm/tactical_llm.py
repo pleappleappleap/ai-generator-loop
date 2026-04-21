@@ -56,9 +56,10 @@ from prompts import SYSTEM_PROMPT, build_decision_prompt  # noqa: E402
 from retrieval import embed_prompt, session_history, similar_past  # noqa: E402
 
 _cfg = _load_config()
-_tac = _cfg.tactical
-_model_cfg = _tac.get("model", {})
+_tac          = _cfg.tactical
+_model_cfg    = _tac.get("model", {})
 _decision_cfg = _tac.get("decisions", {})
+_tac_compute  = _cfg.compute["tactical_llm"]
 
 _COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
 
@@ -77,7 +78,7 @@ _model_path = str(
 llm = Llama(
     model_path=_model_path,
     n_ctx=_model_cfg.get("context_length", 8192),
-    n_gpu_layers=_model_cfg.get("n_gpu_layers", -1),
+    n_gpu_layers=_tac_compute.get("n_gpu_layers", -1),
     verbose=False,
 )
 

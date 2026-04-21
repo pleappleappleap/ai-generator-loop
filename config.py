@@ -8,15 +8,17 @@ Run ``make config`` to generate config.yaml from the interactive TUI.
 
 Example::
 
-    from config import load
+    from config import load, resolve_backend
     cfg = load()
-    print(cfg.gpu["backend"])
+    backend = resolve_backend(cfg.compute["clip_scorer"]["backend"])
     print(cfg.paths["lancedb"])
 """
 
 from __future__ import annotations
 
 import os
+import platform
+import shutil
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -43,6 +45,36 @@ def _expand_recursive(obj: Any) -> Any:
     return _expand(obj)
 
 
+def resolve_backend(backend: str) -> str:
+    """Resolve ``"auto"`` to a concrete backend string for the current host.
+
+    Detection order for ``"auto"``:
+
+    1. macOS → ``"mps"`` (Metal Performance Shaders)
+    2. NVIDIA CUDA present (``nvcc`` or ``nvidia-smi`` on PATH) → ``"cuda"``
+    3. AMD ROCm present (``rocm-smi`` on PATH) → ``"rocm"``
+    4. Fallback → ``"cpu"``
+
+    Non-``"auto"`` values are returned unchanged, allowing explicit
+    per-component overrides in ``config.yaml``.
+
+    Args:
+        backend: Value from ``compute.<component>.backend`` in config.
+
+    Returns:
+        One of ``"mps"``, ``"cuda"``, ``"rocm"``, or ``"cpu"``.
+    """
+    if backend != "auto":
+        return backend
+    if platform.system() == "Darwin":
+        return "mps"
+    if shutil.which("nvcc") or shutil.which("nvidia-smi"):
+        return "cuda"
+    if shutil.which("rocm-smi"):
+        return "rocm"
+    return "cpu"
+
+
 class Config:
     """Typed accessor for pipeline configuration.
 
@@ -52,9 +84,10 @@ class Config:
     Attributes:
         paths: Repository and output directory paths.
         models: Model file locations and inference parameters.
-        gpu: GPU backend selection.
+        compute: Per-component compute target configuration (backend,
+            n_gpu_layers).
         thresholds: Scorer acceptance thresholds.
-        broker: Artemis, Redis (migration target), and ComfyUI connection parameters.
+        broker: Artemis and ComfyUI connection parameters.
         database: SQLite operational state store configuration.
         system: Host system parameters (package manager, Homebrew prefix).
     """
@@ -73,9 +106,9 @@ class Config:
         return self._data["models"]
 
     @property
-    def gpu(self) -> dict:
-        """GPU backend configuration."""
-        return self._data["gpu"]
+    def compute(self) -> dict:
+        """Per-component compute target configuration."""
+        return self._data["compute"]
 
     @property
     def thresholds(self) -> dict:

@@ -35,7 +35,7 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from config import load as _load_config  # noqa: E402
+from config import load as _load_config, resolve_backend  # noqa: E402
 
 _cfg = _load_config()
 
@@ -45,7 +45,7 @@ model, _, preprocess = open_clip.create_model_and_transforms(
 )
 tokenizer = open_clip.get_tokenizer(_cfg.models["clip"]["name"])
 
-_backend = _cfg.gpu["backend"]
+_backend = resolve_backend(_cfg.compute["clip_scorer"]["backend"])
 if _backend == "mps":
     _device = torch.device("mps")
 elif _backend in ("cuda", "rocm"):
