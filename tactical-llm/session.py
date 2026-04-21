@@ -29,9 +29,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import lancedb
-import pika
+import stomp
 import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -49,6 +50,12 @@ _MAX_RETRIES:  int = _dec.get("max_retries",  3)
 _MAX_INPAINTS: int = _dec.get("max_inpaints", 2)
 
 _COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
+
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
 
 
 # ── CLIP embedding ────────────────────────────────────────────────────────────
@@ -153,11 +160,11 @@ def _init_budget(session_uuid: str, max_retries: int, max_inpaints: int) -> None
     })
 
 
-# ── RabbitMQ request ──────────────────────────────────────────────────────────
+# ── STOMP request publish ─────────────────────────────────────────────────────
 
 
 def _publish_request(
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
     session_uuid: str,
     image_uuid: str,
     workflow_path: str,
@@ -167,14 +174,13 @@ def _publish_request(
     """Publish the first generation request to the loop.request queue.
 
     Args:
-        channel: Open pika channel.
+        conn: Open STOMP connection.
         session_uuid: UUID string for this session.
         image_uuid: UUID string for the first generated image.
         workflow_path: Absolute path to the ComfyUI workflow JSON.
         prompt: The user-supplied prompt.
         workflow_params: Optional dict of workflow parameter overrides.
     """
-    channel.queue_declare(queue="loop.request", durable=True)
     request = {
         "image_uuid":      image_uuid,
         "session_uuid":    session_uuid,
@@ -183,11 +189,10 @@ def _publish_request(
         "prompt":          prompt,
         "workflow_params": workflow_params,
     }
-    channel.basic_publish(
-        exchange="",
-        routing_key="loop.request",
+    conn.send(
+        destination="/queue/loop.request",
         body=json.dumps(request),
-        properties=pika.BasicProperties(delivery_mode=2),
+        headers={"persistent": "true"},
     )
 
 
@@ -322,19 +327,10 @@ def main() -> None:
     print("Budget initialised in coordinator.")
 
     # Publish first generation request
-    connection = pika.BlockingConnection(
-        pika.URLParameters(_cfg.broker["rabbitmq_url"])
-    )
-    channel = connection.channel()
-    _publish_request(
-        channel,
-        session_uuid,
-        image_uuid,
-        args.workflow,
-        args.prompt,
-        args.workflow_params,
-    )
-    connection.close()
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.connect(_STOMP_USER, _STOMP_PASS, wait=True)
+    _publish_request(conn, session_uuid, image_uuid, args.workflow, args.prompt, args.workflow_params)
+    conn.disconnect()
     print(f"Generation request published → loop.request")
 
     if args.monitor:

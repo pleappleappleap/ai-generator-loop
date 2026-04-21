@@ -3,28 +3,28 @@
 Consumes generation requests from the loop.request queue, submits
 them to the ComfyUI HTTP API, waits for completion via WebSocket,
 retrieves the output image URL, and publishes a completion event to
-the loop.events topic exchange.
+the loop.events topic address.
 
 ComfyUI must be running at COMFYUI_URL before this process starts.
 Start ComfyUI with: ~/ai-image/loop/ComfyUI/launch.sh
 
-Queue subscriptions:
-  loop.request [queue] → on_request
+Address subscriptions (STOMP / Artemis):
+  /queue/loop.request  → generation requests
 
-Exchange publications:
-  loop.events [topic] routing key: loop.complete.<image_uuid>
+Address publications (STOMP / Artemis):
+  /topic/loop.events   → loop.complete.<image_uuid> events
 """
 
 import json
 import socket
 import sys
+import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
-import pika
-import pika.channel
-import pika.spec
 import requests
+import stomp
 import websocket
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -40,6 +40,12 @@ COMFYUI_WS: str = _cfg.broker["comfyui_ws"]
 
 _COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
 """Unix socket path for the coordinator API."""
+
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
 
 
 def _coordinator_call(req: dict) -> dict:
@@ -57,21 +63,6 @@ def _coordinator_call(req: dict) -> dict:
         return json.loads(buf.split(b"\n")[0])
     finally:
         sock.close()
-
-
-def setup_exchanges(channel: pika.channel.Channel) -> None:
-    """Declare the loop.events topic exchange.
-
-    Idempotent — safe to call on every startup.
-
-    Args:
-        channel: An open pika channel.
-    """
-    channel.exchange_declare(
-        exchange="loop.events",
-        exchange_type="topic",
-        durable=True,
-    )
 
 
 def submit_workflow(
@@ -165,84 +156,84 @@ def get_output_path(prompt_id: str) -> str:
     raise ValueError(f"No image output found for prompt {prompt_id}")
 
 
-def on_request(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a generation request from the loop.request queue.
+class _Listener(stomp.ConnectionListener):
+    """STOMP message listener for the ComfyUI worker."""
 
-    Loads the specified workflow JSON, submits it to ComfyUI with
-    optional prompt override, waits for completion, retrieves the
-    output image URL, and publishes a completion event to loop.events.
+    def __init__(self, conn: stomp.Connection) -> None:
+        self._conn = conn
 
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag for acking.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID for this generated image.
-            session_uuid (str): UUID of the parent session.
-            sequence_number (int): Position within session.
-            workflow_path (str): Path to ComfyUI API-format workflow JSON.
-            prompt (str, optional): Prompt override for positive nodes.
-            workflow_params (dict, optional): Generation parameters for
-                storage in LanceDB.
-    """
-    request = json.loads(body)
-    with open(request["workflow_path"]) as f:
-        workflow = json.load(f)
-    prompt_id = submit_workflow(workflow, request.get("prompt"))
-    wait_for_completion(prompt_id)
-    output_path = get_output_path(prompt_id)
-    result = {
-        "image_uuid": request["image_uuid"],
-        "session_uuid": request["session_uuid"],
-        "sequence_number": request["sequence_number"],
-        "prompt_id": prompt_id,
-        "image_path": output_path,
-        "prompt": request.get("prompt"),
-        "workflow_path": request["workflow_path"],
-        "workflow_params": request.get("workflow_params", {}),
-    }
-    score_timeout_secs = int(_cfg.thresholds["score_timeout_secs"])
+    def on_error(self, frame: stomp.utils.Frame) -> None:
+        print(f"[comfyui_worker] STOMP error: {frame.body}", file=sys.stderr)
 
-    # Register image session with coordinator (writes scorer_session row).
-    _coordinator_call({
-        "op":                "SessionInit",
-        "image_uuid":        request["image_uuid"],
-        "session_uuid":      request["session_uuid"],
-        "sequence_number":   request["sequence_number"],
-        "prompt":            request.get("prompt", ""),
-        "workflow_path":     request["workflow_path"],
-        "workflow_params":   json.dumps(request.get("workflow_params", {})),
-        "score_timeout_secs": score_timeout_secs,
-    })
+    def on_message(self, frame: stomp.utils.Frame) -> None:
+        """Handle a generation request from the loop.request queue.
 
-    ch.basic_publish(
-        exchange="loop.events",
-        routing_key=f"loop.complete.{request['image_uuid']}",
-        body=json.dumps(result),
-    )
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+        Loads the specified workflow JSON, submits it to ComfyUI with
+        optional prompt override, waits for completion, retrieves the
+        output image URL, registers the image with the coordinator, and
+        publishes a completion event to /topic/loop.events.
+
+        Acks the message only after successful publish.
+        """
+        msg_id = frame.headers.get("message-id", "")
+        sub_id = frame.headers.get("subscription", "")
+        try:
+            request = json.loads(frame.body)
+            with open(request["workflow_path"]) as f:
+                workflow = json.load(f)
+            prompt_id = submit_workflow(workflow, request.get("prompt"))
+            wait_for_completion(prompt_id)
+            output_path = get_output_path(prompt_id)
+            result = {
+                "image_uuid":      request["image_uuid"],
+                "session_uuid":    request["session_uuid"],
+                "sequence_number": request["sequence_number"],
+                "prompt_id":       prompt_id,
+                "image_path":      output_path,
+                "prompt":          request.get("prompt"),
+                "workflow_path":   request["workflow_path"],
+                "workflow_params": request.get("workflow_params", {}),
+            }
+            score_timeout_secs = int(_cfg.thresholds["score_timeout_secs"])
+            _coordinator_call({
+                "op":                "SessionInit",
+                "image_uuid":        request["image_uuid"],
+                "session_uuid":      request["session_uuid"],
+                "sequence_number":   request["sequence_number"],
+                "prompt":            request.get("prompt", ""),
+                "workflow_path":     request["workflow_path"],
+                "workflow_params":   json.dumps(request.get("workflow_params", {})),
+                "score_timeout_secs": score_timeout_secs,
+            })
+            self._conn.send(
+                destination="/topic/loop.events",
+                body=json.dumps(result),
+                headers={"persistent": "true"},
+            )
+        finally:
+            self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:
     """Start the ComfyUI MQ worker process.
 
-    Connects to RabbitMQ, declares the loop.events exchange and
-    loop.request queue, and begins consuming generation requests.
-    Blocks indefinitely. This is the process entry point.
+    Connects to Artemis via STOMP, subscribes to loop.request, and
+    blocks indefinitely. This is the process entry point.
     """
-    connection = pika.BlockingConnection(pika.URLParameters(_cfg.broker["rabbitmq_url"]))
-    channel = connection.channel()
-    setup_exchanges(channel)
-    channel.queue_declare(queue="loop.request", durable=True)
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue="loop.request", on_message_callback=on_request)
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.set_listener("", _Listener(conn))
+    conn.connect(
+        _STOMP_USER, _STOMP_PASS, wait=True,
+        headers={"client-id": "comfyui-worker"},
+    )
+    conn.subscribe(
+        destination="/queue/loop.request",
+        id="1",
+        ack="client-individual",
+    )
     print("ComfyUI worker ready")
-    channel.start_consuming()
+    while conn.is_connected():
+        time.sleep(1)
 
 
 if __name__ == "__main__":

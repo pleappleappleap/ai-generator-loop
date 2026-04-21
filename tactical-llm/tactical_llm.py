@@ -40,13 +40,13 @@ from __future__ import annotations
 import json
 import socket
 import sys
+import time
 import uuid
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-import pika
-import pika.channel
-import pika.spec
+import stomp
 from llama_cpp import Llama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -61,6 +61,12 @@ _model_cfg = _tac.get("model", {})
 _decision_cfg = _tac.get("decisions", {})
 
 _COORDINATOR_SOCK: str = _cfg.database["path"] + ".sock"
+
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
 
 # ── LLM initialisation ────────────────────────────────────────────────────────
 
@@ -200,42 +206,19 @@ def _run_inference(decision_prompt: str) -> dict:
 # ── Decision execution ────────────────────────────────────────────────────────
 
 
-def _setup_exchanges(channel: pika.channel.Channel) -> None:
-    """Declare all exchanges and queues used by the tactical LLM.
-
-    Idempotent — safe to call on every startup.
-
-    Args:
-        channel: An open pika channel.
-    """
-    channel.exchange_declare(
-        exchange="loop.accepted",
-        exchange_type="topic",
-        durable=True,
-    )
-    channel.exchange_declare(
-        exchange="tactical.decisions",
-        exchange_type="topic",
-        durable=True,
-    )
-    channel.queue_declare(queue="loop.request",           durable=True)
-    channel.queue_declare(queue="loop.inpaint.request",   durable=True)
-    channel.queue_declare(queue="scorer.result",          durable=True)
-
-
 def _publish_accepted(
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
     image_uuid: str,
     image_path: str | None,
     scores: dict,
 ) -> None:
-    """Publish an accepted verdict to the loop.accepted topic exchange.
+    """Publish an accepted verdict to the loop.accepted topic address.
 
     The LanceDB manager listens for these events and writes the final
     Loop record with the image_path.
 
     Args:
-        channel: Open pika channel.
+        conn: Open STOMP connection.
         image_uuid: UUID of the accepted image.
         image_path: Filesystem path to the accepted image file, or None.
         scores: Full scorer results dict from the verdict message.
@@ -245,16 +228,15 @@ def _publish_accepted(
         "image_path": image_path,
         "scores":     scores,
     }
-    channel.basic_publish(
-        exchange="loop.accepted",
-        routing_key=f"accepted.{image_uuid}",
+    conn.send(
+        destination="/topic/loop.accepted",
         body=json.dumps(payload),
-        properties=pika.BasicProperties(delivery_mode=2),
+        headers={"persistent": "true"},
     )
 
 
 def _publish_retry(
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
     original_verdict: dict,
     decision: dict,
 ) -> str:
@@ -265,7 +247,7 @@ def _publish_retry(
     sequence_number, and the LLM-revised prompt.
 
     Args:
-        channel: Open pika channel.
+        conn: Open STOMP connection.
         original_verdict: The full verdict dict from scorer.result.
         decision: The parsed LLM decision dict.
 
@@ -286,17 +268,16 @@ def _publish_retry(
         },
         "prompt":           decision.get("retry_prompt", ""),
     }
-    channel.basic_publish(
-        exchange="",
-        routing_key="loop.request",
+    conn.send(
+        destination="/queue/loop.request",
         body=json.dumps(request),
-        properties=pika.BasicProperties(delivery_mode=2),
+        headers={"persistent": "true"},
     )
     return new_image_uuid
 
 
 def _publish_inpaint(
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
     original_verdict: dict,
     decision: dict,
 ) -> None:
@@ -308,41 +289,40 @@ def _publish_inpaint(
     consumers.
 
     Args:
-        channel: Open pika channel.
+        conn: Open STOMP connection.
         original_verdict: The full verdict dict from scorer.result.
         decision: The parsed LLM decision dict.
     """
     scores = original_verdict.get("scores", {})
     payload = {
-        "image_uuid":     original_verdict.get("image_uuid"),
-        "session_uuid":   scores.get("session_uuid"),
-        "image_path":     scores.get("image_path"),
+        "image_uuid":      original_verdict.get("image_uuid"),
+        "session_uuid":    scores.get("session_uuid"),
+        "image_path":      scores.get("image_path"),
         "inpaint_regions": decision.get("inpaint_regions", []),
-        "inpaint_prompt": decision.get("inpaint_prompt", ""),
+        "inpaint_prompt":  decision.get("inpaint_prompt", ""),
         "original_scores": scores,
     }
-    channel.basic_publish(
-        exchange="",
-        routing_key="loop.inpaint.request",
+    conn.send(
+        destination="/queue/loop.inpaint.request",
         body=json.dumps(payload),
-        properties=pika.BasicProperties(delivery_mode=2),
+        headers={"persistent": "true"},
     )
 
 
 def _publish_decision_log(
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
     image_uuid: str,
     session_uuid: str,
     decision: dict,
     raw_verdict: dict,
 ) -> None:
-    """Publish the full decision to the tactical.decisions audit exchange.
+    """Publish the full decision to the tactical.decisions audit topic.
 
-    The strategic LLM will consume from this exchange to analyse decision
+    The strategic LLM will consume from this topic to analyse decision
     patterns across sessions and tune thresholds or system prompts.
 
     Args:
-        channel: Open pika channel.
+        conn: Open STOMP connection.
         image_uuid: UUID of the image this decision was made for.
         session_uuid: Session UUID.
         decision: Parsed LLM decision dict.
@@ -354,12 +334,10 @@ def _publish_decision_log(
         "decision":     decision,
         "verdict":      raw_verdict,
     }
-    decision_type = decision.get("decision", "unknown")
-    channel.basic_publish(
-        exchange="tactical.decisions",
-        routing_key=f"decision.{decision_type}.{image_uuid}",
+    conn.send(
+        destination="/topic/tactical.decisions",
         body=json.dumps(payload),
-        properties=pika.BasicProperties(delivery_mode=2),
+        headers={"persistent": "true"},
     )
 
 
@@ -420,36 +398,27 @@ def _heuristic_decision(verdict: dict, budget: dict) -> dict:
 # ── Main consumer ─────────────────────────────────────────────────────────────
 
 
-def on_verdict(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
+def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
     """Handle a verdict from the scorer.result queue.
 
     Retrieves LanceDB context, constructs the decision prompt, runs LLM
-    inference, and acts on the result.  Publishes to the audit exchange
-    regardless of outcome.  Acks the message on completion; does not nack
-    on inference failure — the heuristic fallback always produces a valid
-    decision.
+    inference, and acts on the result. Publishes to the audit topic
+    regardless of outcome. The heuristic fallback always produces a valid
+    decision, so inference failures do not cause message loss.
 
     Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag for acking.
-        props: Message properties (unused).
-        body: JSON-encoded verdict bytes from the scorer.result queue.
+        conn: Open STOMP connection for publishing.
+        body: JSON-encoded verdict string or bytes from scorer.result.
     """
-    verdict     = json.loads(body)
-    image_uuid  = verdict.get("image_uuid", "")
-    scores      = verdict.get("scores", {})
+    verdict      = json.loads(body)
+    image_uuid   = verdict.get("image_uuid", "")
+    scores       = verdict.get("scores", {})
     session_uuid = scores.get("session_uuid", "")
-    image_path  = scores.get("image_path")
+    image_path   = scores.get("image_path")
 
     budget  = _get_budget(session_uuid)
     history = session_history(session_uuid)
 
-    # Build prompt embedding for retrieval
     prompt_text = scores.get("prompt", "")
     try:
         embedding = embed_prompt(prompt_text) if prompt_text else []
@@ -457,22 +426,19 @@ def on_verdict(
     except Exception:
         past = []
 
-    # Run LLM inference
     try:
         decision_prompt = build_decision_prompt(verdict, history, past, budget)
         decision = _run_inference(decision_prompt)
     except Exception:
         decision = {}
 
-    # Fall back to heuristics if LLM produces no parseable output
     if not decision or "decision" not in decision:
         decision = _heuristic_decision(verdict, budget)
 
     action = decision.get("decision", "give_up")
 
-    # Execute decision
     if action == "accept":
-        _publish_accepted(ch, image_uuid, image_path, scores)
+        _publish_accepted(conn, image_uuid, image_path, scores)
         print(f"[tactical] accept  {image_uuid}  confidence={decision.get('confidence'):.2f}")
 
     elif action == "retry":
@@ -482,7 +448,7 @@ def on_verdict(
             decision["reasoning"] += " (retry budget exhausted — overriding to give_up)"
             print(f"[tactical] give_up {image_uuid}  (retry budget exhausted)")
         else:
-            new_uuid = _publish_retry(ch, verdict, decision)
+            new_uuid = _publish_retry(conn, verdict, decision)
             _increment_budget(session_uuid, "retries_used")
             print(
                 f"[tactical] retry   {image_uuid} → {new_uuid}  "
@@ -491,14 +457,13 @@ def on_verdict(
 
     elif action == "inpaint":
         if budget["inpaints_used"] >= budget["max_inpaints"]:
-            # Downgrade to retry if inpaint budget gone but retry available
             if budget["retries_used"] < budget["max_retries"]:
                 action = "retry"
                 decision["decision"] = "retry"
                 decision["reasoning"] += " (inpaint budget exhausted — downgrading to retry)"
                 if not decision.get("retry_prompt"):
                     decision["retry_prompt"] = prompt_text
-                new_uuid = _publish_retry(ch, verdict, decision)
+                new_uuid = _publish_retry(conn, verdict, decision)
                 _increment_budget(session_uuid, "retries_used")
                 print(f"[tactical] retry   {image_uuid} → {new_uuid}  (inpaint budget exhausted)")
             else:
@@ -506,7 +471,7 @@ def on_verdict(
                 decision["decision"] = "give_up"
                 print(f"[tactical] give_up {image_uuid}  (all budgets exhausted)")
         else:
-            _publish_inpaint(ch, verdict, decision)
+            _publish_inpaint(conn, verdict, decision)
             _increment_budget(session_uuid, "inpaints_used")
             print(
                 f"[tactical] inpaint {image_uuid}  "
@@ -516,31 +481,52 @@ def on_verdict(
     else:  # give_up
         print(f"[tactical] give_up {image_uuid}  reasoning: {decision.get('reasoning', '')}")
 
-    _publish_decision_log(ch, image_uuid, session_uuid, decision, verdict)
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    _publish_decision_log(conn, image_uuid, session_uuid, decision, verdict)
+
+
+class _Listener(stomp.ConnectionListener):
+    """STOMP message listener for the tactical LLM."""
+
+    def __init__(self, conn: stomp.Connection) -> None:
+        self._conn = conn
+
+    def on_error(self, frame: stomp.utils.Frame) -> None:
+        print(f"[tactical_llm] STOMP error: {frame.body}", file=sys.stderr)
+
+    def on_message(self, frame: stomp.utils.Frame) -> None:
+        msg_id = frame.headers.get("message-id", "")
+        sub_id = frame.headers.get("subscription", "")
+        try:
+            _handle_verdict(self._conn, frame.body)
+        finally:
+            self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:
     """Start the tactical LLM process.
 
-    Connects to RabbitMQ, declares exchanges and queues, and begins
-    consuming verdicts from scorer.result.  Blocks indefinitely.
-    This is the process entry point.
+    Connects to Artemis via STOMP, subscribes to scorer.result, and
+    blocks indefinitely. This is the process entry point.
     """
-    connection = pika.BlockingConnection(
-        pika.URLParameters(_cfg.broker["rabbitmq_url"])
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.set_listener("", _Listener(conn))
+    conn.connect(
+        _STOMP_USER, _STOMP_PASS, wait=True,
+        headers={"client-id": "tactical-llm"},
     )
-    channel = connection.channel()
-    _setup_exchanges(channel)
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(queue="scorer.result", on_message_callback=on_verdict)
+    conn.subscribe(
+        destination="/queue/scorer.result",
+        id="1",
+        ack="client-individual",
+    )
     print("Tactical LLM ready")
     print(f"  model:           {_model_path}")
     print(f"  max_retries:     {_MAX_RETRIES}")
     print(f"  max_inpaints:    {_MAX_INPAINTS}")
     print(f"  accept_vlm_mean: {_VLM_MEAN_MIN}")
     print(f"  accept_clip_min: {_CLIP_MIN}")
-    channel.start_consuming()
+    while conn.is_connected():
+        time.sleep(1)
 
 
 if __name__ == "__main__":

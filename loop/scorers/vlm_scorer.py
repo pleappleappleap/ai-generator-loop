@@ -13,25 +13,25 @@ next inference.
 
 If the VLM produces malformed JSON output, the result is silently
 discarded without publishing — the aggregator will time out the session
-via the Redis TTL.
+via the scorer_session expires_at column.
 
-Exchange subscriptions:
-  scorer.requests [topic] score.*   → on_score_request (via scorer.vlm.requests)
-  scorer.events   [topic] cancel.*  → on_cancel (via scorer.vlm.cancel)
+Address subscriptions (STOMP / Artemis):
+  /topic/scorer.requests  (durable: scorer.vlm.requests)  → score requests
+  /topic/scorer.events    (durable: scorer.vlm.events)    → cancel events
 
-Exchange publications:
-  scorer.results  [topic] routing key: vlm.<image_uuid>
+Address publications (STOMP / Artemis):
+  /queue/aggregator.vlm.queue  → vlm score results
 """
 
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-import pika
-import pika.channel
-import pika.spec
+import stomp
 from llama_cpp import Llama
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -52,6 +52,15 @@ active_jobs: dict[str, threading.Event] = {}
 jobs_lock = threading.Lock()
 """Lock protecting active_jobs for concurrent access."""
 
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
+
+_SUB_REQUESTS = "1"
+_SUB_EVENTS   = "2"
+
 EVAL_PROMPT = """Evaluate this image on the following criteria and return a JSON object:
 {{
   "photorealism": <0-10>,
@@ -68,29 +77,12 @@ Return only valid JSON, no preamble."""
 structure for Python's str.format()."""
 
 
-def setup_exchanges(channel: pika.channel.Channel) -> None:
-    """Declare all RabbitMQ exchanges required by this process.
-
-    Args:
-        channel: An open pika channel.
-    """
-    channel.exchange_declare(
-        exchange="scorer.requests", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.events", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.results", exchange_type="topic", durable=True
-    )
-
-
 def score_worker(
     image_uuid: str,
     image_path: str,
     prompt: str,
     cancel_event: threading.Event,
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
 ) -> None:
     """Score an image using the VLM on a worker thread.
 
@@ -99,18 +91,14 @@ def score_worker(
     exits without publishing. If the accumulated output is not valid
     JSON, discards the result silently.
 
-    Publishes to scorer.results with routing key vlm.<image_uuid>
-    on successful completion.
+    Publishes to /queue/aggregator.vlm.queue on successful completion.
 
     Args:
         image_uuid: UUID of the image being scored.
         image_path: Filesystem path or URL to the image file.
         prompt: The generation prompt used to create the image.
-            Included in the evaluation prompt so the VLM can assess
-            prompt adherence.
-        cancel_event: threading.Event set by on_cancel if the aggregator
-            requests cancellation for this image_uuid.
-        channel: Pika channel for publishing the result.
+        cancel_event: threading.Event set by the cancel handler.
+        conn: STOMP connection for publishing the result (thread-safe).
     """
     try:
         accumulated = ""
@@ -126,10 +114,10 @@ def score_worker(
 
         result: dict[str, Any] = json.loads(accumulated)
         result["image_uuid"] = image_uuid
-        channel.basic_publish(
-            exchange="scorer.results",
-            routing_key=f"vlm.{image_uuid}",
+        conn.send(
+            destination="/queue/aggregator.vlm.queue",
             body=json.dumps(result),
+            headers={"persistent": "true"},
         )
     except json.JSONDecodeError:
         pass
@@ -138,106 +126,72 @@ def score_worker(
             active_jobs.pop(image_uuid, None)
 
 
-def on_score_request(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a score request from the scorer.requests exchange.
+class _Listener(stomp.ConnectionListener):
+    """STOMP message listener for the VLM scorer."""
 
-    Registers the job in active_jobs, spawns a daemon worker thread,
-    and immediately acks the message.
+    def __init__(self, conn: stomp.Connection) -> None:
+        self._conn = conn
 
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to score.
-            image_path (str): Path or URL to the image file.
-            prompt (str): Generation prompt for adherence evaluation.
-    """
-    request = json.loads(body)
-    image_uuid = request["image_uuid"]
-    cancel_event = threading.Event()
-    with jobs_lock:
-        active_jobs[image_uuid] = cancel_event
-    t = threading.Thread(
-        target=score_worker,
-        args=(
-            image_uuid,
-            request["image_path"],
-            request["prompt"],
-            cancel_event,
-            ch,
-        ),
-        daemon=True,
-    )
-    t.start()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_error(self, frame: stomp.utils.Frame) -> None:
+        print(f"[vlm_scorer] STOMP error: {frame.body}", file=sys.stderr)
 
-
-def on_cancel(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a cancel event from the scorer.events exchange.
-
-    Sets the cancel_event for the given image_uuid if a scoring job
-    is currently in flight. The worker thread will check the flag
-    between tokens and call llm.reset() before exiting.
-
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to cancel.
-    """
-    msg = json.loads(body)
-    image_uuid = msg["image_uuid"]
-    with jobs_lock:
-        if image_uuid in active_jobs:
-            active_jobs[image_uuid].set()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_message(self, frame: stomp.utils.Frame) -> None:
+        sub_id = frame.headers.get("subscription", "")
+        msg_id = frame.headers.get("message-id", "")
+        try:
+            if sub_id == _SUB_REQUESTS:
+                request = json.loads(frame.body)
+                image_uuid = request["image_uuid"]
+                cancel_event = threading.Event()
+                with jobs_lock:
+                    active_jobs[image_uuid] = cancel_event
+                t = threading.Thread(
+                    target=score_worker,
+                    args=(image_uuid, request["image_path"], request["prompt"],
+                          cancel_event, self._conn),
+                    daemon=True,
+                )
+                t.start()
+            elif sub_id == _SUB_EVENTS:
+                msg = json.loads(frame.body)
+                image_uuid = msg["image_uuid"]
+                with jobs_lock:
+                    if image_uuid in active_jobs:
+                        active_jobs[image_uuid].set()
+        finally:
+            self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:
     """Start the VLM scorer process.
 
-    Connects to RabbitMQ, declares exchanges and queues, binds queues
-    to exchanges, and begins consuming. Blocks indefinitely.
-    prefetch_count=1 ensures only one VLM inference runs at a time,
-    preventing memory exhaustion from concurrent large model invocations.
+    Connects to Artemis via STOMP, subscribes to scorer.requests and
+    scorer.events with durable subscriptions, and blocks indefinitely.
+    prefetch_count=1 equivalent: the listener thread blocks while the
+    VLM worker runs (only one active subscription message at a time via
+    ack='client-individual').
     """
-    connection = pika.BlockingConnection(pika.URLParameters(_cfg.broker["rabbitmq_url"]))
-    channel = connection.channel()
-    setup_exchanges(channel)
-
-    channel.queue_declare(queue="scorer.vlm.requests", durable=True)
-    channel.queue_bind(
-        exchange="scorer.requests",
-        queue="scorer.vlm.requests",
-        routing_key="score.*",
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.set_listener("", _Listener(conn))
+    conn.connect(
+        _STOMP_USER, _STOMP_PASS, wait=True,
+        headers={"client-id": "vlm-scorer"},
     )
-    channel.queue_declare(queue="scorer.vlm.cancel", durable=True)
-    channel.queue_bind(
-        exchange="scorer.events",
-        queue="scorer.vlm.cancel",
-        routing_key="cancel.*",
+    conn.subscribe(
+        destination="/topic/scorer.requests",
+        id=_SUB_REQUESTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.vlm.requests"},
     )
-    channel.basic_qos(prefetch_count=1)
-    channel.basic_consume(
-        queue="scorer.vlm.requests", on_message_callback=on_score_request
-    )
-    channel.basic_consume(
-        queue="scorer.vlm.cancel", on_message_callback=on_cancel
+    conn.subscribe(
+        destination="/topic/scorer.events",
+        id=_SUB_EVENTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.vlm.events"},
     )
     print("VLM scorer ready")
-    channel.start_consuming()
+    while conn.is_connected():
+        time.sleep(1)
 
 
 if __name__ == "__main__":

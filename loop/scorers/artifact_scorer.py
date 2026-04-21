@@ -9,23 +9,23 @@ requests are processed on worker threads with cancellation support.
 The classifier is fast enough that cancellation is checked only at the
 start and end of inference rather than mid-operation.
 
-Exchange subscriptions:
-  scorer.requests [topic] score.*   → on_score_request (via scorer.artifact.requests)
-  scorer.events   [topic] cancel.*  → on_cancel (via scorer.artifact.cancel)
+Address subscriptions (STOMP / Artemis):
+  /topic/scorer.requests  (durable: scorer.artifact.requests)  → score requests
+  /topic/scorer.events    (durable: scorer.artifact.events)    → cancel events
 
-Exchange publications:
-  scorer.results  [topic] routing key: artifact.<image_uuid>
+Address publications (STOMP / Artemis):
+  /queue/aggregator.artifact.queue  → artifact score results
 """
 
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
-import pika
-import pika.channel
-import pika.spec
+import stomp
 from transformers import pipeline
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -44,29 +44,18 @@ active_jobs: dict[str, threading.Event] = {}
 jobs_lock = threading.Lock()
 """Lock protecting active_jobs for concurrent access."""
 
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
 
-def setup_exchanges(channel: pika.channel.Channel) -> None:
-    """Declare all RabbitMQ exchanges required by this process.
-
-    Args:
-        channel: An open pika channel.
-    """
-    channel.exchange_declare(
-        exchange="scorer.requests", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.events", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.results", exchange_type="topic", durable=True
-    )
+_SUB_REQUESTS = "1"
+_SUB_EVENTS   = "2"
 
 
 def score(image_path: str) -> dict[str, Any]:
     """Compute AI artifact confidence score synchronously.
-
-    Convenience function for testing and direct use. Does not support
-    cancellation. For pipeline use, prefer score_worker.
 
     Args:
         image_path: Filesystem path or URL to the image file.
@@ -75,8 +64,7 @@ def score(image_path: str) -> dict[str, Any]:
         Dict with key:
             ai_confidence (float): Probability the image is AI-generated.
                 Range 0.0–1.0. Lower values indicate more photorealistic
-                output. Returns 0.0 if the "artificial" label is absent
-                from the classifier output.
+                output.
     """
     results = detector(image_path)
     ai_confidence = next(
@@ -89,7 +77,7 @@ def score_worker(
     image_uuid: str,
     image_path: str,
     cancel_event: threading.Event,
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
 ) -> None:
     """Score an image on a worker thread with cancellation support.
 
@@ -100,9 +88,8 @@ def score_worker(
     Args:
         image_uuid: UUID of the image being scored.
         image_path: Filesystem path or URL to the image file.
-        cancel_event: threading.Event set by on_cancel if the aggregator
-            requests cancellation for this image_uuid.
-        channel: Pika channel for publishing the result.
+        cancel_event: threading.Event set by the cancel handler.
+        conn: STOMP connection for publishing the result (thread-safe).
     """
     try:
         if cancel_event.is_set():
@@ -114,109 +101,81 @@ def score_worker(
             (r["score"] for r in results if r["label"] == "artificial"), 0.0
         )
         result = {
-            "image_uuid": image_uuid,
+            "image_uuid":    image_uuid,
             "ai_confidence": ai_confidence,
         }
-        channel.basic_publish(
-            exchange="scorer.results",
-            routing_key=f"artifact.{image_uuid}",
+        conn.send(
+            destination="/queue/aggregator.artifact.queue",
             body=json.dumps(result),
+            headers={"persistent": "true"},
         )
     finally:
         with jobs_lock:
             active_jobs.pop(image_uuid, None)
 
 
-def on_score_request(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a score request from the scorer.requests exchange.
+class _Listener(stomp.ConnectionListener):
+    """STOMP message listener for the artifact scorer."""
 
-    Registers the job in active_jobs, spawns a daemon worker thread,
-    and immediately acks the message.
+    def __init__(self, conn: stomp.Connection) -> None:
+        self._conn = conn
 
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to score.
-            image_path (str): Path or URL to the image file.
-    """
-    request = json.loads(body)
-    image_uuid = request["image_uuid"]
-    cancel_event = threading.Event()
-    with jobs_lock:
-        active_jobs[image_uuid] = cancel_event
-    t = threading.Thread(
-        target=score_worker,
-        args=(image_uuid, request["image_path"], cancel_event, ch),
-        daemon=True,
-    )
-    t.start()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_error(self, frame: stomp.utils.Frame) -> None:
+        print(f"[artifact_scorer] STOMP error: {frame.body}", file=sys.stderr)
 
-
-def on_cancel(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a cancel event from the scorer.events exchange.
-
-    Sets the cancel_event for the given image_uuid if a scoring job
-    is currently in flight.
-
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to cancel.
-    """
-    msg = json.loads(body)
-    image_uuid = msg["image_uuid"]
-    with jobs_lock:
-        if image_uuid in active_jobs:
-            active_jobs[image_uuid].set()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_message(self, frame: stomp.utils.Frame) -> None:
+        sub_id = frame.headers.get("subscription", "")
+        msg_id = frame.headers.get("message-id", "")
+        try:
+            if sub_id == _SUB_REQUESTS:
+                request = json.loads(frame.body)
+                image_uuid = request["image_uuid"]
+                cancel_event = threading.Event()
+                with jobs_lock:
+                    active_jobs[image_uuid] = cancel_event
+                t = threading.Thread(
+                    target=score_worker,
+                    args=(image_uuid, request["image_path"], cancel_event, self._conn),
+                    daemon=True,
+                )
+                t.start()
+            elif sub_id == _SUB_EVENTS:
+                msg = json.loads(frame.body)
+                image_uuid = msg["image_uuid"]
+                with jobs_lock:
+                    if image_uuid in active_jobs:
+                        active_jobs[image_uuid].set()
+        finally:
+            self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:
     """Start the artifact scorer process.
 
-    Connects to RabbitMQ, declares exchanges and queues, binds queues
-    to exchanges, and begins consuming. Blocks indefinitely.
+    Connects to Artemis via STOMP, subscribes to scorer.requests and
+    scorer.events with durable subscriptions, and blocks indefinitely.
     """
-    connection = pika.BlockingConnection(pika.URLParameters(_cfg.broker["rabbitmq_url"]))
-    channel = connection.channel()
-    setup_exchanges(channel)
-
-    channel.queue_declare(queue="scorer.artifact.requests", durable=True)
-    channel.queue_bind(
-        exchange="scorer.requests",
-        queue="scorer.artifact.requests",
-        routing_key="score.*",
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.set_listener("", _Listener(conn))
+    conn.connect(
+        _STOMP_USER, _STOMP_PASS, wait=True,
+        headers={"client-id": "artifact-scorer"},
     )
-    channel.queue_declare(queue="scorer.artifact.cancel", durable=True)
-    channel.queue_bind(
-        exchange="scorer.events",
-        queue="scorer.artifact.cancel",
-        routing_key="cancel.*",
+    conn.subscribe(
+        destination="/topic/scorer.requests",
+        id=_SUB_REQUESTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.artifact.requests"},
     )
-    channel.basic_qos(prefetch_count=2)
-    channel.basic_consume(
-        queue="scorer.artifact.requests", on_message_callback=on_score_request
-    )
-    channel.basic_consume(
-        queue="scorer.artifact.cancel", on_message_callback=on_cancel
+    conn.subscribe(
+        destination="/topic/scorer.events",
+        id=_SUB_EVENTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.artifact.events"},
     )
     print("Artifact scorer ready")
-    channel.start_consuming()
+    while conn.is_connected():
+        time.sleep(1)
 
 
 if __name__ == "__main__":

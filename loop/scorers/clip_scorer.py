@@ -13,24 +13,24 @@ to threading.Event cancel flags. When a cancel event arrives for an
 in-flight image, the flag is set and the worker thread exits at the
 next cancellation checkpoint without publishing a result.
 
-Exchange subscriptions:
-  scorer.requests [topic] score.*   → on_score_request (via scorer.clip.requests)
-  scorer.events   [topic] cancel.*  → on_cancel (via scorer.clip.cancel)
+Address subscriptions (STOMP / Artemis):
+  /topic/scorer.requests  (durable: scorer.clip.requests)  → score requests
+  /topic/scorer.events    (durable: scorer.clip.events)    → cancel events
 
-Exchange publications:
-  scorer.results  [topic] routing key: clip.<image_uuid>
+Address publications (STOMP / Artemis):
+  /queue/aggregator.clip.queue  → clip score results
 """
 
 import json
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import open_clip
-import pika
-import pika.channel
-import pika.spec
+import stomp
 import torch
 from PIL import Image
 
@@ -45,8 +45,6 @@ model, _, preprocess = open_clip.create_model_and_transforms(
 )
 tokenizer = open_clip.get_tokenizer(_cfg.models["clip"]["name"])
 
-# Select GPU device from config. On macOS with an eGPU, MPS uses
-# Metal's system-default device (typically the eGPU when connected).
 _backend = _cfg.gpu["backend"]
 if _backend == "mps":
     _device = torch.device("mps")
@@ -63,30 +61,18 @@ active_jobs: dict[str, threading.Event] = {}
 jobs_lock = threading.Lock()
 """Lock protecting active_jobs for concurrent access."""
 
+_u = urlparse(_cfg.broker["stomp_url"])
+_STOMP_HOST: str = _u.hostname or "localhost"
+_STOMP_PORT: int = _u.port or 61613
+_STOMP_USER: str = _u.username or ""
+_STOMP_PASS: str = _u.password or ""
 
-def setup_exchanges(channel: pika.channel.Channel) -> None:
-    """Declare all RabbitMQ exchanges required by this process.
-
-    Args:
-        channel: An open pika channel.
-    """
-    channel.exchange_declare(
-        exchange="scorer.requests", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.events", exchange_type="topic", durable=True
-    )
-    channel.exchange_declare(
-        exchange="scorer.results", exchange_type="topic", durable=True
-    )
+_SUB_REQUESTS = "1"
+_SUB_EVENTS   = "2"
 
 
 def score(image_path: str, prompt: str) -> dict[str, Any]:
     """Compute CLIP similarity score and image embedding synchronously.
-
-    Convenience function for testing and direct use. Does not support
-    cancellation. For pipeline use, prefer score_worker which runs on
-    a thread with cancel support.
 
     Args:
         image_path: Filesystem path or URL to the image file.
@@ -116,7 +102,7 @@ def score_worker(
     image_path: str,
     prompt: str,
     cancel_event: threading.Event,
-    channel: pika.channel.Channel,
+    conn: stomp.Connection,
 ) -> None:
     """Score an image on a worker thread with cancellation support.
 
@@ -124,16 +110,15 @@ def score_worker(
     If cancelled, exits without publishing a result. Removes the job
     from active_jobs on exit regardless of outcome.
 
-    Publishes to scorer.results with routing key clip.<image_uuid>
-    on successful completion.
+    Publishes to /queue/aggregator.clip.queue on successful completion.
 
     Args:
         image_uuid: UUID of the image being scored.
         image_path: Filesystem path or URL to the image file.
         prompt: Text prompt to compare against the image.
-        cancel_event: threading.Event set by on_cancel if the aggregator
-            requests cancellation for this image_uuid.
-        channel: Pika channel for publishing the result.
+        cancel_event: threading.Event set by the cancel handler if the
+            aggregator requests cancellation for this image_uuid.
+        conn: STOMP connection for publishing the result (thread-safe).
     """
     try:
         image = preprocess(Image.open(image_path)).unsqueeze(0).to(_device)
@@ -152,117 +137,83 @@ def score_worker(
             similarity = (image_features @ text_features.T).item()
             image_embedding = image_features.squeeze().tolist()
         result = {
-            "image_uuid": image_uuid,
-            "clip_score": similarity,
+            "image_uuid":      image_uuid,
+            "clip_score":      similarity,
             "image_embedding": image_embedding,
         }
-        channel.basic_publish(
-            exchange="scorer.results",
-            routing_key=f"clip.{image_uuid}",
+        conn.send(
+            destination="/queue/aggregator.clip.queue",
             body=json.dumps(result),
+            headers={"persistent": "true"},
         )
     finally:
         with jobs_lock:
             active_jobs.pop(image_uuid, None)
 
 
-def on_score_request(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a score request from the scorer.requests exchange.
+class _Listener(stomp.ConnectionListener):
+    """STOMP message listener for the CLIP scorer."""
 
-    Registers the job in active_jobs, spawns a daemon worker thread,
-    and immediately acks the message. The worker thread runs
-    asynchronously and publishes its result independently.
+    def __init__(self, conn: stomp.Connection) -> None:
+        self._conn = conn
 
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to score.
-            image_path (str): Path or URL to the image file.
-            prompt (str): Text prompt for similarity comparison.
-    """
-    request = json.loads(body)
-    image_uuid = request["image_uuid"]
-    cancel_event = threading.Event()
-    with jobs_lock:
-        active_jobs[image_uuid] = cancel_event
-    t = threading.Thread(
-        target=score_worker,
-        args=(image_uuid, request["image_path"], request["prompt"], cancel_event, ch),
-        daemon=True,
-    )
-    t.start()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_error(self, frame: stomp.utils.Frame) -> None:
+        print(f"[clip_scorer] STOMP error: {frame.body}", file=sys.stderr)
 
-
-def on_cancel(
-    ch: pika.channel.Channel,
-    method: pika.spec.Basic.Deliver,
-    props: pika.spec.BasicProperties,
-    body: bytes,
-) -> None:
-    """Handle a cancel event from the scorer.events exchange.
-
-    Sets the cancel_event for the given image_uuid if a scoring job
-    is currently in flight. The worker thread will check the flag at
-    the next cancellation checkpoint and exit without publishing.
-
-    If no active job exists for the image_uuid, the message is silently
-    acked — the job may have completed before the cancel arrived.
-
-    Args:
-        ch: The pika channel the message arrived on.
-        method: Delivery metadata including delivery tag.
-        props: Message properties (unused).
-        body: JSON-encoded bytes. Expected keys:
-            image_uuid (str): UUID of the image to cancel.
-    """
-    msg = json.loads(body)
-    image_uuid = msg["image_uuid"]
-    with jobs_lock:
-        if image_uuid in active_jobs:
-            active_jobs[image_uuid].set()
-    ch.basic_ack(delivery_tag=method.delivery_tag)
+    def on_message(self, frame: stomp.utils.Frame) -> None:
+        sub_id = frame.headers.get("subscription", "")
+        msg_id = frame.headers.get("message-id", "")
+        try:
+            if sub_id == _SUB_REQUESTS:
+                request = json.loads(frame.body)
+                image_uuid = request["image_uuid"]
+                cancel_event = threading.Event()
+                with jobs_lock:
+                    active_jobs[image_uuid] = cancel_event
+                t = threading.Thread(
+                    target=score_worker,
+                    args=(image_uuid, request["image_path"], request["prompt"],
+                          cancel_event, self._conn),
+                    daemon=True,
+                )
+                t.start()
+            elif sub_id == _SUB_EVENTS:
+                msg = json.loads(frame.body)
+                image_uuid = msg["image_uuid"]
+                with jobs_lock:
+                    if image_uuid in active_jobs:
+                        active_jobs[image_uuid].set()
+        finally:
+            self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:
     """Start the CLIP scorer process.
 
-    Connects to RabbitMQ, declares exchanges and queues, binds queues
-    to exchanges, and begins consuming scoring and cancel requests.
-    Blocks indefinitely. This is the process entry point.
+    Connects to Artemis via STOMP, subscribes to scorer.requests and
+    scorer.events with durable subscriptions, and blocks indefinitely.
     """
-    connection = pika.BlockingConnection(pika.URLParameters(_cfg.broker["rabbitmq_url"]))
-    channel = connection.channel()
-    setup_exchanges(channel)
-
-    channel.queue_declare(queue="scorer.clip.requests", durable=True)
-    channel.queue_bind(
-        exchange="scorer.requests",
-        queue="scorer.clip.requests",
-        routing_key="score.*",
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn.set_listener("", _Listener(conn))
+    conn.connect(
+        _STOMP_USER, _STOMP_PASS, wait=True,
+        headers={"client-id": "clip-scorer"},
     )
-    channel.queue_declare(queue="scorer.clip.cancel", durable=True)
-    channel.queue_bind(
-        exchange="scorer.events",
-        queue="scorer.clip.cancel",
-        routing_key="cancel.*",
+    conn.subscribe(
+        destination="/topic/scorer.requests",
+        id=_SUB_REQUESTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.clip.requests"},
     )
-    channel.basic_qos(prefetch_count=4)
-    channel.basic_consume(
-        queue="scorer.clip.requests", on_message_callback=on_score_request
-    )
-    channel.basic_consume(
-        queue="scorer.clip.cancel", on_message_callback=on_cancel
+    conn.subscribe(
+        destination="/topic/scorer.events",
+        id=_SUB_EVENTS,
+        ack="client-individual",
+        headers={"durable-subscription-name": "scorer.clip.events"},
     )
     print("CLIP scorer ready")
-    channel.start_consuming()
+    while conn.is_connected():
+        time.sleep(1)
 
 
 if __name__ == "__main__":
