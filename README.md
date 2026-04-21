@@ -23,16 +23,35 @@ patterns across sessions and improve generation quality over time.
 ~/ai-image/
 ├── ARCHITECTURE.tex        LaTeX source for system architecture document
 ├── ARCHITECTURE.pdf        Rendered architecture document (make doc)
-├── MESSAGES.md             Message schema contracts for all queues and exchanges
 ├── Makefile                Top-level build orchestration
-├── lancedb_schema.py       LanceDB table schema definitions (Pydantic models)
-├── lancedb_manager.py      LanceDB write manager (shared across loop and strategic LLM)
-├── loop/                   Generation loop subsystem
+├── config.yaml             Single source of truth for all configuration
+├── config.yaml.default     Template for config.yaml
+├── config.py               Python config loader (serde_yaml equivalent)
+├── lancedb_schema.py       LanceDB table schema definitions (Pydantic)
+├── menuconfig.py           Interactive TUI config editor
+├── check_env.py            Dependency and environment checker
+├── loop/
 │   ├── ComfyUI/            Stable Diffusion XL generation engine
-│   ├── comfyui_worker.py   RabbitMQ consumer wrapping the ComfyUI API
-│   ├── scorers/            Scorer processes, router, and aggregator
-│   ├── start_broker.sh     Starts RabbitMQ and Redis
-│   └── start_loop.sh       Starts all loop infrastructure
+│   ├── comfyui_worker.py   STOMP consumer wrapping the ComfyUI API
+│   ├── monitor.py          Dead-letter consumer for pipeline.dead queue
+│   ├── start_broker.sh     Starts ActiveMQ Artemis
+│   ├── start_loop.sh       Starts all loop infrastructure
+│   └── scorers/
+│       ├── clip_scorer.py       CLIP semantic similarity scorer (STOMP)
+│       ├── artifact_scorer.py   AI artifact detection scorer (STOMP)
+│       ├── vlm_scorer.py        VLM holistic image evaluator (STOMP)
+│       ├── Cargo.toml           Rust workspace root
+│       ├── router/              Generation event fanout (AMQP 1.0)
+│       ├── aggregator/          Scorer result collection and verdict (AMQP 1.0)
+│       ├── coordinator/         XA coordinator + Python budget API (Unix socket)
+│       ├── db/                  Shared SQLite helpers (WAL, schema, cleanup)
+│       └── lancedb_manager/     Terminal event LanceDB writer (AMQP 1.0)
+├── tactical-llm/
+│   ├── session.py          Session entry point (STOMP publish + budget init)
+│   ├── tactical_llm.py     Tactical decision engine (STOMP consumer)
+│   ├── prompts.py          System prompt and decision prompt construction
+│   ├── retrieval.py        LanceDB retrieval helpers (session history + ANN)
+│   └── tests/              pytest test suite
 ├── lancedb/                LanceDB persistent storage (sessions, loop tables)
 └── strategic-llm/          Strategic LLM subsystem (planned)
 ```
@@ -40,62 +59,101 @@ patterns across sessions and improve generation quality over time.
 ## Prerequisites
 
 ### Hardware
-- Apple Silicon Mac with at least 64GB unified memory (96GB recommended)
-- ~100GB free disk space for models and generation output
+- Apple Silicon Mac with at least 64 GB unified memory (96 GB recommended)
+- ~100 GB free disk space for models and generation output
 
 ### Software
 - macOS 14 or later
 - Homebrew
 - Python 3.11+
 - Rust (installed via rustup)
+- yq (`brew install yq`) — YAML config reader for shell scripts
+- ActiveMQ Artemis — message broker (AMQP 1.0 + STOMP)
 - MacTeX (for architecture documentation: `brew install --cask mactex`)
 
+### Python packages
+- Root venv: `lancedb`, `open_clip_torch`, `torch`, `stomp.py`
+- Scorers venv: `transformers`, `llama-cpp-python`, `stomp.py`, `open_clip_torch`
+
 ### Models
-See loop/README.md for the full model download procedure.
+See `loop/README.md` for the full model download procedure.
+
+## Configuration
+
+All configuration lives in `config.yaml`. Copy the default template and edit:
+
+```bash
+cp config.yaml.default config.yaml
+python menuconfig.py   # interactive TUI editor
+```
+
+Key sections:
+
+```yaml
+broker:
+  rabbitmq_url: amqp://user:pass@localhost:5672   # Artemis AMQP 1.0 URL
+  stomp_url:    stomp://user:pass@localhost:61613  # Artemis STOMP URL
+  artemis_data: /path/to/artemis-broker           # broker instance directory
+
+database:
+  path:                  pipeline.db
+  busy_timeout_ms:       5000
+  cleanup_interval_secs: 300
+
+thresholds:
+  clip:               0.25
+  artifact:           0.50
+  score_timeout_secs: 60
+```
 
 ## Quick Start
 
 ```bash
-# Build Rust components
-cd ~/ai-image
-make build
+# 1. Build Rust binaries
+cd ~/ai-image/loop/scorers
+cargo build --release
 
-# Start all infrastructure
+# 2. Start the Artemis broker
+~/ai-image/loop/start_broker.sh
+
+# 3. Start the pipeline
 ~/ai-image/loop/start_loop.sh
 
-# Submit a generation request
-python -c "
-import pika, json, uuid
-conn = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-ch = conn.channel()
-ch.queue_declare(queue='loop.request', durable=True)
-ch.basic_publish(
-    exchange='',
-    routing_key='loop.request',
-    body=json.dumps({
-        'image_uuid': str(uuid.uuid4()),
-        'session_uuid': str(uuid.uuid4()),
-        'sequence_number': 1,
-        'workflow_path': 'loop/ComfyUI/workflows/two_character_base.json',
-        'prompt': 'two people in a park, photorealistic',
-        'workflow_params': {
-            'checkpoint': 'absolute_reality_xl.safetensors',
-            'steps': 30, 'cfg': 7.0, 'sampler': 'dpm_2m_karras'
-        }
-    })
-)
-conn.close()
-print('Submitted')
-"
+# 4. Submit a generation session
+cd ~/ai-image
+python tactical-llm/session.py \
+  --prompt "two people in a park, photorealistic, golden hour" \
+  --max-retries 3 \
+  --monitor
 ```
 
-Monitor progress at http://localhost:15672 (guest/guest).
+The `--monitor` flag polls the coordinator for budget state and prints
+progress until the session resolves.
+
+## Running Tests
+
+### Rust (coordinator)
+```bash
+cd loop/scorers
+cargo test -p coordinator
+```
+
+### Python (tactical-llm)
+```bash
+cd tactical-llm
+python -m pytest tests/ -v
+```
+
+## Monitoring
+
+- Artemis management console: `http://localhost:8161` (admin/admin by default)
+- Dead-letter queue: `pipeline.dead` — start `python loop/monitor.py` to watch
 
 ## Documentation
 
 ```bash
-make doc        # renders ARCHITECTURE.pdf and all component docs
+make doc        # renders ARCHITECTURE.pdf
 ```
 
-See ARCHITECTURE.pdf for full system design.
-See MESSAGES.md for message schema contracts.
+See `ARCHITECTURE.pdf` for full system design including component diagram,
+address topology, SQLite schema, XA 2PC protocol, and memory budget.
