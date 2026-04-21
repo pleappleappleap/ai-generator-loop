@@ -208,7 +208,7 @@ snapshot_download(repo_id='umm-maybe/AI-image-detector', \
 	else \
 	  curl -L --progress-bar \
 	    -o "$$SCORERS_DIR/models/tactical/$$TACTICAL_FILE" \
-	    "https://huggingface.co/bartowski/Qwen3-72B-GGUF/resolve/main/$$TACTICAL_FILE"; \
+	    "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/$$TACTICAL_FILE"; \
 	fi; \
 	\
 	echo ""; \

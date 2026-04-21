@@ -226,8 +226,8 @@ by a `<think>` token in the prompt.
 ```bash
 mkdir -p ~/ai-image/loop/scorers/models/tactical
 # ~43 GB download
-curl -L -o ~/ai-image/loop/scorers/models/tactical/Qwen3-72B-Q4_K_M.gguf \
-  "https://huggingface.co/bartowski/Qwen3-72B-GGUF/resolve/main/Qwen3-72B-Q4_K_M.gguf"
+curl -L -o ~/ai-image/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
+  "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/Qwen3-72B-abliterated-Q4_K_M.gguf"
 ```
 
 Verify the filenames match `config.yaml.default` → `models.vlm.filename` and

@@ -74,7 +74,7 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    filename: Qwen3-72B-Q4_K_M.gguf
+    filename: Qwen3-72B-abliterated-Q4_K_M.gguf
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # token limit for non-thinking responses
