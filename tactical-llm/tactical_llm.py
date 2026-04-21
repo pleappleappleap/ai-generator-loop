@@ -81,8 +81,9 @@ llm = Llama(
     verbose=False,
 )
 
-_TEMPERATURE: float = _model_cfg.get("temperature", 0.1)
-_MAX_TOKENS: int    = _model_cfg.get("max_tokens", 512)
+_TEMPERATURE: float     = _model_cfg.get("temperature",          0.1)
+_MAX_TOKENS: int        = _model_cfg.get("max_tokens",            512)
+_MAX_TOKENS_THINKING: int = _model_cfg.get("max_tokens_thinking", 4096)
 
 _MAX_RETRIES:  int   = _decision_cfg.get("max_retries",  3)
 _MAX_INPAINTS: int   = _decision_cfg.get("max_inpaints", 2)
@@ -171,32 +172,49 @@ def _increment_budget(session_uuid: str, field: str) -> None:
 def _run_inference(decision_prompt: str) -> dict:
     """Run a single tactical inference and return the parsed JSON decision.
 
-    Calls the loaded ``llm`` with the system prompt and decision prompt.
-    Strips any accidental markdown fencing before JSON parsing. Returns an
-    empty dict on parse failure — the caller handles the fallback.
+    Detects whether the prompt ends with ``/think`` (Qwen3 chain-of-thought
+    enabled) and selects the appropriate token limit. Strips the
+    ``<think>…</think>`` reasoning block before JSON parsing if present.
+    Strips any accidental markdown fencing. Returns an empty dict on parse
+    failure — the caller falls back to :func:`_heuristic_decision`.
 
     Args:
         decision_prompt: The fully-constructed decision prompt from
-            :func:`~prompts.build_decision_prompt`.
+            :func:`~prompts.build_decision_prompt`. Must end with either
+            ``/think`` or ``/no_think``.
 
     Returns:
         Parsed decision dict, or empty dict on JSON parse failure.
     """
+    thinking = decision_prompt.rstrip().endswith("/think")
+    max_tok  = _MAX_TOKENS_THINKING if thinking else _MAX_TOKENS
+
     result = llm.create_chat_completion(
         messages=[
-            {"role": "system",  "content": SYSTEM_PROMPT},
-            {"role": "user",    "content": decision_prompt},
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user",   "content": decision_prompt},
         ],
         temperature=_TEMPERATURE,
-        max_tokens=_MAX_TOKENS,
+        max_tokens=max_tok,
     )
     raw = result["choices"][0]["message"]["content"].strip()
-    # Strip accidental markdown fences
+
+    # Strip Qwen3 chain-of-thought block when thinking mode was enabled.
+    if "<think>" in raw:
+        end = raw.find("</think>")
+        if end == -1:
+            # Unclosed block — model exhausted its token budget during
+            # reasoning without producing JSON. Nothing to parse.
+            return {}
+        raw = raw[end + len("</think>"):].strip()
+
+    # Strip accidental markdown fences.
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
     raw = raw.strip()
+
     try:
         return json.loads(raw)
     except json.JSONDecodeError:

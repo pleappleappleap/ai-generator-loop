@@ -62,11 +62,12 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    filename: Qwen2.5-14B-Instruct-Q5_K_M.gguf
-    n_gpu_layers: -1  # -1 = all on GPU
+    filename: Qwen3-72B-Q4_K_M.gguf
+    n_gpu_layers: -1  # -1 = all on GPU/unified memory; reduce if VRAM limited
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
-    max_tokens: 512
+    max_tokens: 512              # token limit for non-thinking responses
+    max_tokens_thinking: 4096   # token limit when Qwen3 chain-of-thought is enabled
   decisions:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session

@@ -1,0 +1,8 @@
+lancedb
+open_clip_torch
+torch
+stomp.py
+pydantic
+rich
+huggingface_hub
+yq

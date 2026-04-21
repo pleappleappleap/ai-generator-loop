@@ -1,0 +1,14 @@
+# Scorers + tactical-llm venv
+# llama-cpp-python is intentionally excluded — it requires platform-specific
+# CMAKE_ARGS for GPU support and is installed separately by `make prereqs-python`.
+lancedb
+stomp.py
+open_clip_torch
+torch
+torchvision
+transformers
+accelerate
+pillow
+huggingface_hub
+pytest
+pytest-mock
