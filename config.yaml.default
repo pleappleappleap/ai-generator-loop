@@ -39,7 +39,7 @@ compute:
   clip_scorer:
     backend: auto
   artifact_scorer:
-    backend: cpu        # fast enough on CPU; frees GPU memory for generation
+    backend: auto
   vlm_scorer:
     backend: auto
     n_gpu_layers: -1
