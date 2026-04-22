@@ -37,14 +37,15 @@ the code.
 
 Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 
-1. **Hardware** — Apple Silicon Mac, 64 GB+ unified memory (96 GB recommended),
-   ~100 GB free disk.
+1. **Hardware** — 64 GB+ unified memory (96 GB recommended), ~100 GB free disk.
 2. **System software** — Python 3.11, Rust (rustup), yq, ActiveMQ Artemis.
-3. **Two Python venvs** — root venv (LanceDB, CLIP, stomp.py) and scorers venv
-   (transformers, llama-cpp-python, stomp.py).
-4. **Models** — SDXL checkpoint into ComfyUI; artifact detector from
-   HuggingFace; VLM (Qwen2.5-VL-7B Q5\_K\_M) and tactical LLM
-   (Qwen2.5-14B-Instruct Q5\_K\_M) as GGUF files.
+   Run `make prereqs-system` to install automatically.
+3. **Three Python venvs** — root (LanceDB, CLIP, stomp.py), scorers
+   (transformers, llama-cpp-python, stomp.py), and ComfyUI. Run
+   `make prereqs-python` to create all three.
+4. **Models** — SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
+   (Qwen2.5-VL-7B Q5\_K\_M), and tactical LLM (Qwen3-72B Q4\_K\_M) via
+   `make models` or `python model_picker.py`.
 5. **Broker** — create an Artemis instance, enable STOMP (61613) and AMQP 1.0
    (5672) acceptors.
 6. **Configuration** — `cp config.yaml.default config.yaml`, then
@@ -107,6 +108,7 @@ progress until the session resolves.
 ├── config.py               Python config loader
 ├── lancedb_schema.py       LanceDB table definitions (Pydantic)
 ├── menuconfig.py           Interactive TUI configuration editor
+├── model_picker.py         HuggingFace model browser (curses TUI or URL mode)
 ├── check_env.py            Dependency and environment checker
 ├── loop/
 │   ├── comfyui_worker.py

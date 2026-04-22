@@ -234,6 +234,27 @@ Verify the filenames match `config.yaml.default` → `models.vlm.filename` and
 `tactical.model.filename`, or update `config.yaml` to match what you
 downloaded.
 
+### Automated download and model selection
+
+`make models` downloads the artifact detector, VLM, and tactical LLM
+automatically using filenames from `config.yaml` (or `config.yaml.default`):
+
+```bash
+make models
+```
+
+To browse HuggingFace and select a different model interactively, use the
+model picker. Without an API token it prints browse URLs and drop locations;
+with `HF_TOKEN` set it launches a curses TUI for searching and selecting:
+
+```bash
+source venv/bin/activate
+python model_picker.py                   # no token: URLs + drop paths
+HF_TOKEN=hf_... python model_picker.py   # with token: interactive TUI
+```
+
+The TUI writes the chosen filename directly to `config.yaml`.
+
 ---
 
 ## 7. ComfyUI
@@ -298,7 +319,7 @@ database:
 
 tactical:
   model:
-    filename: Qwen2.5-14B-Instruct-Q5_K_M.gguf   # must match downloaded file
+    filename: Qwen3-72B-abliterated-Q4_K_M.gguf   # must match downloaded file
 ```
 
 Run the environment checker to verify all dependencies are resolvable:
