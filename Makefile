@@ -1,5 +1,5 @@
 .PHONY: all lint typecheck test build format doc clean config check \
-        prereqs prereqs-system prereqs-python models
+        prereqs prereqs-system prereqs-python models models-pick
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
@@ -229,3 +229,9 @@ snapshot_download(repo_id='umm-maybe/AI-image-detector', \
 	echo ""; \
 	echo "==> Models done."; \
 	echo "    SDXL checkpoint: place manually in loop/ComfyUI/models/checkpoints/"
+
+# Interactive HuggingFace model browser.
+# Without HF_TOKEN: prints browse URLs and drop locations.
+# With HF_TOKEN: launches curses TUI for searching and selecting models.
+models-pick: venv/.installed
+	venv/bin/python model_picker.py

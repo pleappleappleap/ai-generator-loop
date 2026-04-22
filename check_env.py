@@ -13,6 +13,8 @@ Exit codes:
 
 import importlib
 import os
+import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -58,7 +60,7 @@ def _tcp_open(host: str, port: int) -> bool:
 
 
 def _cmd_exists(cmd: str) -> bool:
-    return subprocess.run(["which", cmd], capture_output=True).returncode == 0
+    return shutil.which(cmd) is not None
 
 
 def _try_import(name: str) -> bool:
@@ -67,6 +69,13 @@ def _try_import(name: str) -> bool:
         return True
     except ImportError:
         return False
+
+
+def _resolve(value: str, default: Path) -> Path:
+    """Return *default* when value is 'auto', otherwise expand the path."""
+    if value == "auto":
+        return default
+    return Path(value).expanduser()
 
 
 def main() -> None:
@@ -86,11 +95,18 @@ def main() -> None:
     with open(CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
 
-    paths     = cfg.get("paths", {})
-    models    = cfg.get("models", {})
-    gpu_cfg   = cfg.get("gpu", {})
-    broker    = cfg.get("broker", {})
-    system    = cfg.get("system", {})
+    paths    = cfg.get("paths", {})
+    models   = cfg.get("models", {})
+    compute  = cfg.get("compute", {})
+    broker   = cfg.get("broker", {})
+    system   = cfg.get("system", {})
+    tactical = cfg.get("tactical", {})
+
+    # Resolve auto paths
+    root_path    = _resolve(paths.get("root", "auto"),    REPO_ROOT)
+    scorers_root = _resolve(paths.get("scorers", "auto"), REPO_ROOT / "loop" / "scorers")
+    comfyui_root = _resolve(paths.get("comfyui", "auto"), REPO_ROOT / "loop" / "ComfyUI")
+    lancedb_path = _resolve(paths.get("lancedb", "auto"), REPO_ROOT / "lancedb")
 
     # ── Python ────────────────────────────────────────────────────────
     print(f"\n{_BOLD}Python:{_RESET}")
@@ -100,112 +116,152 @@ def main() -> None:
 
     for pkg, import_name in [
         ("pyyaml",        "yaml"),
-        ("pika",          "pika"),
+        ("stomp.py",      "stomp"),
         ("torch",         "torch"),
         ("open_clip",     "open_clip"),
         ("Pillow",        "PIL"),
         ("transformers",  "transformers"),
         ("lancedb",       "lancedb"),
-        ("redis",         "redis"),
         ("llama_cpp",     "llama_cpp"),
+        ("huggingface_hub", "huggingface_hub"),
     ]:
         check(f"import {pkg}", _try_import(import_name))
 
-    # ── GPU ───────────────────────────────────────────────────────────
-    print(f"\n{_BOLD}GPU:{_RESET}")
-    backend = gpu_cfg.get("backend", "unknown")
-    check(f"Configured backend: {backend}", True)
+    # ── Compute backends ──────────────────────────────────────────────
+    print(f"\n{_BOLD}Compute backends:{_RESET}")
+    for component, cfg_key in [
+        ("comfyui",        "comfyui"),
+        ("clip_scorer",    "clip_scorer"),
+        ("artifact_scorer","artifact_scorer"),
+        ("vlm_scorer",     "vlm_scorer"),
+        ("tactical_llm",   "tactical_llm"),
+    ]:
+        comp_cfg = compute.get(cfg_key, {})
+        backend  = comp_cfg.get("backend", "auto")
 
-    if backend == "mps":
+        # Resolve auto
+        resolved = backend
+        if backend == "auto":
+            if platform.system() == "Darwin":
+                resolved = "mps"
+            elif shutil.which("nvcc") or shutil.which("nvidia-smi"):
+                resolved = "cuda"
+            elif shutil.which("rocm-smi"):
+                resolved = "rocm"
+            else:
+                resolved = "cpu"
+
+        label = f"{component:<20} backend={backend}"
+        if resolved != backend:
+            label += f" → {resolved}"
+        check(label, True)
+
+    # Verify resolved backend is usable
+    sample = compute.get("clip_scorer", {}).get("backend", "auto")
+    if sample == "auto":
+        sample = "mps" if platform.system() == "Darwin" else "cpu"
+    if sample == "mps":
         try:
             import torch
-            avail = torch.backends.mps.is_available()
-            check("MPS available (torch.backends.mps.is_available)", avail)
+            check("MPS available  (torch.backends.mps.is_available)",
+                  torch.backends.mps.is_available())
         except ImportError:
             check("MPS check", False, detail="torch not installed")
-    elif backend in ("cuda", "rocm"):
+    elif sample in ("cuda", "rocm"):
         try:
             import torch
-            avail = torch.cuda.is_available()
-            check(f"{backend.upper()} available (torch.cuda.is_available)", avail)
+            check(f"{sample.upper()} available  (torch.cuda.is_available)",
+                  torch.cuda.is_available())
         except ImportError:
-            check(f"{backend.upper()} check", False, detail="torch not installed")
-    else:
-        check("CPU mode — no GPU check needed", True)
+            check(f"{sample.upper()} check", False, detail="torch not installed")
 
     # ── Services ──────────────────────────────────────────────────────
     print(f"\n{_BOLD}Services:{_RESET}")
+    check("Artemis AMQP reachable   (localhost:5672)",
+          _tcp_open("127.0.0.1", 5672))
+    check("Artemis STOMP reachable  (localhost:61613)",
+          _tcp_open("127.0.0.1", 61613))
+
     artemis_console = broker.get("artemis_console", "http://localhost:8161")
     try:
         console_port = int(artemis_console.rstrip("/").split(":")[-1])
     except ValueError:
         console_port = 8161
-    check("Artemis AMQP reachable  (localhost:5672)",
-          _tcp_open("127.0.0.1", 5672))
     check(f"Artemis console reachable  ({artemis_console})",
           _tcp_open("127.0.0.1", console_port),
           warn_only=True)
-    check("Redis reachable  (localhost:6379)",
-          _tcp_open("127.0.0.1", 6379))
 
     comfyui_url = broker.get("comfyui_url", "http://127.0.0.1:8188")
     try:
-        port = int(comfyui_url.rstrip("/").split(":")[-1])
+        comfyui_port = int(comfyui_url.rstrip("/").split(":")[-1])
     except ValueError:
-        port = 8188
+        comfyui_port = 8188
     check(f"ComfyUI reachable  ({comfyui_url})",
-          _tcp_open("127.0.0.1", port),
+          _tcp_open("127.0.0.1", comfyui_port),
           warn_only=True)
 
     # ── System binaries ───────────────────────────────────────────────
     print(f"\n{_BOLD}System binaries:{_RESET}")
     pkg_mgr = system.get("package_manager", "")
     prefix  = system.get("homebrew_prefix", "")
-    if pkg_mgr == "homebrew" and prefix:
+    if pkg_mgr == "homebrew" and prefix and prefix != "auto":
         os.environ["PATH"] = (
             f"{prefix}/bin:{prefix}/sbin:" + os.environ.get("PATH", "")
         )
-    check("rabbitmq-server", _cmd_exists("rabbitmq-server"))
-    check("redis-server",    _cmd_exists("redis-server"))
-    check("yq",              _cmd_exists("yq"))
+    check("yq",    _cmd_exists("yq"))
+    check("cargo", _cmd_exists("cargo"))
+    check("java",  _cmd_exists("java"),
+          detail="required by ActiveMQ Artemis")
 
     # ── Rust binaries ─────────────────────────────────────────────────
     print(f"\n{_BOLD}Rust binaries:{_RESET}")
-    scorers_root = Path(paths.get("scorers", "")).expanduser()
-    router_bin   = scorers_root / "router"      / "target" / "release" / "router"
-    agg_bin      = scorers_root / "aggregator"  / "target" / "release" / "aggregator"
-    check("router binary",     router_bin.exists(),  detail=str(router_bin))
-    check("aggregator binary", agg_bin.exists(),     detail=str(agg_bin))
+    release_dir = scorers_root / "target" / "release"
+    for name in ("router", "aggregator", "coordinator", "lancedb_manager"):
+        bin_path = release_dir / name
+        check(f"{name} binary", bin_path.exists(),
+              detail=f"run: cd loop/scorers && cargo build --release" if not bin_path.exists() else str(bin_path))
 
     # ── Model files ───────────────────────────────────────────────────
     print(f"\n{_BOLD}Models:{_RESET}")
-    vlm = models.get("vlm", {})
-    vlm_dir  = Path(vlm.get("dir", "")).expanduser()
-    vlm_file = vlm_dir / vlm.get("filename", "")
-    check(f"VLM model  ({vlm.get('filename', '')})",
+
+    vlm_cfg  = models.get("vlm", {})
+    vlm_dir  = _resolve(vlm_cfg.get("dir", "auto"), scorers_root / "models" / "vlm")
+    vlm_file = vlm_dir / vlm_cfg.get("filename", "")
+    check(f"VLM model  ({vlm_cfg.get('filename', '?')})",
           vlm_file.exists(), detail=str(vlm_file))
 
-    art_dir = Path(models.get("artifact_detector", {}).get("dir", "")).expanduser()
-    check("Artifact detector model dir",
-          art_dir.exists(), detail=str(art_dir))
+    art_cfg = models.get("artifact_detector", {})
+    art_dir = _resolve(art_cfg.get("dir", "auto"),
+                       scorers_root / "models" / "artifact-detector")
+    check("Artifact detector dir", art_dir.exists(), detail=str(art_dir))
+
+    tac_model_cfg = tactical.get("model", {})
+    tac_dir  = _resolve(tac_model_cfg.get("dir", "auto"),
+                        scorers_root / "models" / "tactical")
+    tac_file = tac_dir / tac_model_cfg.get("filename", "")
+    check(f"Tactical LLM  ({tac_model_cfg.get('filename', '?')})",
+          tac_file.exists(), detail=str(tac_file))
 
     # ── Virtual environments ──────────────────────────────────────────
     print(f"\n{_BOLD}Virtual environments:{_RESET}")
-    comfyui_root = Path(paths.get("comfyui", "")).expanduser()
-    check("ComfyUI venv",
-          (comfyui_root / "venv").exists(),
-          detail=str(comfyui_root / "venv"))
+    check("Root venv",
+          (REPO_ROOT / "venv").exists(),
+          detail=str(REPO_ROOT / "venv"))
     check("Scorers venv",
           (scorers_root / "venv").exists(),
           detail=str(scorers_root / "venv"))
+    check("ComfyUI venv",
+          (comfyui_root / "venv").exists(),
+          detail=str(comfyui_root / "venv"))
 
-    # ── LanceDB store ─────────────────────────────────────────────────
+    # ── Storage ───────────────────────────────────────────────────────
     print(f"\n{_BOLD}Storage:{_RESET}")
-    lancedb_path = Path(paths.get("lancedb", "")).expanduser()
-    check("LanceDB directory exists",
-          lancedb_path.exists(),
-          detail=str(lancedb_path),
-          warn_only=True)
+    check("LanceDB directory exists", lancedb_path.exists(),
+          detail=str(lancedb_path), warn_only=True)
+    db_path_cfg = cfg.get("database", {}).get("path", "auto")
+    db_path = _resolve(db_path_cfg, REPO_ROOT / "pipeline.db")
+    check("SQLite database exists", db_path.exists(),
+          detail=str(db_path), warn_only=True)
 
     # ── Summary ───────────────────────────────────────────────────────
     print()
