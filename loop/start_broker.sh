@@ -20,3 +20,6 @@ ARTEMIS_DATA=$(yq '.broker.artemis_data' "$CFG")
 
 "$ARTEMIS_DATA/bin/artemis" run &
 redis-server --daemonize yes
+
+_HOST=$(hostname 2>/dev/null || echo "localhost")
+echo "==> Artemis console: http://${_HOST}:8161  (admin / admin)"

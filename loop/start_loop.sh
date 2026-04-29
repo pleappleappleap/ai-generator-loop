@@ -71,4 +71,5 @@ echo ""
 echo "  LanceDB: $LANCEDB"
 echo "    tables: sessions, loop"
 echo ""
-echo "Management UI: http://localhost:8161 (Hawtio — admin/admin)"
+_HOST=$(hostname 2>/dev/null || echo "localhost")
+echo "Management UI: http://${_HOST}:8161 (Hawtio — admin/admin)"
