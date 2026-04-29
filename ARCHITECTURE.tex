@@ -42,7 +42,7 @@
 }
 
 \title{\textbf{AI Image Generation Pipeline}\\[0.5em]\large Technical Manual}
-\author{Srið{}ar Ayengar}
+\author{Sridhar Ayengar}
 \date{\today}
 
 \tikzset{
@@ -95,52 +95,63 @@ The pipeline is designed around three principles:
 
 \subsection{Hardware Requirements}
 
+The pipeline supports three GPU backends. Choose the row that matches your
+hardware:
+
 \begin{center}
-\begin{tabular}{lll}
+\begin{tabular}{llll}
 \toprule
-\textbf{Requirement} & \textbf{Minimum} & \textbf{Recommended} \\
+\textbf{Platform} & \textbf{Requirement} & \textbf{Minimum} & \textbf{Recommended} \\
 \midrule
-Chip            & Apple Silicon (M1/M2/M3) & M3 Ultra \\
-Unified Memory  & 64\,GB                   & 96\,GB \\
-Free Disk       & 100\,GB                  & 200\,GB \\
+Apple Silicon (MPS) & Chip            & M1 / M2 / M3       & M3 Ultra \\
+                    & Unified memory  & 64\,GB             & 96\,GB \\
+\midrule
+NVIDIA (CUDA)       & GPU VRAM        & 24\,GB             & 48\,GB+ \\
+                    & System RAM      & 32\,GB             & 64\,GB \\
+\midrule
+AMD (ROCm)          & GPU VRAM        & 24\,GB             & 48\,GB+ \\
+                    & System RAM      & 32\,GB             & 64\,GB \\
+\midrule
+CPU only            & System RAM      & 64\,GB             & 128\,GB+ \\
+                    & \multicolumn{3}{l}{\textit{Functional but very slow — expect hours per image.}} \\
+\midrule
+All platforms       & Free disk       & 100\,GB            & 200\,GB \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The pipeline holds approximately 44\,GB of models in unified memory
-simultaneously. A 64\,GB machine can run all components except the tactical
-LLM concurrently; with 96\,GB all components run at full quality settings.
+The pipeline holds approximately 44\,GB of model weights in GPU memory
+simultaneously (ComfyUI + SDXL $\approx$14\,GB; tactical LLM $\approx$43\,GB;
+scorers $\approx$8\,GB). On discrete-GPU systems the tactical LLM can be
+offloaded partially to CPU via the \texttt{n\_gpu\_layers} config key.
 See Section~\ref{sec:memory} for the per-component breakdown.
 
 \subsection{System Software}
 
-\subsubsection{Xcode Command Line Tools}
-
-\begin{lstlisting}[style=shell]
-xcode-select --install
-\end{lstlisting}
-
-macOS 14 (Sonoma) or later is required for the Metal Performance Shaders
-used by the ML models.
-
-\subsubsection{Homebrew}
-
-\begin{lstlisting}[style=shell]
-/bin/bash -c "$(curl -fsSL \
-  https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-\end{lstlisting}
+A POSIX-compatible shell (\texttt{/bin/sh}) and the following tools are
+required on all platforms. On Windows, Git Bash or WSL satisfies the shell
+requirement.
 
 \subsubsection{Python 3.11}
 
-\begin{lstlisting}[style=shell]
-brew install python@3.11
-\end{lstlisting}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Platform} & \textbf{Command} \\
+\midrule
+macOS (Homebrew)  & \texttt{brew install python@3.11} \\
+Debian / Ubuntu   & \texttt{sudo apt install python3.11 python3.11-venv} \\
+Fedora / RHEL     & \texttt{sudo dnf install python3.11} \\
+Windows (winget)  & \texttt{winget install Python.Python.3.11} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsubsection{Rust}
 
 \begin{lstlisting}[style=shell]
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
+. ~/.cargo/env
 \end{lstlisting}
 
 \subsubsection{yq}
@@ -148,17 +159,35 @@ source ~/.cargo/env
 \texttt{yq} is a YAML query tool used by the pipeline shell scripts to read
 values from \texttt{config.yaml} without a Python interpreter.
 
-\begin{lstlisting}[style=shell]
-brew install yq
-\end{lstlisting}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Platform} & \textbf{Command} \\
+\midrule
+macOS (Homebrew)       & \texttt{brew install yq} \\
+Linux (snap)           & \texttt{snap install yq} \\
+Linux (manual)         & Download binary from \url{https://github.com/mikefarah/yq/releases} \\
+Windows (Chocolatey)   & \texttt{choco install yq} \\
+Windows (Scoop)        & \texttt{scoop install yq} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
-\subsubsection{MacTeX (optional)}
+\subsubsection{TeX distribution (optional)}
 
 Required only for rendering this document.
 
-\begin{lstlisting}[style=shell]
-brew install --cask mactex
-\end{lstlisting}
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Platform} & \textbf{Command} \\
+\midrule
+macOS   & \texttt{brew install --cask mactex} \\
+Linux   & \texttt{sudo apt install texlive-full}\ \ (or equivalent) \\
+Windows & Install MiKTeX from \url{https://miktex.org/download} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
 \subsection{ActiveMQ Artemis}
 
@@ -181,7 +210,7 @@ The pipeline scripts resolve the broker data directory from
 \texttt{auto}, resolving to \texttt{\{repo\_root\}/loop/artemis-broker}).
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image
+cd $AI_IMAGE_ROOT
 /opt/artemis/bin/artemis create loop/artemis-broker \
   --user admin \
   --password admin \
@@ -212,53 +241,73 @@ git clone <repo-url> ~/ai-image
 cd ~/ai-image
 \end{lstlisting}
 
-All subsequent paths use \texttt{\textasciitilde/ai-image} as the repository
-root. The \texttt{auto} path resolution in \texttt{config.yaml} is relative
-to the location of that file, so moving the repository requires updating
-\texttt{config.yaml}.
+Export \texttt{AI\_IMAGE\_ROOT} so the pipeline scripts can locate
+\texttt{config.yaml} from any working directory. Add this to your shell
+profile (\texttt{.bashrc}, \texttt{.profile}, or equivalent):
+
+\begin{lstlisting}[style=shell]
+export AI_IMAGE_ROOT=~/ai-image
+\end{lstlisting}
+
+The pipeline shell scripts determine the repository root using the first of
+the following that is set: (1)~a path passed as the first command-line
+argument, (2)~the \texttt{AI\_IMAGE\_ROOT} environment variable, or
+(3)~the current working directory if it contains \texttt{config.yaml} and a
+\texttt{loop/} subdirectory.
 
 \subsection{Python Environments}
 
-There are two separate virtual environments:
+There are three separate virtual environments:
 
 \begin{itemize}
-  \item \textbf{Root venv} — used by \texttt{session.py},
-        \texttt{tactical\_llm.py}, and utilities.
-  \item \textbf{Scorers venv} — used by the three scorer processes, which
-        share large ML libraries.
+  \item \textbf{Root venv} (\texttt{venv/}) — used by
+        \texttt{comfyui\_worker.py}, \texttt{session.py}, and utilities.
+  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}) — used by the
+        three scorer processes and \texttt{tactical\_llm.py}, which share
+        large ML libraries.
+  \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}) — used
+        exclusively by ComfyUI and managed by \texttt{make prereqs}.
 \end{itemize}
 
 \subsubsection{Root environment}
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image
+cd $AI_IMAGE_ROOT
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install lancedb open_clip_torch torch stomp.py pydantic rich
+pip install -r requirements.txt
 deactivate
 \end{lstlisting}
 
 \subsubsection{Scorers environment}
 
+Install \texttt{llama-cpp-python} with the correct GPU backend flag for your
+platform before installing the remaining requirements:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{Platform} & \textbf{CMAKE\_ARGS} \\
+\midrule
+macOS (Metal / MPS)  & \texttt{CMAKE\_ARGS="-DLLAMA\_METAL=on"} \\
+NVIDIA (CUDA)        & \texttt{CMAKE\_ARGS="-DGGML\_CUDA=on"} \\
+AMD (ROCm / HIP)     & \texttt{CMAKE\_ARGS="-DGGML\_HIPBLAS=on"} \\
+CPU only             & (no flag required) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/loop/scorers
+cd $AI_IMAGE_ROOT/loop/scorers
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
 
-# STOMP client and CLIP
-pip install stomp.py open_clip_torch torch torchvision
+# Set CMAKE_ARGS per the table above, then:
+pip install llama-cpp-python --no-binary llama-cpp-python
 
-# Artifact detector
-pip install transformers accelerate pillow
-
-# VLM and tactical LLM (llama.cpp with Metal)
-CMAKE_ARGS="-DLLAMA_METAL=on" \
-  pip install llama-cpp-python --no-binary llama-cpp-python
-
-# Test dependencies
-pip install pytest pytest-mock
+pip install -r requirements.txt
 deactivate
 \end{lstlisting}
 
@@ -266,7 +315,7 @@ The helper script \texttt{loop/scorers/activate.sh} activates this
 environment from any working directory:
 
 \begin{lstlisting}[style=shell]
-source ~/ai-image/loop/scorers/activate.sh
+. $AI_IMAGE_ROOT/loop/scorers/activate.sh
 \end{lstlisting}
 
 \subsection{Model Downloads}
@@ -287,7 +336,7 @@ workflow default.
 \subsubsection{AI artifact detector}
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/loop/scorers
+cd $AI_IMAGE_ROOT/loop/scorers
 source venv/bin/activate
 python - <<'EOF'
 from huggingface_hub import snapshot_download
@@ -301,8 +350,8 @@ EOF
 \subsubsection{VLM scorer (Qwen2.5-VL-7B)}
 
 \begin{lstlisting}[style=shell]
-mkdir -p ~/ai-image/loop/scorers/models/vlm
-curl -L -o ~/ai-image/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
+mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/vlm
+curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/\
 Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 \end{lstlisting}
@@ -317,8 +366,8 @@ directly for clear-cut cases, controlled by a \texttt{<think>} token in
 the prompt.
 
 \begin{lstlisting}[style=shell]
-mkdir -p ~/ai-image/loop/scorers/models/tactical
-curl -L -o ~/ai-image/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
+mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/tactical
+curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/\
 Qwen3-72B-abliterated-Q4_K_M.gguf"
 \end{lstlisting}
@@ -336,10 +385,10 @@ installs its dependencies into a dedicated venv at
 
 \begin{lstlisting}[style=shell]
 git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-rsync -a --ignore-existing /tmp/_comfyui_clone/ ~/ai-image/loop/ComfyUI/
+cp -rn /tmp/_comfyui_clone/. $AI_IMAGE_ROOT/loop/ComfyUI/
 rm -rf /tmp/_comfyui_clone
-python3.11 -m venv ~/ai-image/loop/ComfyUI/venv
-~/ai-image/loop/ComfyUI/venv/bin/pip install -r ~/ai-image/loop/ComfyUI/requirements.txt
+python3.11 -m venv $AI_IMAGE_ROOT/loop/ComfyUI/venv
+$AI_IMAGE_ROOT/loop/ComfyUI/venv/bin/pip install -r $AI_IMAGE_ROOT/loop/ComfyUI/requirements.txt
 \end{lstlisting}
 
 \subsubsection{Custom nodes}
@@ -373,7 +422,7 @@ v0.1.0-alpha/groundingdino_swint_ogc.pth"
 Copy the default template and open the interactive editor:
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image
+cd $AI_IMAGE_ROOT
 cp config.yaml.default config.yaml
 python menuconfig.py
 \end{lstlisting}
@@ -381,6 +430,11 @@ python menuconfig.py
 At minimum, verify these keys in \texttt{config.yaml}:
 
 \begin{lstlisting}[style=yaml]
+compute:
+  comfyui:
+    backend: auto      # auto | mps | cuda | rocm | cpu
+    device_id:         # optional: integer index for eGPU or multi-GPU systems
+
 broker:
   stomp_url:    stomp://admin:admin@localhost:61613
   artemis_data: auto   # resolves to {repo_root}/loop/artemis-broker
@@ -393,8 +447,13 @@ models:
     filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
 tactical:
   model:
-    filename: Qwen2.5-14B-Instruct-Q5_K_M.gguf
+    filename: Qwen3-72B-abliterated-Q4_K_M.gguf
 \end{lstlisting}
+
+The \texttt{backend: auto} setting detects the platform at startup:
+macOS~$\to$~MPS; NVIDIA present~$\to$~CUDA; AMD ROCm present~$\to$~ROCm;
+otherwise CPU. Set \texttt{device\_id} to an integer device index when
+multiple GPUs are present (e.g.\ an eGPU over Thunderbolt).
 
 Run the environment checker to verify all dependencies are resolvable before
 starting the pipeline:
@@ -406,7 +465,7 @@ python check_env.py
 \subsection{Building the Rust Binaries}
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/loop/scorers
+cd $AI_IMAGE_ROOT/loop/scorers
 cargo build --release
 \end{lstlisting}
 
@@ -816,44 +875,52 @@ to \texttt{pipeline.dead} and logs all arriving messages for operator review.
 
 \subsection{Starting the Pipeline}
 
-Start components in the order shown; the broker must be running before any
-pipeline process connects.
+Ensure \texttt{AI\_IMAGE\_ROOT} is exported in your shell environment (see
+Section~2.4). Start components in the order shown; the broker must be
+running before any pipeline process connects.
 
 \begin{lstlisting}[style=shell]
-# 1. Start the Artemis broker
-~/ai-image/loop/start_broker.sh
+# 1. Start the Artemis broker and Redis
+$AI_IMAGE_ROOT/loop/start_broker.sh
 
 # 2. Start all pipeline components
-~/ai-image/loop/start_loop.sh
+$AI_IMAGE_ROOT/loop/start_loop.sh
 \end{lstlisting}
 
 \texttt{start\_loop.sh} launches all Rust binaries and Python processes in
-the background. Individual components can also be started manually for
-development or debugging:
+the background. Each script accepts \texttt{AI\_IMAGE\_ROOT} as an optional
+first argument, falling back to the environment variable, then to
+\texttt{\$PWD} if it looks like the repository root.
+
+Individual components can also be started manually for development or
+debugging:
 
 \begin{lstlisting}[style=shell]
-# Rust binaries (from loop/scorers/)
-AI_IMAGE_ROOT=~/ai-image ./target/release/coordinator
-AI_IMAGE_ROOT=~/ai-image ./target/release/router
-AI_IMAGE_ROOT=~/ai-image ./target/release/aggregator
-AI_IMAGE_ROOT=~/ai-image ./target/release/lancedb_manager
+# Rust binaries
+$AI_IMAGE_ROOT/loop/scorers/target/release/coordinator
+$AI_IMAGE_ROOT/loop/scorers/target/release/router
+$AI_IMAGE_ROOT/loop/scorers/target/release/aggregator
+$AI_IMAGE_ROOT/loop/scorers/target/release/lancedb_manager
 
-# Python components (activate the appropriate venv first)
-source ~/ai-image/loop/scorers/activate.sh
-python ~/ai-image/loop/comfyui_worker.py
-python ~/ai-image/loop/scorers/clip_scorer.py
-python ~/ai-image/loop/scorers/artifact_scorer.py
-python ~/ai-image/loop/scorers/vlm_scorer.py
+# ComfyUI
+$AI_IMAGE_ROOT/loop/ComfyUI/launch.sh
 
-source ~/ai-image/venv/bin/activate
-python ~/ai-image/tactical-llm/tactical_llm.py
-python ~/ai-image/loop/monitor.py
+# Python components — root venv
+source $AI_IMAGE_ROOT/venv/bin/activate
+PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/comfyui_worker.py
+
+# Python components — scorers venv
+. $AI_IMAGE_ROOT/loop/scorers/activate.sh
+python $AI_IMAGE_ROOT/loop/scorers/clip_scorer.py
+python $AI_IMAGE_ROOT/loop/scorers/artifact_scorer.py
+python $AI_IMAGE_ROOT/loop/scorers/vlm_scorer.py
+PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/tactical-llm/tactical_llm.py
 \end{lstlisting}
 
 \subsection{Submitting a Session}
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image
+cd $AI_IMAGE_ROOT
 source venv/bin/activate
 python tactical-llm/session.py \
   --prompt "two people in a park, photorealistic, golden hour" \
@@ -868,6 +935,8 @@ give\_up, or budget exhausted).
 
 \subsection{Stopping the Pipeline}
 
+On macOS and Linux:
+
 \begin{lstlisting}[style=shell]
 pkill -f comfyui_worker
 pkill -f clip_scorer
@@ -879,7 +948,18 @@ pkill -f router
 pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
-"$ARTEMIS_DATA/bin/artemis" stop
+"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis" stop
+\end{lstlisting}
+
+On Windows (Git Bash), use \texttt{taskkill} in place of \texttt{pkill}:
+
+\begin{lstlisting}[style=shell]
+taskkill /f /fi "IMAGENAME eq python.exe"
+taskkill /f /fi "IMAGENAME eq coordinator.exe"
+taskkill /f /fi "IMAGENAME eq router.exe"
+taskkill /f /fi "IMAGENAME eq aggregator.exe"
+taskkill /f /fi "IMAGENAME eq lancedb_manager.exe"
+"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis.cmd" stop
 \end{lstlisting}
 
 \subsection{Monitoring}
@@ -902,8 +982,8 @@ Verify on first start that the following addresses appear under
 \subsubsection{Dead-letter monitor}
 
 \begin{lstlisting}[style=shell]
-source ~/ai-image/venv/bin/activate
-python ~/ai-image/loop/monitor.py
+source $AI_IMAGE_ROOT/venv/bin/activate
+python $AI_IMAGE_ROOT/loop/monitor.py
 \end{lstlisting}
 
 Every message appearing in monitor output indicates a processing failure.
@@ -915,6 +995,11 @@ header), message ID, and the full JSON body. Messages remain in
 \section{Memory Budget}
 \label{sec:memory}
 % ============================================================
+
+The figures below reflect full-GPU-resident operation. On discrete-GPU
+systems with insufficient VRAM, the tactical LLM layers can be partially
+offloaded to CPU via \texttt{tactical.model.n\_gpu\_layers} in
+\texttt{config.yaml} (\texttt{-1} = all layers on GPU).
 
 \begin{center}
 \begin{tabular}{lll}
@@ -932,19 +1017,18 @@ coordinator (Rust)        & XA coordinator + Python budget API   & $\sim$5\,MB \
 lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
 Tactical LLM — Qwen3-72B (Q4\_K\_M) & Prompt revision and routing  & $\sim$43\,GB \\
 ActiveMQ Artemis          & Message broker                       & $\sim$300\,MB \\
-OS/UI                     & System overhead                      & $\sim$12\,GB \\
+OS / system overhead      &                                      & $\sim$2\,GB \\
 \midrule
-\textbf{Total}            &                                      & $\sim$78\,GB \\
+\textbf{Total (GPU)}      &                                      & $\sim$66\,GB \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Approximately 18\,GB headroom remains in a 96\,GB unified memory system.
 The VLM scorer and tactical LLM do not run simultaneously in the hot path
 (VLM scoring completes before tactical inference begins), but both processes
-remain resident in memory throughout the session. macOS will compress cold
-regions under pressure; sustained memory usage above $\sim$90\,GB may
-introduce latency spikes.
+remain resident in GPU memory throughout the session. Systems with less than
+66\,GB of combined GPU memory should offload tactical LLM layers to CPU;
+expect latency increases proportional to the number of offloaded layers.
 
 % ============================================================
 \section{Threshold Calibration}
@@ -986,7 +1070,7 @@ budget operations, and \texttt{SessionInit} idempotency. Tests run against
 an in-memory SQLite database.
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/loop/scorers
+cd $AI_IMAGE_ROOT/loop/scorers
 cargo test -p coordinator
 \end{lstlisting}
 
@@ -1004,7 +1088,7 @@ helpers, heuristic decision logic, budget enforcement, and the full
 (LanceDB, Unix socket, STOMP) are mocked.
 
 \begin{lstlisting}[style=shell]
-cd ~/ai-image/tactical-llm
+cd $AI_IMAGE_ROOT/tactical-llm
 source ../venv/bin/activate
 python -m pytest tests/ -v
 \end{lstlisting}

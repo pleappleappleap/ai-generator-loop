@@ -24,7 +24,7 @@ path.
 Generate it from source:
 
 ```bash
-make doc          # requires MacTeX: brew install --cask mactex
+make doc          # requires a TeX distribution (MacTeX, TeX Live, MiKTeX)
 open ARCHITECTURE.pdf
 ```
 
@@ -37,7 +37,7 @@ the code.
 
 Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 
-1. **Hardware** — 64 GB+ unified memory (96 GB recommended), ~100 GB free disk.
+1. **Hardware** — 64 GB+ GPU memory (Apple unified memory, CUDA VRAM, or system RAM for CPU), ~100 GB free disk.
 2. **System software** — Python 3.11, Rust (rustup), yq, ActiveMQ Artemis.
    Run `make prereqs-system` to install automatically.
 3. **Three Python venvs** — root (LanceDB, CLIP, stomp.py), scorers
