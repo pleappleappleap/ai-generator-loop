@@ -1,8 +1,12 @@
 import json
+import tempfile
 import threading
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 from tests.conftest import mock_channel, mock_method, mock_props
+
+_FAKE_IMAGE = str(Path(tempfile.gettempdir()) / "test.png")
 
 
 def test_score_returns_clip_score_and_embedding():
@@ -18,7 +22,7 @@ def test_score_returns_clip_score_and_embedding():
         mock_preprocess.return_value.unsqueeze.return_value = torch.ones(1, 3, 224, 224)
         mock_tokenizer.return_value = torch.ones(1, 77, dtype=torch.long)
         from clip_scorer import score
-        result = score("/tmp/test.png", "test prompt")
+        result = score(_FAKE_IMAGE, "test prompt")
         assert "clip_score" in result
         assert "image_embedding" in result
         assert isinstance(result["clip_score"], float)

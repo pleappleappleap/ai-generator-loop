@@ -3,20 +3,20 @@
 all: lint typecheck test build
 
 lint:
-	source venv/bin/activate && ruff check .
+	. venv/bin/activate &&ruff check .
 	$(MAKE) -C router lint
 	$(MAKE) -C aggregator lint
 
 typecheck:
-	source venv/bin/activate && pyright .
+	. venv/bin/activate &&pyright .
 
 test:
-	source venv/bin/activate && pytest tests/ -v
+	. venv/bin/activate &&pytest tests/ -v
 	$(MAKE) -C router test
 	$(MAKE) -C aggregator test
 
 format:
-	source venv/bin/activate && ruff format .
+	. venv/bin/activate &&ruff format .
 	$(MAKE) -C router format
 	$(MAKE) -C aggregator format
 
@@ -25,7 +25,7 @@ build:
 	$(MAKE) -C aggregator build
 
 doc:
-	source venv/bin/activate && pdoc \
+	. venv/bin/activate &&pdoc \
 		clip_scorer \
 		artifact_scorer \
 		vlm_scorer \

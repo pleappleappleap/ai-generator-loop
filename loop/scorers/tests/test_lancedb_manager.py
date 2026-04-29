@@ -1,4 +1,6 @@
 import json
+import tempfile
+from pathlib import Path
 from unittest.mock import patch
 import pytest
 from tests.conftest import fake_redis, mock_channel, mock_method, mock_props
@@ -9,7 +11,7 @@ SCORE_TIMEOUT = 120
 BASE_SESSION = {
     "image_uuid": IMAGE_UUID, "session_uuid": "test-session-uuid",
     "sequence_number": 1, "prompt": "test prompt",
-    "workflow_path": "/tmp/workflow.json", "workflow_params": {},
+    "workflow_path": str(Path(tempfile.gettempdir()) / "workflow.json"), "workflow_params": {},
     "clip": {"image_uuid": IMAGE_UUID, "clip_score": 0.8, "image_embedding": [0.0] * 512},
     "artifact": {"image_uuid": IMAGE_UUID, "ai_confidence": 0.2},
     "vlm": {"image_uuid": IMAGE_UUID, "photorealism": 8, "anatomical_coherence": 7,

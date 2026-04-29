@@ -85,7 +85,7 @@ def _detect_homebrew_prefix() -> str:
     for candidate in ("/opt/homebrew", "/usr/local"):
         if Path(candidate, "bin", "brew").exists():
             return candidate
-    return "/opt/homebrew"
+    return ""
 
 
 def _build_defaults() -> dict:

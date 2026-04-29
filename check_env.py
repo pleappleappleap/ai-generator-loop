@@ -165,8 +165,8 @@ def main() -> None:
             import torch
             check("MPS available  (torch.backends.mps.is_available)",
                   torch.backends.mps.is_available())
-        except ImportError:
-            check("MPS check", False, detail="torch not installed")
+        except (ImportError, AttributeError):
+            check("MPS check", False, detail="torch not installed or MPS not supported on this platform")
     elif sample in ("cuda", "rocm"):
         try:
             import torch
