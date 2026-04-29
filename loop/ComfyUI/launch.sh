@@ -42,5 +42,11 @@ case "$BACKEND" in
     *)    EXTRA_ARGS="" ;;
 esac
 
+# When binding to all interfaces, print the real hostname so the URL is useful.
+if [ "$LISTEN" = "0.0.0.0" ]; then
+    _HOST=$(hostname 2>/dev/null || echo "localhost")
+    echo "==> ComfyUI available at: http://${_HOST}:8188"
+fi
+
 # shellcheck disable=SC2086
 python main.py --listen "$LISTEN" $EXTRA_ARGS
