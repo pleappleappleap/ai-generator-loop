@@ -38,7 +38,12 @@ clean:
 # Interactive configuration TUI (menuconfig-style).
 # Generates config.yaml and config.sh from auto-detected defaults.
 config:
-	@command -v yq >/dev/null 2>&1 || { echo "yq not found — brew install yq"; exit 1; }
+	@command -v yq >/dev/null 2>&1 || { \
+		echo "yq not found. Install it:"; \
+		echo "  macOS:  brew install yq"; \
+		echo "  Linux:  snap install yq  (or see https://github.com/mikefarah/yq/releases)"; \
+		exit 1; \
+	}
 	python3 menuconfig.py
 
 # Validate the environment against the current config.yaml.
@@ -153,7 +158,7 @@ venv/.installed: requirements.txt
 loop/ComfyUI/main.py:
 	@echo "==> Cloning ComfyUI..."
 	git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-	rsync -a --ignore-existing /tmp/_comfyui_clone/ loop/ComfyUI/
+	cp -rn /tmp/_comfyui_clone/. loop/ComfyUI/
 	rm -rf /tmp/_comfyui_clone
 
 loop/ComfyUI/venv/.installed: loop/ComfyUI/main.py
@@ -177,11 +182,11 @@ loop/scorers/venv/.installed: loop/scorers/requirements.txt
 	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
 	elif command -v nvcc >/dev/null 2>&1; then \
 	  echo "    NVIDIA CUDA detected — building with CUDA support."; \
-	  CMAKE_ARGS="-DLLAMA_CUDA=on" \
+	  CMAKE_ARGS="-DGGML_CUDA=on" \
 	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
 	elif command -v rocm-smi >/dev/null 2>&1; then \
 	  echo "    AMD ROCm detected — building with HIP support."; \
-	  CMAKE_ARGS="-DLLAMA_HIPBLAS=on" \
+	  CMAKE_ARGS="-DGGML_HIPBLAS=on" \
 	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
 	else \
 	  echo "    No GPU detected — installing CPU-only llama-cpp-python."; \
