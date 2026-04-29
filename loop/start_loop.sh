@@ -1,11 +1,20 @@
-#!/bin/bash
-AI_IMAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+#!/bin/sh
+AI_IMAGE_ROOT="${1:-${AI_IMAGE_ROOT:-}}"
+if [ -z "$AI_IMAGE_ROOT" ] && [ -f "$PWD/config.yaml" ] && [ -d "$PWD/loop" ]; then
+    AI_IMAGE_ROOT="$PWD"
+fi
+: "${AI_IMAGE_ROOT:?provide root as \$1, set AI_IMAGE_ROOT in environment, or run from the repo root}"
 CFG="$AI_IMAGE_ROOT/config.yaml"
 export AI_IMAGE_ROOT
 
 COMFYUI=$(yq '.paths.comfyui' "$CFG")
 SCORERS=$(yq '.paths.scorers' "$CFG")
 LANCEDB=$(yq '.paths.lancedb' "$CFG")
+
+# Resolve "auto" path values (mirrors check_env.py _resolve logic)
+[ "$COMFYUI" = "auto" ] && COMFYUI="$AI_IMAGE_ROOT/loop/ComfyUI"
+[ "$SCORERS" = "auto" ] && SCORERS="$AI_IMAGE_ROOT/loop/scorers"
+[ "$LANCEDB" = "auto" ] && LANCEDB="$AI_IMAGE_ROOT/lancedb"
 
 # Start infrastructure
 "$AI_IMAGE_ROOT/loop/start_broker.sh"
@@ -15,10 +24,10 @@ sleep 3
 "$COMFYUI/launch.sh" &
 sleep 5
 
-# Start ComfyUI MQ worker
-cd "$COMFYUI"
-source venv/bin/activate
-python "$AI_IMAGE_ROOT/loop/comfyui_worker.py" &
+# Start ComfyUI MQ worker (uses root venv; config.py is at AI_IMAGE_ROOT)
+cd "$AI_IMAGE_ROOT"
+. venv/bin/activate
+python loop/comfyui_worker.py &
 
 # Start Rust binaries
 "$SCORERS/target/release/coordinator" &
@@ -29,14 +38,14 @@ sleep 1   # coordinator must bind its Unix socket before other processes start
 
 # Start Python scorers
 cd "$SCORERS"
-source venv/bin/activate
+. venv/bin/activate
 python clip_scorer.py &
 python artifact_scorer.py &
 python vlm_scorer.py &
 
-# Start tactical LLM (shares the scorers venv)
+# Start tactical LLM (shares the scorers venv; config.py lives at AI_IMAGE_ROOT)
 cd "$AI_IMAGE_ROOT/tactical-llm"
-python tactical_llm.py &
+PYTHONPATH="$AI_IMAGE_ROOT" python tactical_llm.py &
 
 echo "Loop infrastructure ready"
 echo ""

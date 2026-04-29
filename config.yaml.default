@@ -36,6 +36,9 @@ compute:
   #        (useful when GPU VRAM < full model size on discrete-GPU systems)
   comfyui:
     backend: auto
+    device_id:            # optional: integer device index passed as --default-device
+                          # useful when multiple GPUs are present (e.g. eGPU via Thunderbolt)
+                          # omit or leave blank to use the default device
   clip_scorer:
     backend: auto
   artifact_scorer:

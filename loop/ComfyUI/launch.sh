@@ -1,9 +1,18 @@
-#!/bin/bash
-AI_IMAGE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+#!/bin/sh
+AI_IMAGE_ROOT="${1:-${AI_IMAGE_ROOT:-}}"
+if [ -z "$AI_IMAGE_ROOT" ] && [ -f "$PWD/config.yaml" ] && [ -d "$PWD/loop" ]; then
+    AI_IMAGE_ROOT="$PWD"
+fi
+: "${AI_IMAGE_ROOT:?provide root as \$1, set AI_IMAGE_ROOT in environment, or run from the repo root}"
 CFG="$AI_IMAGE_ROOT/config.yaml"
 
 COMFYUI=$(yq '.paths.comfyui' "$CFG")
+[ "$COMFYUI" = "auto" ] && COMFYUI="$AI_IMAGE_ROOT/loop/ComfyUI"
+
 BACKEND=$(yq '.compute.comfyui.backend' "$CFG")
+DEVICE_ID=$(yq '.compute.comfyui.device_id' "$CFG")
+# yq emits "null" for absent keys; normalise to empty
+[ "$DEVICE_ID" = "null" ] && DEVICE_ID=""
 
 # Resolve auto to a concrete backend
 if [ "$BACKEND" = "auto" ]; then
@@ -19,12 +28,14 @@ if [ "$BACKEND" = "auto" ]; then
 fi
 
 cd "$COMFYUI"
-source venv/bin/activate
+. venv/bin/activate
 
+# --default-device keeps all devices visible but sets the preferred one.
+# Only passed when device_id is explicitly set in config.
 case "$BACKEND" in
-    mps)  EXTRA_ARGS="--use-mps" ;;
-    cuda) EXTRA_ARGS="" ;;
-    rocm) EXTRA_ARGS="" ;;
+    mps)  EXTRA_ARGS="" ;;
+    cuda) EXTRA_ARGS="${DEVICE_ID:+--default-device $DEVICE_ID}" ;;
+    rocm) EXTRA_ARGS="${DEVICE_ID:+--default-device $DEVICE_ID}" ;;
     cpu)  EXTRA_ARGS="--cpu" ;;
     *)    EXTRA_ARGS="" ;;
 esac
