@@ -10,8 +10,10 @@ COMFYUI=$(yq '.paths.comfyui' "$CFG")
 [ "$COMFYUI" = "auto" ] && COMFYUI="$AI_IMAGE_ROOT/loop/ComfyUI"
 
 BACKEND=$(yq '.compute.comfyui.backend' "$CFG")
+LISTEN=$(yq '.compute.comfyui.listen' "$CFG")
 DEVICE_ID=$(yq '.compute.comfyui.device_id' "$CFG")
 # yq emits "null" for absent keys; normalise to empty
+[ "$LISTEN"    = "null" ] && LISTEN="0.0.0.0"
 [ "$DEVICE_ID" = "null" ] && DEVICE_ID=""
 
 # Resolve auto to a concrete backend
@@ -41,4 +43,4 @@ case "$BACKEND" in
 esac
 
 # shellcheck disable=SC2086
-python main.py $EXTRA_ARGS
+python main.py --listen "$LISTEN" $EXTRA_ARGS

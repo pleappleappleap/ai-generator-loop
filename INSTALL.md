@@ -114,6 +114,22 @@ The default Artemis template ships both acceptors commented out. Uncomment or
 add them. The AMQP acceptor on port 5672 is standard; the STOMP acceptor on
 61613 is the Artemis STOMP default.
 
+### Expose the management console on the network
+
+The Artemis web console binds to `localhost` by default. To make it reachable
+from other machines, edit `loop/artemis-broker/etc/bootstrap.xml` and change
+the `<web>` binding:
+
+```xml
+<web path="web" rootRedirectLocation="index.html">
+    <binding uri="http://0.0.0.0:8161" apps="console,metrics"/>
+</web>
+```
+
+The default value is `http://localhost:8161`; replace `localhost` with
+`0.0.0.0` to listen on all interfaces. Restart the broker for the change to
+take effect.
+
 ---
 
 ## 4. Clone the Repository
