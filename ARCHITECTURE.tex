@@ -115,7 +115,7 @@ AMD (ROCm)          & GPU VRAM        & 24\,GB             & 48\,GB+ \\
                     & System RAM      & 32\,GB             & 64\,GB \\
 \midrule
 CPU only            & System RAM      & 64\,GB             & 128\,GB+ \\
-                    & \multicolumn{3}{l}{\textit{Functional but very slow — expect hours per image.}} \\
+                    & \multicolumn{3}{l}{\textit{Functional but very slow. Expect hours per image, not minutes.}} \\
 \midrule
 All platforms       & Free disk       & 100\,GB            & 200\,GB \\
 \bottomrule
@@ -262,12 +262,12 @@ argument, (2)~the \texttt{AI\_IMAGE\_ROOT} environment variable, or
 There are three separate virtual environments:
 
 \begin{itemize}
-  \item \textbf{Root venv} (\texttt{venv/}) — used by
+  \item \textbf{Root venv} (\texttt{venv/}): used by
         \texttt{comfyui\_worker.py}, \texttt{session.py}, and utilities.
-  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}) — used by the
+  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): used by the
         three scorer processes and \texttt{tactical\_llm.py}, which share
         large ML libraries.
-  \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}) — used
+  \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}): used
         exclusively by ComfyUI and managed by \texttt{make prereqs}.
 \end{itemize}
 
@@ -1017,7 +1017,7 @@ vlm\_scorer (Python)      & Holistic image evaluation            & $\sim$6\,GB \
 aggregator (Rust)         & Result collection and verdict        & $\sim$5\,MB \\
 coordinator (Rust)        & XA coordinator + Python budget API   & $\sim$5\,MB \\
 lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
-Tactical LLM — Qwen3-72B (Q4\_K\_M) & Prompt revision and routing  & $\sim$43\,GB \\
+Tactical LLM (Qwen3-72B Q4\_K\_M)   & Prompt revision and routing  & $\sim$43\,GB \\
 ActiveMQ Artemis          & Message broker                       & $\sim$300\,MB \\
 OS / system overhead      &                                      & $\sim$2\,GB \\
 \midrule
