@@ -19,7 +19,7 @@ Choose the platform that matches your hardware:
 | CPU only | System RAM | 64 GB | 128 GB+ |
 | All platforms | Free disk | 100 GB | 200 GB |
 
-CPU-only mode is supported but very slow — expect hours per image rather than
+CPU-only mode is supported but very slow. Expect hours per image rather than
 minutes. On discrete-GPU systems with insufficient VRAM, the tactical LLM can
 be partially offloaded to CPU via `tactical.model.n_gpu_layers` in
 `config.yaml`.
@@ -47,7 +47,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . ~/.cargo/env
 ```
 
-### yq (YAML query tool — used by shell scripts)
+### yq (YAML query tool, used by shell scripts)
 
 | Platform | Command |
 |----------|---------|
@@ -57,7 +57,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 | Windows (Chocolatey) | `choco install yq` |
 | Windows (Scoop) | `scoop install yq` |
 
-### TeX distribution (optional — only needed to render ARCHITECTURE.pdf)
+### TeX distribution (optional, only needed to render ARCHITECTURE.pdf)
 
 | Platform | Command |
 |----------|---------|
@@ -103,10 +103,10 @@ Edit `loop/artemis-broker/etc/broker.xml`. Ensure the `<acceptors>` block
 contains both of these entries:
 
 ```xml
-<!-- AMQP 1.0 — used by Rust components (router, aggregator, coordinator, lancedb_manager) -->
+<!-- AMQP 1.0: used by Rust components (router, aggregator, coordinator, lancedb_manager) -->
 <acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
 
-<!-- STOMP — used by Python components (comfyui_worker, scorers, tactical_llm, monitor) -->
+<!-- STOMP: used by Python components (comfyui_worker, scorers, tactical_llm, monitor) -->
 <acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
 ```
 
@@ -158,10 +158,10 @@ working directory if it contains `config.yaml` and a `loop/` subdirectory.
 
 There are **three** separate virtual environments:
 
-- **Root venv** (`venv/`) — used by `comfyui_worker.py`, `session.py`, and utilities.
-- **Scorers venv** (`loop/scorers/venv/`) — used by the three scorer processes
+- **Root venv** (`venv/`): used by `comfyui_worker.py`, `session.py`, and utilities.
+- **Scorers venv** (`loop/scorers/venv/`): used by the three scorer processes
   and `tactical_llm.py`, which share large ML libraries.
-- **ComfyUI venv** (`loop/ComfyUI/venv/`) — used exclusively by ComfyUI;
+- **ComfyUI venv** (`loop/ComfyUI/venv/`): used exclusively by ComfyUI,
   managed by `make prereqs`.
 
 ### Root environment
@@ -398,13 +398,13 @@ Start each component in order. The broker must be running before any pipeline
 process starts.
 
 ```bash
-# Terminal 1 — Artemis broker and Redis
+# Terminal 1: Artemis broker and Redis
 $AI_IMAGE_ROOT/loop/start_broker.sh
 
-# Terminal 2 — Full pipeline (all Python and Rust components)
+# Terminal 2: Full pipeline (all Python and Rust components)
 $AI_IMAGE_ROOT/loop/start_loop.sh
 
-# Terminal 3 — Submit a session
+# Terminal 3: Submit a session
 cd $AI_IMAGE_ROOT
 source venv/bin/activate
 python tactical-llm/session.py \

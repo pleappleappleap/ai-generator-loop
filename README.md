@@ -4,7 +4,7 @@ An autonomous SDXL image generation pipeline. Submit a natural language prompt;
 the pipeline generates images, scores them across three independent dimensions,
 and feeds the results to a tactical LLM that decides whether to accept the
 image, revise the prompt, schedule targeted inpainting, or give up. Every
-generated image — including rejects — is stored as a vector embedding in
+generated image (including rejects) is stored as a vector embedding in
 LanceDB, giving the system long-term memory across sessions.
 
 All inter-component communication flows through ActiveMQ Artemis (AMQP 1.0
@@ -37,20 +37,20 @@ the code.
 
 Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 
-1. **Hardware** — 64 GB+ GPU memory (Apple unified memory, CUDA VRAM, or system RAM for CPU), ~100 GB free disk.
-2. **System software** — Python 3.11, Rust (rustup), yq, ActiveMQ Artemis.
+1. **Hardware**: 64 GB+ GPU memory (Apple unified memory, CUDA VRAM, or system RAM for CPU), ~100 GB free disk.
+2. **System software**: Python 3.11, Rust (rustup), yq, ActiveMQ Artemis.
    Run `make prereqs-system` to install automatically.
-3. **Three Python venvs** — root (LanceDB, CLIP, stomp.py), scorers
+3. **Three Python venvs**: root (LanceDB, CLIP, stomp.py), scorers
    (transformers, llama-cpp-python, stomp.py), and ComfyUI. Run
    `make prereqs-python` to create all three.
-4. **Models** — SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
+4. **Models**: SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
    (Qwen2.5-VL-7B Q5\_K\_M), and tactical LLM (Qwen3-72B Q4\_K\_M) via
    `make models` or `python model_picker.py`.
-5. **Broker** — create an Artemis instance, enable STOMP (61613) and AMQP 1.0
+5. **Broker**: create an Artemis instance, enable STOMP (61613) and AMQP 1.0
    (5672) acceptors.
-6. **Configuration** — `cp config.yaml.default config.yaml`, then
+6. **Configuration**: `cp config.yaml.default config.yaml`, then
    `python menuconfig.py`.
-7. **Build** — `cargo build --release` in `loop/scorers/`.
+7. **Build**: `cargo build --release` in `loop/scorers/`.
 
 ---
 
@@ -136,9 +136,9 @@ progress until the session resolves.
 
 ## Monitoring
 
-- **Artemis console** — `http://localhost:8161` (admin / admin by default)
-- **Dead-letter queue** — `python loop/monitor.py` streams all failed messages
-- **Message contracts** — `MESSAGES.md` documents every address, routing type,
+- **Artemis console**: `http://localhost:8161` (admin / admin by default)
+- **Dead-letter queue**: `python loop/monitor.py` streams all failed messages
+- **Message contracts**: `MESSAGES.md` documents every address, routing type,
   protocol, and payload schema
 
 ## Tests
