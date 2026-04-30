@@ -435,10 +435,12 @@ At minimum, verify these keys in \texttt{config.yaml}:
 compute:
   comfyui:
     backend: auto      # auto | mps | cuda | rocm | cpu
+    listen: 0.0.0.0    # bind address; 127.0.0.1 to restrict to localhost
     device_id:         # optional: integer index for eGPU or multi-GPU systems
 
 broker:
-  stomp_url:    stomp://admin:admin@localhost:61613
+  amqp_url:     amqp://admin:admin@localhost:5672    # Rust components
+  stomp_url:    stomp://admin:admin@localhost:61613  # Python components
   artemis_data: auto   # resolves to {repo_root}/loop/artemis-broker
 
 database:
@@ -882,7 +884,7 @@ Section~2.4). Start components in the order shown; the broker must be
 running before any pipeline process connects.
 
 \begin{lstlisting}[style=shell]
-# 1. Start the Artemis broker and Redis
+# 1. Start the Artemis broker
 $AI_IMAGE_ROOT/loop/start_broker.sh
 
 # 2. Start all pipeline components
