@@ -1,5 +1,7 @@
 \documentclass[11pt,letterpaper]{article}
 
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
 \usepackage{newtxtext,newtxmath}
 \usepackage{microtype}
 \usepackage[margin=1.25in]{geometry}
@@ -905,11 +907,11 @@ $AI_IMAGE_ROOT/loop/scorers/target/release/lancedb_manager
 # ComfyUI
 $AI_IMAGE_ROOT/loop/ComfyUI/launch.sh
 
-# Python components — root venv
+# Python components -- root venv
 source $AI_IMAGE_ROOT/venv/bin/activate
 PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/comfyui_worker.py
 
-# Python components — scorers venv
+# Python components -- scorers venv
 . $AI_IMAGE_ROOT/loop/scorers/activate.sh
 python $AI_IMAGE_ROOT/loop/scorers/clip_scorer.py
 python $AI_IMAGE_ROOT/loop/scorers/artifact_scorer.py
