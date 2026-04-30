@@ -76,7 +76,7 @@ def _embed_prompt(prompt: str) -> list[float]:
     )
     tokenizer = open_clip.get_tokenizer(clip_cfg["name"])
 
-    backend = _cfg.gpu["backend"]
+    backend = _cfg.compute["clip_scorer"]["backend"]
     device = (
         torch.device("mps")  if backend == "mps" else
         torch.device("cuda") if backend in ("cuda", "rocm") else

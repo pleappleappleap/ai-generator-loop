@@ -44,7 +44,7 @@ _model, _, _ = open_clip.create_model_and_transforms(
 )
 _tokenizer = open_clip.get_tokenizer(_clip_cfg["name"])
 
-_backend = _cfg.gpu["backend"]
+_backend = _cfg.compute["clip_scorer"]["backend"]
 if _backend == "mps":
     _device = torch.device("mps")
 elif _backend in ("cuda", "rocm"):
