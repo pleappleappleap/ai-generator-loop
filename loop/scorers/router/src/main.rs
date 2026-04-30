@@ -19,7 +19,7 @@ use tracing::info;
 
 #[derive(Deserialize)]
 struct Broker {
-    rabbitmq_url: String, // field name kept for config compatibility; value is Artemis AMQP 1.0 URL
+    amqp_url: String, 
 }
 
 #[derive(Deserialize)]
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
 
     // Artemis AMQP 1.0 connection.
-    let mut connection = Connection::open("router", &cfg.broker.rabbitmq_url[..]).await?;
+    let mut connection = Connection::open("router", &cfg.broker.amqp_url[..]).await?;
     let mut session = Session::begin(&mut connection).await?;
 
     // Receiver: consume from loop.events (Artemis multicast address).

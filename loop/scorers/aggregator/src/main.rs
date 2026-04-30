@@ -26,7 +26,7 @@ struct Thresholds {
 
 #[derive(Deserialize)]
 struct Broker {
-    rabbitmq_url: String,
+    amqp_url: String,
 }
 
 #[derive(Deserialize)]
@@ -297,7 +297,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     db::init_schema(&pool).await?;
     db::spawn_cleanup_task(pool.clone(), cfg.database.cleanup_interval_secs);
 
-    let mut connection = Connection::open("aggregator", &cfg.broker.rabbitmq_url[..]).await?;
+    let mut connection = Connection::open("aggregator", &cfg.broker.amqp_url[..]).await?;
     let mut session = Session::begin(&mut connection).await?;
 
     let sender = Sender::attach(&mut session, "aggregator-sender", "scorer.result").await?;

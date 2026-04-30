@@ -47,7 +47,7 @@ struct Paths {
 
 #[derive(Deserialize)]
 struct Broker {
-    rabbitmq_url: String,
+    amqp_url: String,
 }
 
 #[derive(Deserialize)]
@@ -231,7 +231,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let loop_table = open_loop_table(&cfg.paths.lancedb).await?;
 
-    let mut connection = Connection::open("lancedb-manager", &cfg.broker.rabbitmq_url[..]).await?;
+    let mut connection = Connection::open("lancedb-manager", &cfg.broker.amqp_url[..]).await?;
     let mut session = Session::begin(&mut connection).await?;
 
     // Dead-letter sender (pipeline.dlx).
