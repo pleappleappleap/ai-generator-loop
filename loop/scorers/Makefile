@@ -29,7 +29,6 @@ doc:
 		clip_scorer \
 		artifact_scorer \
 		vlm_scorer \
-		scorer_aggregator \
 		-o docs/
 	$(MAKE) -C router doc
 	$(MAKE) -C aggregator doc
