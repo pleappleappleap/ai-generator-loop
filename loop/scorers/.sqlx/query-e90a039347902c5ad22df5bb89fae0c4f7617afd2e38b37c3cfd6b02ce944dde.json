@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tactical_budget SET inpaints_used = inpaints_used + 1 WHERE session_uuid = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e90a039347902c5ad22df5bb89fae0c4f7617afd2e38b37c3cfd6b02ce944dde"
+}

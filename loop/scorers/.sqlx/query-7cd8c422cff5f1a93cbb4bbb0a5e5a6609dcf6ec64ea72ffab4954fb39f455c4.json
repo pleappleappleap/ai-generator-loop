@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,\n                workflow_params, clip, artifact, vlm\n         FROM scorer_session WHERE image_uuid = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "image_uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "session_uuid",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "sequence_number",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "prompt",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "workflow_path",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "workflow_params",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "clip",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "artifact",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "vlm",
+        "ordinal": 8,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "7cd8c422cff5f1a93cbb4bbb0a5e5a6609dcf6ec64ea72ffab4954fb39f455c4"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM scorer_session  WHERE expires_at < ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c36000ae13347115b16231120ac2819dbb6254939f7015c9e62cd5f5a548ccf2"
+}

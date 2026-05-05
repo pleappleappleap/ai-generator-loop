@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM scorer_session WHERE image_uuid = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "502ccd1d3fc28d7e92c762144352ac4a5f0622a16d12e32a30b292e3ea3bb494"
+}

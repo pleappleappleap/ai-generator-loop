@@ -1,40 +1,53 @@
-.PHONY: all lint typecheck test build format doc clean
+.PHONY: all lint typecheck test build format docs clean sqlx-prepare
+
+export PATH := $(HOME)/.cargo/bin:$(PATH)
 
 all: lint typecheck test build
 
 lint:
 	. venv/bin/activate &&ruff check .
-	$(MAKE) -C router lint
-	$(MAKE) -C aggregator lint
+	cargo clippy --workspace -- -D warnings
 
 typecheck:
 	. venv/bin/activate &&pyright .
 
 test:
 	. venv/bin/activate &&pytest tests/ -v
-	$(MAKE) -C router test
-	$(MAKE) -C aggregator test
+	SQLX_OFFLINE=true cargo test --workspace
 
 format:
 	. venv/bin/activate &&ruff format .
-	$(MAKE) -C router format
-	$(MAKE) -C aggregator format
+	cargo fmt --all
 
 build:
-	$(MAKE) -C router build
-	$(MAKE) -C aggregator build
+	SQLX_OFFLINE=true cargo build --release --workspace
 
-doc:
+docs:
 	. venv/bin/activate &&pdoc \
 		clip_scorer \
 		artifact_scorer \
 		vlm_scorer \
 		-o docs/
-	$(MAKE) -C router doc
-	$(MAKE) -C aggregator doc
+	cargo doc --no-deps --workspace
 
 clean:
-	$(MAKE) -C router clean
-	$(MAKE) -C aggregator clean
+	cargo clean
 	rm -rf __pycache__ .pytest_cache docs
 	rm -f *.pyc
+
+# Generate the sqlx offline query cache (.sqlx/).
+# Requires sqlx-cli: cargo install sqlx-cli --no-default-features --features sqlite
+# Run this once after schema changes, then commit the updated .sqlx/ directory.
+sqlx-prepare:
+	@echo "==> Creating temporary database for sqlx prepare..."
+	@mkdir -p /tmp/sqlx_prepare
+	@python3 -c "\
+import sqlite3; \
+db = sqlite3.connect('/tmp/sqlx_prepare/pipeline.db'); \
+db.executescript(open('db/schema.sql').read()); \
+db.close(); \
+print('    Schema applied.')"
+	DATABASE_URL=sqlite:////tmp/sqlx_prepare/pipeline.db \
+		cargo sqlx prepare --workspace
+	@echo "==> sqlx offline cache updated in .sqlx/"
+	@echo "    Commit the .sqlx/ directory to git."

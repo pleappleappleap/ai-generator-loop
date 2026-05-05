@@ -1,4 +1,4 @@
-.PHONY: all lint typecheck test build format doc clean
+.PHONY: all lint typecheck test build format docs clean
 
 all: lint test build
 
@@ -9,15 +9,15 @@ typecheck:
 	cargo check
 
 test:
-	cargo test
+	SQLX_OFFLINE=true cargo test
 
 format:
 	cargo fmt
 
 build:
-	cargo build --release
+	SQLX_OFFLINE=true cargo build --release
 
-doc:
+docs:
 	cargo doc --no-deps
 
 clean:

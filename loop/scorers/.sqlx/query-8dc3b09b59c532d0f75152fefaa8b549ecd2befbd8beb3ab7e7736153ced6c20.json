@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE xa_log SET state = 'rolledback', resolved_at = ?1 WHERE xid = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "8dc3b09b59c532d0f75152fefaa8b549ecd2befbd8beb3ab7e7736153ced6c20"
+}

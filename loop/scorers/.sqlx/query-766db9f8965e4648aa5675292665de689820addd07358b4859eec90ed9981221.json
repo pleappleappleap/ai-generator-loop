@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE scorer_session SET vlm = ?1, expires_at = ?2 WHERE image_uuid = ?3",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "766db9f8965e4648aa5675292665de689820addd07358b4859eec90ed9981221"
+}

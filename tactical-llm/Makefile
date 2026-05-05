@@ -1,4 +1,4 @@
-.PHONY: all lint typecheck test doc clean
+.PHONY: all lint typecheck test docs clean
 
 VENV ?= ../loop/scorers/venv
 PYTHON = $(VENV)/bin/python3
@@ -14,7 +14,7 @@ typecheck:
 test:
 	. $(VENV)/bin/activate &&pytest tests/ -v
 
-doc:
+docs:
 	. $(VENV)/bin/activate &&pdoc \
 		tactical_llm \
 		prompts \

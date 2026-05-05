@@ -1,4 +1,4 @@
-.PHONY: all lint typecheck test build format doc clean
+.PHONY: all lint typecheck test build format docs clean sqlx-prepare
 
 all: lint typecheck test build
 
@@ -17,8 +17,11 @@ build:
 format:
 	$(MAKE) -C scorers format
 
-doc:
-	$(MAKE) -C scorers doc
+docs:
+	$(MAKE) -C scorers docs
+
+sqlx-prepare:
+	$(MAKE) -C scorers sqlx-prepare
 
 clean:
 	$(MAKE) -C scorers clean

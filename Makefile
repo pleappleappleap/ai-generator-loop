@@ -1,5 +1,5 @@
-.PHONY: all lint typecheck test build format doc clean config check \
-        prereqs prereqs-system prereqs-python models models-pick
+.PHONY: all lint typecheck test build format docs clean config check \
+        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
@@ -24,10 +24,13 @@ build:
 format:
 	$(MAKE) -C loop format
 
-doc:
+docs:
 	latexmk -pdf -interaction=nonstopmode ARCHITECTURE.tex
-	$(MAKE) -C loop doc
-	$(MAKE) -C tactical-llm doc
+	$(MAKE) -C loop docs
+	$(MAKE) -C tactical-llm docs
+
+sqlx-prepare:
+	$(MAKE) -C loop sqlx-prepare
 
 clean:
 	latexmk -C ARCHITECTURE.tex
@@ -124,6 +127,29 @@ prereqs-system:
 	else \
 	  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path; \
 	  . "$$HOME/.cargo/env"; \
+	fi; \
+	. "$$HOME/.cargo/env" 2>/dev/null || true; \
+	\
+	echo "==> sqlx-cli (required for Rust SQLite compile-time query verification)"; \
+	if "$$HOME/.cargo/bin/cargo-sqlx" --version >/dev/null 2>&1 || \
+	   command -v cargo-sqlx >/dev/null 2>&1; then \
+	  echo "    already installed."; \
+	else \
+	  . "$$HOME/.cargo/env" 2>/dev/null || true; \
+	  cargo install sqlx-cli --no-default-features --features sqlite; \
+	fi; \
+	\
+	echo "==> protoc (required by LanceDB Rust crate)"; \
+	if command -v protoc >/dev/null 2>&1; then \
+	  echo "    already installed: $$(protoc --version)"; \
+	else \
+	  case "$$PKG" in \
+	    homebrew) brew install protobuf ;; \
+	    apt)      sudo apt-get install -y protobuf-compiler ;; \
+	    dnf)      sudo dnf install -y protobuf-compiler ;; \
+	    pacman)   sudo pacman -S --noconfirm protobuf ;; \
+	    zypper)   sudo zypper install -y protobuf ;; \
+	  esac; \
 	fi; \
 	\
 	echo "==> LaTeX (optional — needed for 'make doc')"; \

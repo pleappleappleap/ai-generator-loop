@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE tactical_budget SET retries_used = retries_used + 1 WHERE session_uuid = ?1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "4b51e023de4447cc2c923418d42ed788108f942e0e820599707accf221a0a1fd"
+}

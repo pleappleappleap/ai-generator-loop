@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT retries_used, inpaints_used, max_retries, max_inpaints\n                 FROM tactical_budget WHERE session_uuid = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "retries_used",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "inpaints_used",
+        "ordinal": 1,
+        "type_info": "Int64"
+      },
+      {
+        "name": "max_retries",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "max_inpaints",
+        "ordinal": 3,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9bb0fd827409fc931724ffb8f5036b4dbbb31ddfe7d24eaeb50d5bee01b009fb"
+}

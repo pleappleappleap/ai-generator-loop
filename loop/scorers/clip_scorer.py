@@ -35,7 +35,8 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from config import load as _load_config, resolve_backend  # noqa: E402
+from config import load as _load_config  # noqa: E402
+from config import resolve_backend
 
 _cfg = _load_config()
 
@@ -68,7 +69,7 @@ _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
 
 _SUB_REQUESTS = "1"
-_SUB_EVENTS   = "2"
+_SUB_EVENTS = "2"
 
 
 def score(image_path: str, prompt: str) -> dict[str, Any]:
@@ -137,8 +138,8 @@ def score_worker(
             similarity = (image_features @ text_features.T).item()
             image_embedding = image_features.squeeze().tolist()
         result = {
-            "image_uuid":      image_uuid,
-            "clip_score":      similarity,
+            "image_uuid": image_uuid,
+            "clip_score": similarity,
             "image_embedding": image_embedding,
         }
         conn.send(
@@ -172,8 +173,13 @@ class _Listener(stomp.ConnectionListener):
                     active_jobs[image_uuid] = cancel_event
                 t = threading.Thread(
                     target=score_worker,
-                    args=(image_uuid, request["image_path"], request["prompt"],
-                          cancel_event, self._conn),
+                    args=(
+                        image_uuid,
+                        request["image_path"],
+                        request["prompt"],
+                        cancel_event,
+                        self._conn,
+                    ),
                     daemon=True,
                 )
                 t.start()
@@ -196,7 +202,9 @@ def main() -> None:
     conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
     conn.set_listener("", _Listener(conn))
     conn.connect(
-        _STOMP_USER, _STOMP_PASS, wait=True,
+        _STOMP_USER,
+        _STOMP_PASS,
+        wait=True,
         headers={"client-id": "clip-scorer"},
     )
     conn.subscribe(

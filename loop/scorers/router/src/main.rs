@@ -9,7 +9,6 @@
 //! unchanged. Adding or removing scorers requires no changes here.
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use fe2o3_amqp::{Connection, Receiver, Sender, Session};
 use serde::Deserialize;
 use serde_json::Value;
@@ -78,12 +77,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Sender: publish to scorer.requests (Artemis multicast address).
     // The full address including subject is set per-message using properties.subject.
-    let sender = Sender::attach(&mut session, "router-sender", "scorer.requests").await?;
+    let mut sender = Sender::attach(&mut session, "router-sender", "scorer.requests").await?;
 
     info!("Router ready (AMQP 1.0)");
 
     loop {
-        let delivery = receiver.recv::<Bytes>().await?;
+        let delivery = receiver.recv::<Vec<u8>>().await?;
         let payload = delivery.body().clone();
         let message: Value = serde_json::from_slice(&payload)?;
         let image_uuid = message["image_uuid"].as_str().unwrap_or("unknown");
@@ -95,11 +94,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .subject(format!("score.{}", image_uuid))
                         .build()
                 )
-                .data(payload.to_vec())
+                .data(payload)
                 .build())
-            .await??;
+            .await?;
 
-        delivery.accept().await?;
+        receiver.accept(&delivery).await?;
         info!("Routed {}", image_uuid);
     }
 }
@@ -124,7 +123,7 @@ mod tests {
         mock.expect_publish()
             .with(eq("scorer.requests/test-uuid-123"), always())
             .times(1)
-            .returning(|_, _| Ok(()));
+            .returning(|_, _| Box::pin(async { Ok(()) }));
 
         let message = serde_json::json!({
             "image_uuid": "test-uuid-123",

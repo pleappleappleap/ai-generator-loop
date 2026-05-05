@@ -8,7 +8,6 @@
 //! using the coordinator's internal channel API.
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use fe2o3_amqp::{Connection, Receiver, Sender, Session};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -330,9 +329,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .build();
 
             if address.starts_with("scorer.events") {
-                self.events_sender.lock().await.send(msg).await??;
+                self.events_sender.lock().await.send(msg).await?;
             } else {
-                self.verdict_sender.lock().await.send(msg).await??;
+                self.verdict_sender.lock().await.send(msg).await?;
             }
             Ok(())
         }
@@ -347,31 +346,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            delivery = clip_receiver.recv::<Bytes>() => {
+            delivery = clip_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_clip_result(&pool, publisher.as_ref(), result,
                                                    clip_threshold, score_timeout).await {
                     tracing::error!("clip error: {}", e);
                 }
-                delivery.accept().await?;
+                clip_receiver.accept(&delivery).await?;
             }
-            delivery = artifact_receiver.recv::<Bytes>() => {
+            delivery = artifact_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_artifact_result(&pool, publisher.as_ref(), result,
                                                        artifact_threshold, score_timeout).await {
                     tracing::error!("artifact error: {}", e);
                 }
-                delivery.accept().await?;
+                artifact_receiver.accept(&delivery).await?;
             }
-            delivery = vlm_receiver.recv::<Bytes>() => {
+            delivery = vlm_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let result: Value = serde_json::from_slice(delivery.body())?;
                 if let Err(e) = handle_vlm_result(&pool, publisher.as_ref(), result, score_timeout).await {
                     tracing::error!("vlm error: {}", e);
                 }
-                delivery.accept().await?;
+                vlm_receiver.accept(&delivery).await?;
             }
         }
     }

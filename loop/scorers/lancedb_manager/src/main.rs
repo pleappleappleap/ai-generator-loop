@@ -30,7 +30,6 @@
 //! | `loop.accepted` | `accepted.*` | `lancedb.accepted.queue` |
 //! | `scorer.events` | `cancel.*`   | `lancedb.cancel.queue`   |
 
-use bytes::Bytes;
 use fe2o3_amqp::{Connection, Receiver, Sender, Session};
 use lancedb::{connect, Table};
 use serde::Deserialize;
@@ -110,14 +109,8 @@ fn build_loop_schema() -> arrow_schema::SchemaRef {
 
 /// Check whether a Loop record for `image_uuid` already exists.
 async fn record_exists(table: &Table, image_uuid: &str) -> Result<bool, Box<dyn std::error::Error>> {
-    let count = table
-        .query()
-        .only_if(format!("image_uuid = '{}'", image_uuid.replace('\'', "''")))
-        .limit(1)
-        .execute_stream()
-        .await?
-        .count()
-        .await;
+    let filter = format!("image_uuid = '{}'", image_uuid.replace('\'', "''"));
+    let count = table.count_rows(Some(filter)).await?;
     Ok(count > 0)
 }
 
@@ -129,8 +122,7 @@ async fn write_loop_record(
     verdict: &str,
     rejection_reason: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use arrow_array::{Float64Array, Int64Array, RecordBatch, StringArray};
-    use arrow_schema::{DataType, Field, Schema};
+    use arrow_array::{Float64Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
     use std::sync::Arc;
 
     let clip: Value  = session.clip.as_deref()
@@ -140,14 +132,19 @@ async fn write_loop_record(
     let vlm: Value   = session.vlm.as_deref()
         .and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
 
+    // Pre-compute owned strings for temporaries that would otherwise dangle.
+    let created_at   = db::now_unix().to_string();
+    let vlm_issues   = vlm["issues"].to_string();
+    let vlm_recs     = vlm["recommendations"].to_string();
+
     let schema = build_loop_schema();
     let batch = RecordBatch::try_new(
-        schema,
+        schema.clone(),
         vec![
             Arc::new(StringArray::from(vec![session.image_uuid.as_str()])),
             Arc::new(StringArray::from(vec![session.session_uuid.as_str()])),
             Arc::new(Int64Array::from(vec![session.sequence_number])),
-            Arc::new(StringArray::from(vec![db::now_unix().to_string().as_str()])),
+            Arc::new(StringArray::from(vec![created_at.as_str()])),
             Arc::new(StringArray::from(vec![session.prompt.as_deref().unwrap_or("")])),
             Arc::new(StringArray::from(vec![session.workflow_path.as_deref().unwrap_or("")])),
             Arc::new(StringArray::from(vec![session.workflow_params.as_deref().unwrap_or("{}")])),
@@ -158,15 +155,16 @@ async fn write_loop_record(
             Arc::new(Float64Array::from(vec![vlm["interaction_plausibility"].as_f64().unwrap_or(0.0)])),
             Arc::new(Float64Array::from(vec![vlm["lighting_consistency"].as_f64().unwrap_or(0.0)])),
             Arc::new(Float64Array::from(vec![vlm["prompt_adherence"].as_f64().unwrap_or(0.0)])),
-            Arc::new(StringArray::from(vec![vlm["issues"].to_string().as_str()])),
-            Arc::new(StringArray::from(vec![vlm["recommendations"].to_string().as_str()])),
+            Arc::new(StringArray::from(vec![vlm_issues.as_str()])),
+            Arc::new(StringArray::from(vec![vlm_recs.as_str()])),
             Arc::new(StringArray::from(vec![verdict])),
             Arc::new(StringArray::from(vec![rejection_reason.unwrap_or("")])),
             Arc::new(StringArray::from(vec![image_path.unwrap_or("")])),
         ],
     )?;
 
-    table.add(vec![batch]).execute().await?;
+    let reader = RecordBatchIterator::new(vec![Ok(batch)], schema);
+    table.add(reader).execute().await?;
     Ok(())
 }
 
@@ -195,7 +193,7 @@ async fn fetch_session(pool: &SqlitePool, image_uuid: &str) -> Result<Option<Ses
     .await?;
 
     Ok(row.map(|r| SessionRow {
-        image_uuid:      r.image_uuid,
+        image_uuid:      r.image_uuid.unwrap_or_default(),
         session_uuid:    r.session_uuid,
         sequence_number: r.sequence_number,
         prompt:          r.prompt,
@@ -247,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         tokio::select! {
-            delivery = accepted_receiver.recv::<Bytes>() => {
+            delivery = accepted_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let msg: Value = serde_json::from_slice(delivery.body())?;
                 let image_uuid = msg["image_uuid"].as_str().unwrap_or("").to_string();
@@ -257,20 +255,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &pool, &loop_table, &image_uuid,
                     image_path.as_deref(), "candidate", None,
                 ).await {
-                    Ok(_) => { delivery.accept().await?; }
+                    Ok(_) => { accepted_receiver.accept(&delivery).await?; }
                     Err(e) => {
                         error!("lancedb accepted write failed (unrecoverable): {}", e);
                         // Nack to DLX by sending to pipeline.dlx before rejecting.
+                        let dlx_payload = delivery.body().clone();
                         let _ = dlx_sender.lock().await
                             .send(fe2o3_amqp::types::messaging::Message::builder()
-                                .data(delivery.body().to_vec()).build())
+                                .data(dlx_payload).build())
                             .await;
-                        delivery.reject(Default::default()).await?;
+                        accepted_receiver.reject(&delivery, None::<fe2o3_amqp::types::definitions::Error>).await?;
                     }
                 }
             }
 
-            delivery = cancel_receiver.recv::<Bytes>() => {
+            delivery = cancel_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let msg: Value = serde_json::from_slice(delivery.body())?;
                 let image_uuid = msg["image_uuid"].as_str().unwrap_or("").to_string();
@@ -280,14 +279,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     &pool, &loop_table, &image_uuid,
                     None, "rejected", reason.as_deref(),
                 ).await {
-                    Ok(_) => { delivery.accept().await?; }
+                    Ok(_) => { cancel_receiver.accept(&delivery).await?; }
                     Err(e) => {
                         error!("lancedb cancel write failed (unrecoverable): {}", e);
+                        let dlx_payload = delivery.body().clone();
                         let _ = dlx_sender.lock().await
                             .send(fe2o3_amqp::types::messaging::Message::builder()
-                                .data(delivery.body().to_vec()).build())
+                                .data(dlx_payload).build())
                             .await;
-                        delivery.reject(Default::default()).await?;
+                        cancel_receiver.reject(&delivery, None::<fe2o3_amqp::types::definitions::Error>).await?;
                     }
                 }
             }

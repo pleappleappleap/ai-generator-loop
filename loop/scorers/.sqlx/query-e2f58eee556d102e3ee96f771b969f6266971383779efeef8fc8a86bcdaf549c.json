@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE xa_log SET state = 'committed', resolved_at = ?1 WHERE xid = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "e2f58eee556d102e3ee96f771b969f6266971383779efeef8fc8a86bcdaf549c"
+}

@@ -70,16 +70,15 @@ pub fn spawn_cleanup_task(pool: SqlitePool, interval_secs: u64) {
         loop {
             interval.tick().await;
             let now = now_unix();
-            match sqlx::query!(
-                "DELETE FROM scorer_session  WHERE expires_at < ?1;
-                 DELETE FROM tactical_budget WHERE expires_at < ?1",
-                now
-            )
-            .execute(&pool)
-            .await
-            {
-                Ok(_) => info!("Cleanup: expired rows deleted"),
-                Err(e) => tracing::warn!("Cleanup error: {}", e),
+            let r1 = sqlx::query!("DELETE FROM scorer_session  WHERE expires_at < ?1", now)
+                .execute(&pool)
+                .await;
+            let r2 = sqlx::query!("DELETE FROM tactical_budget WHERE expires_at < ?1", now)
+                .execute(&pool)
+                .await;
+            match (r1, r2) {
+                (Ok(_), Ok(_)) => info!("Cleanup: expired rows deleted"),
+                (Err(e), _) | (_, Err(e)) => tracing::warn!("Cleanup error: {}", e),
             }
         }
     });

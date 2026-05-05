@@ -189,7 +189,7 @@ async fn recover_prepared_transactions(pool: &SqlitePool) -> Result<(), Box<dyn 
         )
         .execute(pool)
         .await?;
-        warn!("Crash recovery: rolled back xid={}", row.xid);
+        warn!("Crash recovery: rolled back xid={}", row.xid.as_deref().unwrap_or("?"));
     }
     Ok(())
 }

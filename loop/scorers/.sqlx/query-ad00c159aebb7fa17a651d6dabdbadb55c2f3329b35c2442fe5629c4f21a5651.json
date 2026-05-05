@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO tactical_budget\n                 (session_uuid, max_retries, max_inpaints, created_at, expires_at)\n                 VALUES (?1, ?2, ?3, ?4, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "ad00c159aebb7fa17a651d6dabdbadb55c2f3329b35c2442fe5629c4f21a5651"
+}

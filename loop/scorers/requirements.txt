@@ -12,3 +12,6 @@ pillow
 huggingface_hub
 pytest
 pytest-mock
+ruff
+pyright
+pdoc

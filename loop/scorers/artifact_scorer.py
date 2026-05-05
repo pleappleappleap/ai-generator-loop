@@ -29,12 +29,13 @@ import stomp
 from transformers import pipeline
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from config import load as _load_config, resolve_backend  # noqa: E402
+from config import load as _load_config  # noqa: E402
+from config import resolve_backend
 
 _cfg = _load_config()
 
 _backend = resolve_backend(_cfg.compute["artifact_scorer"]["backend"])
-_device  = 0 if _backend in ("cuda", "rocm") else (_backend if _backend == "mps" else -1)
+_device = 0 if _backend in ("cuda", "rocm") else (_backend if _backend == "mps" else -1)
 
 detector = pipeline(
     "image-classification",
@@ -55,7 +56,7 @@ _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
 
 _SUB_REQUESTS = "1"
-_SUB_EVENTS   = "2"
+_SUB_EVENTS = "2"
 
 
 def score(image_path: str) -> dict[str, Any]:
@@ -71,9 +72,7 @@ def score(image_path: str) -> dict[str, Any]:
                 output.
     """
     results = detector(image_path)
-    ai_confidence = next(
-        (r["score"] for r in results if r["label"] == "artificial"), 0.0
-    )
+    ai_confidence = next((r["score"] for r in results if r["label"] == "artificial"), 0.0)
     return {"ai_confidence": ai_confidence}
 
 
@@ -101,11 +100,9 @@ def score_worker(
         results = detector(image_path)
         if cancel_event.is_set():
             return
-        ai_confidence = next(
-            (r["score"] for r in results if r["label"] == "artificial"), 0.0
-        )
+        ai_confidence = next((r["score"] for r in results if r["label"] == "artificial"), 0.0)
         result = {
-            "image_uuid":    image_uuid,
+            "image_uuid": image_uuid,
             "ai_confidence": ai_confidence,
         }
         conn.send(
@@ -162,7 +159,9 @@ def main() -> None:
     conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
     conn.set_listener("", _Listener(conn))
     conn.connect(
-        _STOMP_USER, _STOMP_PASS, wait=True,
+        _STOMP_USER,
+        _STOMP_PASS,
+        wait=True,
         headers={"client-id": "artifact-scorer"},
     )
     conn.subscribe(

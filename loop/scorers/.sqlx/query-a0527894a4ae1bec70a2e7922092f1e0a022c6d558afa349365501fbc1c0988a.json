@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE xa_log SET state = 'prepared', participants = ?1 WHERE xid = ?2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "a0527894a4ae1bec70a2e7922092f1e0a022c6d558afa349365501fbc1c0988a"
+}

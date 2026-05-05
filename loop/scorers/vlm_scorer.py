@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import load as _load_config  # noqa: E402
 
 _cfg = _load_config()
-_vlm_cfg     = _cfg.models["vlm"]
+_vlm_cfg = _cfg.models["vlm"]
 _vlm_compute = _cfg.compute["vlm_scorer"]
 
 llm = Llama(
@@ -60,7 +60,7 @@ _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
 
 _SUB_REQUESTS = "1"
-_SUB_EVENTS   = "2"
+_SUB_EVENTS = "2"
 
 EVAL_PROMPT = """Evaluate this image on the following criteria and return a JSON object:
 {{
@@ -148,8 +148,13 @@ class _Listener(stomp.ConnectionListener):
                     active_jobs[image_uuid] = cancel_event
                 t = threading.Thread(
                     target=score_worker,
-                    args=(image_uuid, request["image_path"], request["prompt"],
-                          cancel_event, self._conn),
+                    args=(
+                        image_uuid,
+                        request["image_path"],
+                        request["prompt"],
+                        cancel_event,
+                        self._conn,
+                    ),
                     daemon=True,
                 )
                 t.start()
@@ -175,7 +180,9 @@ def main() -> None:
     conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
     conn.set_listener("", _Listener(conn))
     conn.connect(
-        _STOMP_USER, _STOMP_PASS, wait=True,
+        _STOMP_USER,
+        _STOMP_PASS,
+        wait=True,
         headers={"client-id": "vlm-scorer"},
     )
     conn.subscribe(
