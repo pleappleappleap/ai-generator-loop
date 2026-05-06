@@ -17,8 +17,8 @@ the coordinator's SQLite ``tactical_budget`` table, accessed via a Unix
 domain socket at ``{database.path}.sock``.
 
 The LLM model is loaded once at process startup and held resident in GPU
-memory. The inference loop runs on the main thread; RabbitMQ consumption
-uses a single threaded channel (prefetch=1) so decisions are serialised.
+memory. The inference loop runs on the main thread; STOMP consumption
+uses a single-threaded listener so decisions are serialised.
 
 Queue / exchange subscriptions:
 

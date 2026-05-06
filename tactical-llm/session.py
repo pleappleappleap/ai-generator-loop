@@ -15,7 +15,7 @@ The ``--monitor`` flag blocks until the session is resolved (accept or
 give_up verdict), polling the coordinator for the budget state.
 
 This script does not need to run inside the scorers venv — it only uses
-the root venv (pika, lancedb, open_clip, torch) and the shared
+the root venv (stomp, lancedb, open_clip, torch) and the shared
 config.py module.
 """
 

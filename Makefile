@@ -39,7 +39,7 @@ clean:
 	$(MAKE) -C tactical-llm clean
 
 # Interactive configuration TUI (menuconfig-style).
-# Generates config.yaml and config.sh from auto-detected defaults.
+# Generates config.yaml from auto-detected defaults.
 config:
 	@command -v yq >/dev/null 2>&1 || { \
 		echo "yq not found. Install it:"; \

@@ -1,6 +1,5 @@
 # ── Generated config (make config) ────────────────────────────────────────────
 config.yaml
-config.sh
 
 # ── Runtime database ───────────────────────────────────────────────────────────
 pipeline.db

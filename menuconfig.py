@@ -362,7 +362,7 @@ MENU_SCHEMA = [
                 "key": "package_manager",
                 "type": "choice",
                 "choices": ["homebrew", "apt", "dnf", "pacman", "zypper", "unknown"],
-                "help": "System package manager (used to locate rabbitmq-server, redis-server)",
+                "help": "System package manager",
             },
             {
                 "label": "Homebrew prefix",
