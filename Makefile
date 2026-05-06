@@ -4,7 +4,7 @@ ifeq ($(OS),Windows_NT)
   $(error Windows CMD/PowerShell detected. Run inside WSL2: wsl make $(MAKECMDGOALS))
 endif
 
-.PHONY: all lint typecheck test build format docs clean config check \
+.PHONY: all lint typecheck test build format docs clean distclean config check \
         prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup
 
 # Use generated config.yaml if present, otherwise fall back to the template.
@@ -44,6 +44,25 @@ clean:
 	rm -rf __pycache__
 	$(MAKE) -C loop clean
 	$(MAKE) -C tactical-llm clean
+
+# Remove everything that can be regenerated: venvs, the ComfyUI clone, and
+# auto-downloaded model files.  SDXL checkpoints placed manually in
+# loop/ComfyUI/models/ are preserved, as are the tracked scaffold files
+# (launch.sh, README.md, .gitkeep placeholders).
+# After distclean, restore with: make setup
+distclean: clean
+	@echo "==> Removing Python virtual environments..."
+	rm -rf venv loop/scorers/venv
+	@echo "==> Removing ComfyUI clone (models/ and workflows/ preserved)..."
+	find loop/ComfyUI -mindepth 1 -maxdepth 1 \
+	  ! -name models ! -name workflows ! -name launch.sh ! -name README.md \
+	  -exec rm -rf {} +
+	@echo "==> Removing auto-downloaded scorer models..."
+	rm -rf loop/scorers/models/vlm \
+	       loop/scorers/models/tactical \
+	       loop/scorers/models/artifact-detector
+	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
+	@echo "    NOTE: SDXL checkpoints in loop/ComfyUI/models/ were preserved."
 
 # Interactive configuration TUI (menuconfig-style).
 # Generates config.yaml from auto-detected defaults.
