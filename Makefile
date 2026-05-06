@@ -10,7 +10,7 @@ endif
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
-all: lint typecheck test build
+all: venv/.installed loop/scorers/venv/.installed lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
