@@ -49,6 +49,6 @@ db.executescript(open('db/schema.sql').read()); \
 db.close(); \
 print('    Schema applied.')"
 	DATABASE_URL=sqlite:////tmp/sqlx_prepare/pipeline.db \
-		$(CARGO) sqlx prepare --workspace
+		$(CARGO) sqlx prepare --workspace -- --tests
 	@echo "==> sqlx offline cache updated in .sqlx/"
 	@echo "    Commit the .sqlx/ directory to git."

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT xid, state FROM xa_log WHERE xid = 'xid-1'",
+  "describe": {
+    "columns": [
+      {
+        "name": "xid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "state",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false
+    ]
+  },
+  "hash": "a6af6dc6c36d1fd5363415f4d156d773860330ef2a2dc3cd98f20f6090921d10"
+}
