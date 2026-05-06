@@ -71,6 +71,18 @@ def _try_import(name: str) -> bool:
         return False
 
 
+def _try_import_in(python: Path, name: str) -> bool:
+    """Check whether *name* is importable under a specific Python interpreter."""
+    try:
+        result = subprocess.run(
+            [str(python), "-c", f"import {name}"],
+            capture_output=True, timeout=15,
+        )
+        return result.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _resolve(value: str, default: Path) -> Path:
     """Return *default* when value is 'auto', otherwise expand the path."""
     if value == "auto":
@@ -115,17 +127,24 @@ def main() -> None:
           vi >= (3, 11))
 
     for pkg, import_name in [
-        ("pyyaml",        "yaml"),
-        ("stomp.py",      "stomp"),
-        ("torch",         "torch"),
-        ("open_clip",     "open_clip"),
-        ("Pillow",        "PIL"),
-        ("transformers",  "transformers"),
-        ("lancedb",       "lancedb"),
-        ("llama_cpp",     "llama_cpp"),
+        ("pyyaml",          "yaml"),
+        ("stomp.py",        "stomp"),
+        ("torch",           "torch"),
+        ("open_clip",       "open_clip"),
+        ("Pillow",          "PIL"),
+        ("lancedb",         "lancedb"),
         ("huggingface_hub", "huggingface_hub"),
     ]:
         check(f"import {pkg}", _try_import(import_name))
+
+    # transformers and llama_cpp live in the scorers venv, not the root venv.
+    scorers_python = scorers_root / "venv" / "bin" / "python3"
+    for pkg, import_name in [
+        ("transformers", "transformers"),
+        ("llama_cpp",    "llama_cpp"),
+    ]:
+        check(f"import {pkg}  (scorers venv)",
+              _try_import_in(scorers_python, import_name))
 
     # ── Compute backends ──────────────────────────────────────────────
     print(f"\n{_BOLD}Compute backends:{_RESET}")
@@ -209,7 +228,9 @@ def main() -> None:
             f"{prefix}/bin:{prefix}/sbin:" + os.environ.get("PATH", "")
         )
     check("yq",    _cmd_exists("yq"))
-    check("cargo", _cmd_exists("cargo"))
+    # cargo may be installed by rustup without being on the system PATH.
+    cargo_ok = _cmd_exists("cargo") or (Path.home() / ".cargo" / "bin" / "cargo").exists()
+    check("cargo", cargo_ok)
     check("java",  _cmd_exists("java"),
           detail="required by ActiveMQ Artemis")
 

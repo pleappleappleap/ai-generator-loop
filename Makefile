@@ -91,8 +91,8 @@ config:
 
 # Validate the environment against the current config.yaml.
 # Checks services, GPU backend, model files, venvs, and Rust binaries.
-check: config.yaml
-	python3.11 check_env.py
+check: config.yaml venv/.installed
+	venv/bin/python3 check_env.py
 
 config.yaml:
 	@echo "config.yaml not found — running make config first"
