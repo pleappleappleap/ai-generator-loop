@@ -52,9 +52,9 @@ class TestSessionHistory:
 
         mock_table = MagicMock()
         mock_table.search.return_value.where.return_value \
-            .select.return_value.limit.return_value.to_list.return_value = []
+            .to_list.return_value = []
         mock_db = MagicMock()
-        mock_db.table_names.return_value = ["loop"]
+        mock_db.list_tables.return_value = ["loop"]
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
@@ -73,9 +73,9 @@ class TestSessionHistory:
 
         mock_table = MagicMock()
         mock_table.search.return_value.where.return_value \
-            .select.return_value.limit.return_value.to_list.return_value = raw_records
+            .to_list.return_value = raw_records
         mock_db = MagicMock()
-        mock_db.table_names.return_value = ["loop"]
+        mock_db.list_tables.return_value = ["loop"]
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
@@ -98,9 +98,9 @@ class TestSessionHistory:
         )
         mock_table = MagicMock()
         mock_table.search.return_value.where.return_value \
-            .select.return_value.limit.return_value.to_list.return_value = [rec]
+            .to_list.return_value = [rec]
         mock_db = MagicMock()
-        mock_db.table_names.return_value = ["loop"]
+        mock_db.list_tables.return_value = ["loop"]
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
@@ -115,7 +115,7 @@ class TestSessionHistory:
         import retrieval
 
         mock_db = MagicMock()
-        mock_db.table_names.return_value = []  # no tables
+        mock_db.list_tables.return_value = []  # no tables
 
         with patch("lancedb.connect", return_value=mock_db):
             result = retrieval.session_history("sess-1")
@@ -133,7 +133,7 @@ class TestSimilarPast:
         import retrieval
 
         mock_db = MagicMock()
-        mock_db.table_names.return_value = []
+        mock_db.list_tables.return_value = []
 
         with patch("lancedb.connect", return_value=mock_db):
             result = retrieval.similar_past([0.0] * 512, "sess-1")
@@ -149,13 +149,11 @@ class TestSimilarPast:
         rec_other   = _make_loop_record(session_uuid="sess-2", image_uuid="img-b")
 
         mock_table = MagicMock()
-        # ANN search returns both; similar_past must filter out current session
+        # The WHERE clause filters out the current session — mock returns only the other record.
         mock_table.search.return_value.where.return_value \
-            .select.return_value.limit.return_value.to_list.return_value = [
-                rec_other, rec_current
-            ]
+            .limit.return_value.to_list.return_value = [rec_other]
         mock_db = MagicMock()
-        mock_db.table_names.return_value = ["loop"]
+        mock_db.list_tables.return_value = ["loop"]
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
@@ -178,9 +176,9 @@ class TestSimilarPast:
         )
         mock_table = MagicMock()
         mock_table.search.return_value.where.return_value \
-            .select.return_value.limit.return_value.to_list.return_value = [rec]
+            .limit.return_value.to_list.return_value = [rec]
         mock_db = MagicMock()
-        mock_db.table_names.return_value = ["loop"]
+        mock_db.list_tables.return_value = ["loop"]
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):

@@ -130,20 +130,19 @@ def session_history(
 
     try:
         db = _get_db()
-        if "loop" not in db.table_names():
+        if "loop" not in db.list_tables():
             return []
         table = db.open_table("loop")
-        df = (
+        records = (
             table.search()
             .where(f"session_uuid = '{session_uuid}'")
-            .to_pandas()
+            .to_list()
         )
-        if df.empty:
+        if not records:
             return []
-        df = df.sort_values("sequence_number")
+        records = sorted(records, key=lambda r: r.get("sequence_number", 0))
         if effective_limit:
-            df = df.tail(effective_limit)
-        records = df.to_dict(orient="records")
+            records = records[-effective_limit:]
         return [_add_vlm_mean(r) for r in records]
     except Exception:
         return []
@@ -183,21 +182,20 @@ def similar_past(
 
     try:
         db = _get_db()
-        if "loop" not in db.table_names():
+        if "loop" not in db.list_tables():
             return []
         table = db.open_table("loop")
-        df = (
+        records = (
             table.search(prompt_embedding)
             .where(
                 f"session_uuid != '{current_session_uuid}'"
                 " AND verdict = 'candidate'"
             )
             .limit(effective_k)
-            .to_pandas()
+            .to_list()
         )
-        if df.empty:
+        if not records:
             return []
-        records = df.to_dict(orient="records")
         return [_add_vlm_mean(r) for r in records]
     except Exception:
         return []

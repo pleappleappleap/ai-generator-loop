@@ -215,9 +215,10 @@ def test_build_prompt_includes_vlm_recommendations():
     assert "increase steps to 40" in result
 
 
-def test_build_prompt_ends_with_decide_now():
+def test_build_prompt_ends_with_think_token():
     result = build_decision_prompt(CANDIDATE_VERDICT, [], [], BUDGET_FULL)
-    assert result.strip().endswith("Decide now. Output JSON only.")
+    stripped = result.strip()
+    assert stripped.endswith("/think") or stripped.endswith("/no_think")
 
 
 def test_build_prompt_with_history():
