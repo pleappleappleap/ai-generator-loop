@@ -47,6 +47,10 @@ python vlm_scorer.py &
 cd "$AI_IMAGE_ROOT/tactical-llm"
 PYTHONPATH="$AI_IMAGE_ROOT" python tactical_llm.py &
 
+# Start dead-letter monitor (root venv; watches pipeline.dead for unrecoverable failures)
+cd "$AI_IMAGE_ROOT"
+python loop/monitor.py &
+
 echo "Loop infrastructure ready"
 echo ""
 echo "Queue and exchange topology:"
@@ -59,6 +63,7 @@ echo "  aggregator.artifact.queue   [queue]  ← artifact_scorer"
 echo "  aggregator.vlm.queue        [queue]  ← vlm_scorer"
 echo "  scorer.result               [queue]  → tactical LLM"
 echo "  lancedb.accepted.queue      [queue]  ← loop.accepted topic"
+echo "  pipeline.dead               [queue]  ← pipeline.dlx (dead letters) → monitor"
 echo ""
 echo "  LanceDB: $LANCEDB"
 echo "    tables: sessions, loop"
