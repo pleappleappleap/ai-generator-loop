@@ -45,22 +45,20 @@ clean:
 	$(MAKE) -C loop clean
 	$(MAKE) -C tactical-llm clean
 
-# Remove everything that can be regenerated: venvs, the ComfyUI clone, and
-# auto-downloaded model files.  SDXL checkpoints placed manually in
-# loop/ComfyUI/models/ are preserved, as are the tracked scaffold files
-# (launch.sh, README.md, .gitkeep placeholders).
+# Remove everything that can be regenerated, using git as the single source of
+# truth.  git clean reads .gitignore to identify generated files and
+# automatically preserves all tracked files (including .gitkeep sentinels and
+# ComfyUI scaffold files) without any hardcoded lists.
+# The only explicit exclusions protect user-placed files that are gitignored
+# but have no canonical download URL (SDXL checkpoints, custom workflows).
 # After distclean, restore with: make setup
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
-	rm -rf venv loop/scorers/venv
+	git clean -fdx -- venv/ loop/scorers/venv/
+	@echo "==> Removing auto-downloaded scorer models (tracked .gitkeep sentinels preserved)..."
+	git clean -fdx -- loop/scorers/models/
 	@echo "==> Removing ComfyUI clone (models/ and workflows/ preserved)..."
-	find loop/ComfyUI -mindepth 1 -maxdepth 1 \
-	  ! -name models ! -name workflows ! -name launch.sh ! -name README.md \
-	  -exec rm -rf {} +
-	@echo "==> Removing auto-downloaded scorer models..."
-	rm -rf loop/scorers/models/vlm \
-	       loop/scorers/models/tactical \
-	       loop/scorers/models/artifact-detector
+	git clean -fdx -e models/ -e workflows/ -- loop/ComfyUI/
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 	@echo "    NOTE: SDXL checkpoints in loop/ComfyUI/models/ were preserved."
 
