@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state FROM xa_log WHERE xid LIKE 'si:img-1:%'",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "dc0eec941ca42f3a5a3746ba3a09ca2698903190b2f8e1b9d73f289e6dd42dd2"
+}

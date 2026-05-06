@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT state FROM xa_log WHERE xid LIKE 'bi:sess-1:%'",
+  "describe": {
+    "columns": [
+      {
+        "name": "state",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b29ecee50c5b3340abe10f24eaa1ff4ed0a2719bff0a10228eff246d746aa97f"
+}
