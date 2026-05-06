@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -239,21 +238,18 @@ class TestHandleVerdict:
         return conn, mocks
 
     def test_accept_publishes_accepted(self):
-        import tactical_llm
 
         decision = {"decision": "accept", "confidence": 0.9, "reasoning": "great image"}
         conn, mocks = self._call_with_mocks(CANDIDATE_VERDICT, BUDGET_FRESH, decision)
         mocks["_publish_accepted"].assert_called_once()
 
     def test_accept_does_not_publish_retry(self):
-        import tactical_llm
 
         decision = {"decision": "accept", "confidence": 0.9, "reasoning": "great image"}
         conn, mocks = self._call_with_mocks(CANDIDATE_VERDICT, BUDGET_FRESH, decision)
         mocks["_publish_retry"].assert_not_called()
 
     def test_retry_publishes_retry_and_increments_budget(self):
-        import tactical_llm
 
         decision = {
             "decision": "retry", "confidence": 0.7,
@@ -264,7 +260,6 @@ class TestHandleVerdict:
         mocks["_increment_budget"].assert_called_once_with("sess-1", "retries_used")
 
     def test_retry_overrides_to_give_up_when_budget_exhausted(self):
-        import tactical_llm
 
         decision = {
             "decision": "retry", "confidence": 0.5,
@@ -277,7 +272,6 @@ class TestHandleVerdict:
         mocks["_increment_budget"].assert_not_called()
 
     def test_inpaint_publishes_inpaint_and_increments(self):
-        import tactical_llm
 
         decision = {
             "decision": "inpaint", "confidence": 0.75,
@@ -291,7 +285,6 @@ class TestHandleVerdict:
         mocks["_increment_budget"].assert_called_once_with("sess-1", "inpaints_used")
 
     def test_inpaint_downgrades_to_retry_when_inpaint_budget_gone(self):
-        import tactical_llm
 
         budget = {**BUDGET_FRESH, "inpaints_used": 2}  # inpaints exhausted
         decision = {
@@ -303,7 +296,6 @@ class TestHandleVerdict:
         mocks["_publish_retry"].assert_called_once()
 
     def test_inpaint_gives_up_when_all_budgets_gone(self):
-        import tactical_llm
 
         decision = {
             "decision": "inpaint", "confidence": 0.5,
@@ -314,7 +306,6 @@ class TestHandleVerdict:
         mocks["_publish_retry"].assert_not_called()
 
     def test_give_up_publishes_no_generation_message(self):
-        import tactical_llm
 
         decision = {"decision": "give_up", "confidence": 1.0, "reasoning": "all budgets gone"}
         conn, mocks = self._call_with_mocks(CANDIDATE_VERDICT, BUDGET_FRESH, decision)
@@ -323,7 +314,6 @@ class TestHandleVerdict:
         mocks["_publish_inpaint"].assert_not_called()
 
     def test_decision_log_always_published(self):
-        import tactical_llm
 
         for action in ("accept", "retry", "give_up"):
             decision = {

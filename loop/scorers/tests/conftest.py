@@ -11,6 +11,7 @@ import stomp
 # transformers uses _LazyModule which makes patch("transformers.pipeline")
 # ineffective — eager import + direct assignment is required.
 import transformers  # noqa: E402
+
 transformers.pipeline = MagicMock()
 patch("llama_cpp.Llama", MagicMock()).start()
 

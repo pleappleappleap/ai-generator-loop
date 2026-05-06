@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -145,7 +143,7 @@ class TestSimilarPast:
         import retrieval
 
         # Two records: one from current session (should be excluded), one from other
-        rec_current = _make_loop_record(session_uuid="sess-1", image_uuid="img-a")
+        _make_loop_record(session_uuid="sess-1", image_uuid="img-a")
         rec_other   = _make_loop_record(session_uuid="sess-2", image_uuid="img-b")
 
         mock_table = MagicMock()
@@ -202,7 +200,6 @@ class TestEmbedPrompt:
              patch.object(retrieval, "_tokenizer") as mock_tokenizer:
             mock_tokenizer.return_value = MagicMock()
 
-            import torch
             feature_tensor = MagicMock()
             feature_tensor.__truediv__ = lambda s, o: feature_tensor
             feature_tensor.norm = MagicMock(return_value=MagicMock())

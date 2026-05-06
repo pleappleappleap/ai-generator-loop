@@ -35,7 +35,6 @@ Typical token budget:
 from __future__ import annotations
 
 import json
-from typing import Any
 
 SYSTEM_PROMPT = """\
 You are the tactical decision engine for an autonomous SDXL image generation pipeline.

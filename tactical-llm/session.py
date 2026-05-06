@@ -108,7 +108,7 @@ def _create_session_record(
         prompt: The user-supplied prompt.
         prompt_embedding: Normalised CLIP text embedding of the prompt.
     """
-    from lancedb_schema import CLIP_EMBEDDING_DIM, Session  # noqa: E402
+    from lancedb_schema import Session  # noqa: E402
 
     db = lancedb.connect(_cfg.paths["lancedb"])
     if "sessions" not in db.table_names():
@@ -331,7 +331,7 @@ def main() -> None:
     conn.connect(_STOMP_USER, _STOMP_PASS, wait=True)
     _publish_request(conn, session_uuid, image_uuid, args.workflow, args.prompt, args.workflow_params)
     conn.disconnect()
-    print(f"Generation request published → loop.request")
+    print("Generation request published → loop.request")
 
     if args.monitor:
         _monitor(session_uuid)

@@ -35,7 +35,7 @@ use lancedb::{connect, Table};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::SqlitePool;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 // ── Config ────────────────────────────────────────────────────────────────────
 

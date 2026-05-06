@@ -68,7 +68,10 @@ struct Config {
 }
 
 // ── XA state machine ──────────────────────────────────────────────────────────
+// Full 2PC wiring (Artemis RM enlistment) is deferred to step 9.  These types
+// and functions are intentionally unused until then.
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum XaState {
@@ -78,12 +81,14 @@ enum XaState {
     Rolledback,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Resource {
     Artemis,
     Sqlite,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct XaTransaction {
     xid: String,
@@ -92,8 +97,10 @@ struct XaTransaction {
 }
 
 /// In-memory XA transaction registry.
+#[allow(dead_code)]
 type XaRegistry = Arc<Mutex<HashMap<String, XaTransaction>>>;
 
+#[allow(dead_code)]
 async fn xa_begin(pool: &SqlitePool, registry: &XaRegistry, xid: String) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(
@@ -108,6 +115,7 @@ async fn xa_begin(pool: &SqlitePool, registry: &XaRegistry, xid: String) -> Resu
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn xa_enlist(registry: &XaRegistry, xid: &str, resource: Resource) -> Result<(), Box<dyn std::error::Error>> {
     let mut guard = registry.lock().await;
     let tx = guard.get_mut(xid).ok_or("unknown xid")?;
@@ -119,6 +127,7 @@ async fn xa_enlist(registry: &XaRegistry, xid: &str, resource: Resource) -> Resu
 }
 
 /// Phase 1: write Prepared to xa_log with the participant list.
+#[allow(dead_code)]
 async fn xa_prepare(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
     let participants = {
         let mut guard = registry.lock().await;
@@ -138,6 +147,7 @@ async fn xa_prepare(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Resu
 }
 
 /// Phase 2: commit — write Committed to xa_log, remove from registry.
+#[allow(dead_code)]
 async fn xa_commit(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(
@@ -150,6 +160,7 @@ async fn xa_commit(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Resul
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn xa_rollback(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(

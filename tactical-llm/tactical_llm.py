@@ -43,7 +43,6 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 import stomp

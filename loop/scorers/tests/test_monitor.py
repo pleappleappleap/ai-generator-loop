@@ -1,17 +1,13 @@
 """Tests for loop/monitor.py — pipeline dead-letter consumer."""
 
 import sys
-from io import StringIO
 from pathlib import Path
 from unittest.mock import MagicMock
-
-import pytest
 
 # monitor.py lives in loop/, one level above loop/scorers/
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tests.conftest import make_frame  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # _format_dead_letter
