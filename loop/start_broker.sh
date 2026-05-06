@@ -17,6 +17,15 @@ CFG="$AI_IMAGE_ROOT/config.yaml"
 ARTEMIS_DATA=$(yq '.broker.artemis_data' "$CFG")
 [ "$ARTEMIS_DATA" = "auto" ] && ARTEMIS_DATA="$AI_IMAGE_ROOT/loop/artemis-broker"
 
+if [ ! -x "$ARTEMIS_DATA/bin/artemis" ]; then
+    echo "ERROR: Artemis broker not found at $ARTEMIS_DATA" >&2
+    echo "       Create it first:" >&2
+    echo "         artemis create \"$ARTEMIS_DATA\"" >&2
+    echo "       Then enable AMQP and STOMP acceptors in $ARTEMIS_DATA/etc/broker.xml" >&2
+    echo "       (See INSTALL.md section 3 for details.)" >&2
+    exit 1
+fi
+
 "$ARTEMIS_DATA/bin/artemis" run &
 
 _HOST=$(hostname 2>/dev/null || echo "localhost")

@@ -1,5 +1,5 @@
 .PHONY: all lint typecheck test build format docs clean config check \
-        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare
+        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
@@ -59,6 +59,9 @@ config.yaml:
 	$(MAKE) config
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
+
+# Full first-time setup: system deps → Python venvs → config → models → build.
+setup: prereqs-system prereqs-python config models build
 
 prereqs: prereqs-system prereqs-python
 

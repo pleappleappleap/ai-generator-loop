@@ -38,6 +38,10 @@ loop/ComfyUI/
 .DS_Store
 **/.DS_Store
 
+# ── Generated documentation (make docs) ───────────────────────────────────────
+loop/scorers/docs/
+tactical-llm/docs/
+
 # ── LaTeX build artifacts ──────────────────────────────────────────────────────
 *.aux
 *.log
