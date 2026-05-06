@@ -6,16 +6,16 @@ PYTHON = $(VENV)/bin/python3
 all: lint typecheck
 
 lint:
-	. $(VENV)/bin/activate &&ruff check .
+	$(VENV)/bin/ruff check .
 
 typecheck:
-	. $(VENV)/bin/activate &&pyright .
+	$(VENV)/bin/pyright .
 
 test:
-	. $(VENV)/bin/activate &&pytest tests/ -v
+	$(VENV)/bin/pytest tests/ -v
 
 docs:
-	. $(VENV)/bin/activate &&pdoc \
+	$(VENV)/bin/pdoc \
 		tactical_llm \
 		prompts \
 		retrieval \

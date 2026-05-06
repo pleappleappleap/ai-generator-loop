@@ -5,25 +5,25 @@ export PATH := $(HOME)/.cargo/bin:$(PATH)
 all: lint typecheck test build
 
 lint:
-	. venv/bin/activate &&ruff check .
+	venv/bin/ruff check .
 	cargo clippy --workspace -- -D warnings
 
 typecheck:
-	. venv/bin/activate &&pyright .
+	venv/bin/pyright .
 
 test:
-	. venv/bin/activate &&pytest tests/ -v
+	venv/bin/pytest tests/ -v
 	SQLX_OFFLINE=true cargo test --workspace
 
 format:
-	. venv/bin/activate &&ruff format .
+	venv/bin/ruff format .
 	cargo fmt --all
 
 build:
 	SQLX_OFFLINE=true cargo build --release --workspace
 
 docs:
-	. venv/bin/activate &&pdoc \
+	venv/bin/pdoc \
 		clip_scorer \
 		artifact_scorer \
 		vlm_scorer \
@@ -41,7 +41,7 @@ clean:
 sqlx-prepare:
 	@echo "==> Creating temporary database for sqlx prepare..."
 	@mkdir -p /tmp/sqlx_prepare
-	@python3 -c "\
+	@python3.11 -c "\
 import sqlite3; \
 db = sqlite3.connect('/tmp/sqlx_prepare/pipeline.db'); \
 db.executescript(open('db/schema.sql').read()); \

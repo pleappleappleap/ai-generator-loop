@@ -1,3 +1,9 @@
+# Windows CMD/PowerShell is not supported — this project requires Unix sockets
+# and shell scripts. On Windows use WSL2: wsl make <target>
+ifeq ($(OS),Windows_NT)
+  $(error Windows CMD/PowerShell detected. Run inside WSL2: wsl make $(MAKECMDGOALS))
+endif
+
 .PHONY: all lint typecheck test build format docs clean config check \
         prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup
 
@@ -47,12 +53,12 @@ config:
 		echo "  Linux:  snap install yq  (or see https://github.com/mikefarah/yq/releases)"; \
 		exit 1; \
 	}
-	python3 menuconfig.py
+	python3.11 menuconfig.py
 
 # Validate the environment against the current config.yaml.
 # Checks services, GPU backend, model files, venvs, and Rust binaries.
 check: config.yaml
-	python3 check_env.py
+	python3.11 check_env.py
 
 config.yaml:
 	@echo "config.yaml not found — running make config first"
@@ -102,7 +108,8 @@ prereqs-system:
 	      else \
 	        YQV=$$(curl -s https://api.github.com/repos/mikefarah/yq/releases/latest \
 	          | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/'); \
-	        sudo curl -L "https://github.com/mikefarah/yq/releases/download/v$${YQV}/yq_linux_amd64" \
+	        ARCH=$$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
+	        sudo curl -L "https://github.com/mikefarah/yq/releases/download/v$${YQV}/yq_linux_$${ARCH}" \
 	          -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; \
 	      fi ;; \
 	    dnf)    sudo dnf install -y yq ;; \
@@ -207,7 +214,7 @@ loop/scorers/venv/.installed: loop/scorers/requirements.txt
 	@echo "==> Installing llama-cpp-python (detecting GPU backend)..."; \
 	if [ "$$(uname)" = "Darwin" ]; then \
 	  echo "    macOS detected — building with Metal support."; \
-	  CMAKE_ARGS="-DLLAMA_METAL=on" \
+	  CMAKE_ARGS="-DGGML_METAL=on" \
 	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
 	elif command -v nvcc >/dev/null 2>&1; then \
 	  echo "    NVIDIA CUDA detected — building with CUDA support."; \
