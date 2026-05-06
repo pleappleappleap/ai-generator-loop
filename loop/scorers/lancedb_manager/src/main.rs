@@ -77,7 +77,9 @@ async fn open_loop_table(lancedb_path: &str) -> Result<Table, Box<dyn std::error
         // Create the table by inserting a schema-only empty batch.
         // In production lancedb-rs >= 0.14 the schema can be provided
         // directly; create_empty_table is used here for simplicity.
-        db.create_empty_table("loop", build_loop_schema()).execute().await?;
+        db.create_empty_table("loop", build_loop_schema())
+            .execute()
+            .await?;
     }
     Ok(db.open_table("loop").execute().await?)
 }
@@ -85,30 +87,33 @@ async fn open_loop_table(lancedb_path: &str) -> Result<Table, Box<dyn std::error
 fn build_loop_schema() -> arrow_schema::SchemaRef {
     use arrow_schema::{DataType, Field, Schema};
     std::sync::Arc::new(Schema::new(vec![
-        Field::new("image_uuid",       DataType::Utf8,    false),
-        Field::new("session_uuid",     DataType::Utf8,    true),
-        Field::new("sequence_number",  DataType::Int64,   true),
-        Field::new("created_at",       DataType::Utf8,    true),
-        Field::new("prompt",           DataType::Utf8,    true),
-        Field::new("workflow_path",    DataType::Utf8,    true),
-        Field::new("workflow_params",  DataType::Utf8,    true),
-        Field::new("clip_score",       DataType::Float64, true),
-        Field::new("artifact_score",   DataType::Float64, true),
+        Field::new("image_uuid", DataType::Utf8, false),
+        Field::new("session_uuid", DataType::Utf8, true),
+        Field::new("sequence_number", DataType::Int64, true),
+        Field::new("created_at", DataType::Utf8, true),
+        Field::new("prompt", DataType::Utf8, true),
+        Field::new("workflow_path", DataType::Utf8, true),
+        Field::new("workflow_params", DataType::Utf8, true),
+        Field::new("clip_score", DataType::Float64, true),
+        Field::new("artifact_score", DataType::Float64, true),
         Field::new("vlm_photorealism", DataType::Float64, true),
-        Field::new("vlm_anatomical",   DataType::Float64, true),
-        Field::new("vlm_interaction",  DataType::Float64, true),
-        Field::new("vlm_lighting",     DataType::Float64, true),
-        Field::new("vlm_prompt",       DataType::Float64, true),
-        Field::new("vlm_issues",       DataType::Utf8,    true),
+        Field::new("vlm_anatomical", DataType::Float64, true),
+        Field::new("vlm_interaction", DataType::Float64, true),
+        Field::new("vlm_lighting", DataType::Float64, true),
+        Field::new("vlm_prompt", DataType::Float64, true),
+        Field::new("vlm_issues", DataType::Utf8, true),
         Field::new("vlm_recommendations", DataType::Utf8, true),
-        Field::new("verdict",          DataType::Utf8,    true),
-        Field::new("rejection_reason", DataType::Utf8,    true),
-        Field::new("image_path",       DataType::Utf8,    true),
+        Field::new("verdict", DataType::Utf8, true),
+        Field::new("rejection_reason", DataType::Utf8, true),
+        Field::new("image_path", DataType::Utf8, true),
     ]))
 }
 
 /// Check whether a Loop record for `image_uuid` already exists.
-async fn record_exists(table: &Table, image_uuid: &str) -> Result<bool, Box<dyn std::error::Error>> {
+async fn record_exists(
+    table: &Table,
+    image_uuid: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let filter = format!("image_uuid = '{}'", image_uuid.replace('\'', "''"));
     let count = table.count_rows(Some(filter)).await?;
     Ok(count > 0)
@@ -125,17 +130,26 @@ async fn write_loop_record(
     use arrow_array::{Float64Array, Int64Array, RecordBatch, RecordBatchIterator, StringArray};
     use std::sync::Arc;
 
-    let clip: Value  = session.clip.as_deref()
-        .and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
-    let artifact: Value = session.artifact.as_deref()
-        .and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
-    let vlm: Value   = session.vlm.as_deref()
-        .and_then(|s| serde_json::from_str(s).ok()).unwrap_or(Value::Null);
+    let clip: Value = session
+        .clip
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let artifact: Value = session
+        .artifact
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
+    let vlm: Value = session
+        .vlm
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or(Value::Null);
 
     // Pre-compute owned strings for temporaries that would otherwise dangle.
-    let created_at   = db::now_unix().to_string();
-    let vlm_issues   = vlm["issues"].to_string();
-    let vlm_recs     = vlm["recommendations"].to_string();
+    let created_at = db::now_unix().to_string();
+    let vlm_issues = vlm["issues"].to_string();
+    let vlm_recs = vlm["recommendations"].to_string();
 
     let schema = build_loop_schema();
     let batch = RecordBatch::try_new(
@@ -145,16 +159,39 @@ async fn write_loop_record(
             Arc::new(StringArray::from(vec![session.session_uuid.as_str()])),
             Arc::new(Int64Array::from(vec![session.sequence_number])),
             Arc::new(StringArray::from(vec![created_at.as_str()])),
-            Arc::new(StringArray::from(vec![session.prompt.as_deref().unwrap_or("")])),
-            Arc::new(StringArray::from(vec![session.workflow_path.as_deref().unwrap_or("")])),
-            Arc::new(StringArray::from(vec![session.workflow_params.as_deref().unwrap_or("{}")])),
-            Arc::new(Float64Array::from(vec![clip["clip_score"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![artifact["ai_confidence"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![vlm["photorealism"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![vlm["anatomical_coherence"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![vlm["interaction_plausibility"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![vlm["lighting_consistency"].as_f64().unwrap_or(0.0)])),
-            Arc::new(Float64Array::from(vec![vlm["prompt_adherence"].as_f64().unwrap_or(0.0)])),
+            Arc::new(StringArray::from(vec![session
+                .prompt
+                .as_deref()
+                .unwrap_or("")])),
+            Arc::new(StringArray::from(vec![session
+                .workflow_path
+                .as_deref()
+                .unwrap_or("")])),
+            Arc::new(StringArray::from(vec![session
+                .workflow_params
+                .as_deref()
+                .unwrap_or("{}")])),
+            Arc::new(Float64Array::from(vec![clip["clip_score"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![artifact["ai_confidence"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![vlm["photorealism"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![vlm["anatomical_coherence"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![vlm["interaction_plausibility"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![vlm["lighting_consistency"]
+                .as_f64()
+                .unwrap_or(0.0)])),
+            Arc::new(Float64Array::from(vec![vlm["prompt_adherence"]
+                .as_f64()
+                .unwrap_or(0.0)])),
             Arc::new(StringArray::from(vec![vlm_issues.as_str()])),
             Arc::new(StringArray::from(vec![vlm_recs.as_str()])),
             Arc::new(StringArray::from(vec![verdict])),
@@ -171,18 +208,21 @@ async fn write_loop_record(
 // ── SQLite ────────────────────────────────────────────────────────────────────
 
 struct SessionRow {
-    image_uuid:      String,
-    session_uuid:    String,
+    image_uuid: String,
+    session_uuid: String,
     sequence_number: i64,
-    prompt:          Option<String>,
-    workflow_path:   Option<String>,
+    prompt: Option<String>,
+    workflow_path: Option<String>,
     workflow_params: Option<String>,
-    clip:            Option<String>,
-    artifact:        Option<String>,
-    vlm:             Option<String>,
+    clip: Option<String>,
+    artifact: Option<String>,
+    vlm: Option<String>,
 }
 
-async fn fetch_session(pool: &SqlitePool, image_uuid: &str) -> Result<Option<SessionRow>, sqlx::Error> {
+async fn fetch_session(
+    pool: &SqlitePool,
+    image_uuid: &str,
+) -> Result<Option<SessionRow>, sqlx::Error> {
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
                 workflow_params, clip, artifact, vlm
@@ -193,22 +233,25 @@ async fn fetch_session(pool: &SqlitePool, image_uuid: &str) -> Result<Option<Ses
     .await?;
 
     Ok(row.map(|r| SessionRow {
-        image_uuid:      r.image_uuid.unwrap_or_default(),
-        session_uuid:    r.session_uuid,
+        image_uuid: r.image_uuid.unwrap_or_default(),
+        session_uuid: r.session_uuid,
         sequence_number: r.sequence_number,
-        prompt:          r.prompt,
-        workflow_path:   r.workflow_path,
+        prompt: r.prompt,
+        workflow_path: r.workflow_path,
         workflow_params: r.workflow_params,
-        clip:            r.clip,
-        artifact:        r.artifact,
-        vlm:             r.vlm,
+        clip: r.clip,
+        artifact: r.artifact,
+        vlm: r.vlm,
     }))
 }
 
 async fn delete_session(pool: &SqlitePool, image_uuid: &str) -> Result<(), sqlx::Error> {
-    sqlx::query!("DELETE FROM scorer_session WHERE image_uuid = ?1", image_uuid)
-        .execute(pool)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM scorer_session WHERE image_uuid = ?1",
+        image_uuid
+    )
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -236,10 +279,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dlx_sender = Sender::attach(&mut session, "lancedb-dlx", "pipeline.dlx").await?;
     let dlx_sender = std::sync::Arc::new(tokio::sync::Mutex::new(dlx_sender));
 
-    let mut accepted_receiver = Receiver::attach(
-        &mut session, "lancedb-accepted", "lancedb.accepted.queue").await?;
-    let mut cancel_receiver = Receiver::attach(
-        &mut session, "lancedb-cancel", "lancedb.cancel.queue").await?;
+    let mut accepted_receiver =
+        Receiver::attach(&mut session, "lancedb-accepted", "lancedb.accepted.queue").await?;
+    let mut cancel_receiver =
+        Receiver::attach(&mut session, "lancedb-cancel", "lancedb.cancel.queue").await?;
 
     info!("LanceDB manager ready (AMQP 1.0)");
 
@@ -310,12 +353,15 @@ async fn process_terminal(
     // 1. Load scorer_session row.
     let session = match fetch_session(pool, image_uuid).await? {
         Some(s) => s,
-        None    => return Ok(false),
+        None => return Ok(false),
     };
 
     // 2. Idempotent existence check — do not double-write.
     if record_exists(table, image_uuid).await? {
-        info!("LanceDB record for {} already exists — deleting session row", image_uuid);
+        info!(
+            "LanceDB record for {} already exists — deleting session row",
+            image_uuid
+        );
         delete_session(pool, image_uuid).await?;
         return Ok(true);
     }

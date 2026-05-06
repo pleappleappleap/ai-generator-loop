@@ -18,7 +18,7 @@ use tracing::info;
 
 #[derive(Deserialize)]
 struct Broker {
-    amqp_url: String, 
+    amqp_url: String,
 }
 
 #[derive(Deserialize)]
@@ -46,9 +46,7 @@ pub async fn route_message(
     publisher: &dyn Publisher,
     message: Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let image_uuid = message["image_uuid"]
-        .as_str()
-        .ok_or("missing image_uuid")?;
+    let image_uuid = message["image_uuid"].as_str().ok_or("missing image_uuid")?;
     // Artemis AMQP 1.0: use subject/routing-key style address for fanout.
     let address = format!("scorer.requests/{}", image_uuid);
     let payload = serde_json::to_vec(&message)?;
@@ -88,14 +86,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let image_uuid = message["image_uuid"].as_str().unwrap_or("unknown");
 
         sender
-            .send(fe2o3_amqp::types::messaging::Message::builder()
-                .properties(
-                    fe2o3_amqp::types::messaging::Properties::builder()
-                        .subject(format!("score.{}", image_uuid))
-                        .build()
-                )
-                .data(payload)
-                .build())
+            .send(
+                fe2o3_amqp::types::messaging::Message::builder()
+                    .properties(
+                        fe2o3_amqp::types::messaging::Properties::builder()
+                            .subject(format!("score.{}", image_uuid))
+                            .build(),
+                    )
+                    .data(payload)
+                    .build(),
+            )
             .await?;
 
         receiver.accept(&delivery).await?;

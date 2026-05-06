@@ -101,7 +101,11 @@ struct XaTransaction {
 type XaRegistry = Arc<Mutex<HashMap<String, XaTransaction>>>;
 
 #[allow(dead_code)]
-async fn xa_begin(pool: &SqlitePool, registry: &XaRegistry, xid: String) -> Result<(), Box<dyn std::error::Error>> {
+async fn xa_begin(
+    pool: &SqlitePool,
+    registry: &XaRegistry,
+    xid: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(
         "INSERT INTO xa_log (xid, state, participants, created_at) VALUES (?1, 'prepared', '[]', ?2)",
@@ -110,13 +114,21 @@ async fn xa_begin(pool: &SqlitePool, registry: &XaRegistry, xid: String) -> Resu
     .execute(pool)
     .await?;
 
-    let tx = XaTransaction { xid: xid.clone(), state: XaState::Active, participants: vec![] };
+    let tx = XaTransaction {
+        xid: xid.clone(),
+        state: XaState::Active,
+        participants: vec![],
+    };
     registry.lock().await.insert(xid, tx);
     Ok(())
 }
 
 #[allow(dead_code)]
-async fn xa_enlist(registry: &XaRegistry, xid: &str, resource: Resource) -> Result<(), Box<dyn std::error::Error>> {
+async fn xa_enlist(
+    registry: &XaRegistry,
+    xid: &str,
+    resource: Resource,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut guard = registry.lock().await;
     let tx = guard.get_mut(xid).ok_or("unknown xid")?;
     let name = format!("{:?}", resource);
@@ -128,7 +140,11 @@ async fn xa_enlist(registry: &XaRegistry, xid: &str, resource: Resource) -> Resu
 
 /// Phase 1: write Prepared to xa_log with the participant list.
 #[allow(dead_code)]
-async fn xa_prepare(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn xa_prepare(
+    pool: &SqlitePool,
+    registry: &XaRegistry,
+    xid: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let participants = {
         let mut guard = registry.lock().await;
         let tx = guard.get_mut(xid).ok_or("unknown xid")?;
@@ -139,7 +155,8 @@ async fn xa_prepare(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Resu
     // fsync-backed write — SqliteSynchronous::Full in open_pool() ensures durability.
     sqlx::query!(
         "UPDATE xa_log SET state = 'prepared', participants = ?1 WHERE xid = ?2",
-        participants, xid
+        participants,
+        xid
     )
     .execute(pool)
     .await?;
@@ -148,11 +165,16 @@ async fn xa_prepare(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Resu
 
 /// Phase 2: commit — write Committed to xa_log, remove from registry.
 #[allow(dead_code)]
-async fn xa_commit(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn xa_commit(
+    pool: &SqlitePool,
+    registry: &XaRegistry,
+    xid: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(
         "UPDATE xa_log SET state = 'committed', resolved_at = ?1 WHERE xid = ?2",
-        now, xid
+        now,
+        xid
     )
     .execute(pool)
     .await?;
@@ -161,11 +183,16 @@ async fn xa_commit(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Resul
 }
 
 #[allow(dead_code)]
-async fn xa_rollback(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn xa_rollback(
+    pool: &SqlitePool,
+    registry: &XaRegistry,
+    xid: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     let now = db::now_unix();
     sqlx::query!(
         "UPDATE xa_log SET state = 'rolledback', resolved_at = ?1 WHERE xid = ?2",
-        now, xid
+        now,
+        xid
     )
     .execute(pool)
     .await?;
@@ -179,28 +206,35 @@ async fn xa_rollback(pool: &SqlitePool, registry: &XaRegistry, xid: &str) -> Res
 /// in xa_log, this implementation rolls back (conservative recovery strategy).
 /// When Artemis XA support is wired in step 9, this will query each RM for
 /// the transaction status before deciding.
-async fn recover_prepared_transactions(pool: &SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
-    let prepared = sqlx::query!(
-        "SELECT xid FROM xa_log WHERE state = 'prepared'"
-    )
-    .fetch_all(pool)
-    .await?;
+async fn recover_prepared_transactions(
+    pool: &SqlitePool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let prepared = sqlx::query!("SELECT xid FROM xa_log WHERE state = 'prepared'")
+        .fetch_all(pool)
+        .await?;
 
     if prepared.is_empty() {
         info!("Crash recovery: no prepared transactions found");
         return Ok(());
     }
 
-    warn!("Crash recovery: {} prepared transaction(s) found — rolling back", prepared.len());
+    warn!(
+        "Crash recovery: {} prepared transaction(s) found — rolling back",
+        prepared.len()
+    );
     let now = db::now_unix();
     for row in prepared {
         sqlx::query!(
             "UPDATE xa_log SET state = 'rolledback', resolved_at = ?1 WHERE xid = ?2",
-            now, row.xid
+            now,
+            row.xid
         )
         .execute(pool)
         .await?;
-        warn!("Crash recovery: rolled back xid={}", row.xid.as_deref().unwrap_or("?"));
+        warn!(
+            "Crash recovery: rolled back xid={}",
+            row.xid.as_deref().unwrap_or("?")
+        );
     }
     Ok(())
 }
@@ -250,25 +284,45 @@ struct ApiResponse {
 
 impl ApiResponse {
     fn ok() -> Self {
-        Self { ok: true, error: None, retries_used: None, inpaints_used: None,
-               max_retries: None, max_inpaints: None }
+        Self {
+            ok: true,
+            error: None,
+            retries_used: None,
+            inpaints_used: None,
+            max_retries: None,
+            max_inpaints: None,
+        }
     }
     fn err(msg: impl Into<String>) -> Self {
-        Self { ok: false, error: Some(msg.into()), retries_used: None, inpaints_used: None,
-               max_retries: None, max_inpaints: None }
+        Self {
+            ok: false,
+            error: Some(msg.into()),
+            retries_used: None,
+            inpaints_used: None,
+            max_retries: None,
+            max_inpaints: None,
+        }
     }
 }
 
 async fn handle_api_request(pool: &SqlitePool, req: ApiRequest) -> ApiResponse {
     match req {
-        ApiRequest::BudgetInit { session_uuid, max_retries, max_inpaints } => {
+        ApiRequest::BudgetInit {
+            session_uuid,
+            max_retries,
+            max_inpaints,
+        } => {
             let now = db::now_unix();
             let expires_at = now + 86400; // 24 h session budget lifetime
             match sqlx::query!(
                 "INSERT OR IGNORE INTO tactical_budget
                  (session_uuid, max_retries, max_inpaints, created_at, expires_at)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
-                session_uuid, max_retries, max_inpaints, now, expires_at
+                session_uuid,
+                max_retries,
+                max_inpaints,
+                now,
+                expires_at
             )
             .execute(pool)
             .await
@@ -290,17 +344,20 @@ async fn handle_api_request(pool: &SqlitePool, req: ApiRequest) -> ApiResponse {
                 Ok(Some(row)) => ApiResponse {
                     ok: true,
                     error: None,
-                    retries_used:  Some(row.retries_used),
+                    retries_used: Some(row.retries_used),
                     inpaints_used: Some(row.inpaints_used),
-                    max_retries:   Some(row.max_retries),
-                    max_inpaints:  Some(row.max_inpaints),
+                    max_retries: Some(row.max_retries),
+                    max_inpaints: Some(row.max_inpaints),
                 },
                 Ok(None) => ApiResponse::err("session not found"),
-                Err(e)   => ApiResponse::err(e.to_string()),
+                Err(e) => ApiResponse::err(e.to_string()),
             }
         }
 
-        ApiRequest::BudgetUpdate { session_uuid, field } => {
+        ApiRequest::BudgetUpdate {
+            session_uuid,
+            field,
+        } => {
             let result = match field.as_str() {
                 "retries_used" => sqlx::query!(
                     "UPDATE tactical_budget SET retries_used = retries_used + 1 WHERE session_uuid = ?1",
@@ -319,8 +376,13 @@ async fn handle_api_request(pool: &SqlitePool, req: ApiRequest) -> ApiResponse {
         }
 
         ApiRequest::SessionInit {
-            image_uuid, session_uuid, sequence_number, prompt,
-            workflow_path, workflow_params, score_timeout_secs,
+            image_uuid,
+            session_uuid,
+            sequence_number,
+            prompt,
+            workflow_path,
+            workflow_params,
+            score_timeout_secs,
         } => {
             let now = db::now_unix();
             let expires_at = now + score_timeout_secs;
@@ -329,8 +391,14 @@ async fn handle_api_request(pool: &SqlitePool, req: ApiRequest) -> ApiResponse {
                  (image_uuid, session_uuid, sequence_number, prompt, workflow_path,
                   workflow_params, created_at, expires_at)
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",
-                image_uuid, session_uuid, sequence_number, prompt,
-                workflow_path, workflow_params, now, expires_at
+                image_uuid,
+                session_uuid,
+                sequence_number,
+                prompt,
+                workflow_path,
+                workflow_params,
+                now,
+                expires_at
             )
             .execute(pool)
             .await
@@ -342,7 +410,10 @@ async fn handle_api_request(pool: &SqlitePool, req: ApiRequest) -> ApiResponse {
     }
 }
 
-async fn run_socket_server(pool: Arc<SqlitePool>, socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_socket_server(
+    pool: Arc<SqlitePool>,
+    socket_path: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Clean up stale socket from a previous run.
     let _ = std::fs::remove_file(socket_path);
     let listener = UnixListener::bind(socket_path)?;
@@ -357,7 +428,7 @@ async fn run_socket_server(pool: Arc<SqlitePool>, socket_path: &str) -> Result<(
             while let Ok(Some(line)) = lines.next_line().await {
                 let response = match serde_json::from_str::<ApiRequest>(&line) {
                     Ok(req) => handle_api_request(&pool, req).await,
-                    Err(e)  => ApiResponse::err(format!("parse error: {}", e)),
+                    Err(e) => ApiResponse::err(format!("parse error: {}", e)),
                 };
                 let mut resp_bytes = serde_json::to_vec(&response).unwrap_or_default();
                 resp_bytes.push(b'\n');
@@ -419,21 +490,29 @@ mod tests {
     #[tokio::test]
     async fn test_budget_init_creates_row() {
         let pool = make_pool().await;
-        let resp = handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(),
-            max_retries:  3,
-            max_inpaints: 2,
-        }).await;
+        let resp = handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 3,
+                max_inpaints: 2,
+            },
+        )
+        .await;
         assert!(resp.ok);
 
         // Verify row exists via BudgetGet
-        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
-            session_uuid: "sess-1".into(),
-        }).await;
+        let get = handle_api_request(
+            &pool,
+            ApiRequest::BudgetGet {
+                session_uuid: "sess-1".into(),
+            },
+        )
+        .await;
         assert!(get.ok);
-        assert_eq!(get.max_retries,   Some(3));
-        assert_eq!(get.max_inpaints,  Some(2));
-        assert_eq!(get.retries_used,  Some(0));
+        assert_eq!(get.max_retries, Some(3));
+        assert_eq!(get.max_inpaints, Some(2));
+        assert_eq!(get.retries_used, Some(0));
         assert_eq!(get.inpaints_used, Some(0));
     }
 
@@ -441,18 +520,34 @@ mod tests {
     async fn test_budget_init_idempotent() {
         let pool = make_pool().await;
         // First insert
-        handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 3,
+                max_inpaints: 2,
+            },
+        )
+        .await;
         // Second insert with different params — INSERT OR IGNORE keeps first
-        let resp = handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(), max_retries: 99, max_inpaints: 99,
-        }).await;
+        let resp = handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 99,
+                max_inpaints: 99,
+            },
+        )
+        .await;
         assert!(resp.ok);
 
-        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
-            session_uuid: "sess-1".into(),
-        }).await;
+        let get = handle_api_request(
+            &pool,
+            ApiRequest::BudgetGet {
+                session_uuid: "sess-1".into(),
+            },
+        )
+        .await;
         assert_eq!(get.max_retries, Some(3)); // original value preserved
     }
 
@@ -461,9 +556,13 @@ mod tests {
     #[tokio::test]
     async fn test_budget_get_missing_session_returns_error() {
         let pool = make_pool().await;
-        let resp = handle_api_request(&pool, ApiRequest::BudgetGet {
-            session_uuid: "nonexistent".into(),
-        }).await;
+        let resp = handle_api_request(
+            &pool,
+            ApiRequest::BudgetGet {
+                session_uuid: "nonexistent".into(),
+            },
+        )
+        .await;
         assert!(!resp.ok);
         assert!(resp.error.is_some());
     }
@@ -473,56 +572,98 @@ mod tests {
     #[tokio::test]
     async fn test_budget_update_retries_increments() {
         let pool = make_pool().await;
-        handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 3,
+                max_inpaints: 2,
+            },
+        )
+        .await;
 
-        handle_api_request(&pool, ApiRequest::BudgetUpdate {
-            session_uuid: "sess-1".into(),
-            field:        "retries_used".into(),
-        }).await;
-        handle_api_request(&pool, ApiRequest::BudgetUpdate {
-            session_uuid: "sess-1".into(),
-            field:        "retries_used".into(),
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetUpdate {
+                session_uuid: "sess-1".into(),
+                field: "retries_used".into(),
+            },
+        )
+        .await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetUpdate {
+                session_uuid: "sess-1".into(),
+                field: "retries_used".into(),
+            },
+        )
+        .await;
 
-        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
-            session_uuid: "sess-1".into(),
-        }).await;
-        assert_eq!(get.retries_used,  Some(2));
+        let get = handle_api_request(
+            &pool,
+            ApiRequest::BudgetGet {
+                session_uuid: "sess-1".into(),
+            },
+        )
+        .await;
+        assert_eq!(get.retries_used, Some(2));
         assert_eq!(get.inpaints_used, Some(0)); // unchanged
     }
 
     #[tokio::test]
     async fn test_budget_update_inpaints_increments() {
         let pool = make_pool().await;
-        handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 3,
+                max_inpaints: 2,
+            },
+        )
+        .await;
 
-        handle_api_request(&pool, ApiRequest::BudgetUpdate {
-            session_uuid: "sess-1".into(),
-            field:        "inpaints_used".into(),
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetUpdate {
+                session_uuid: "sess-1".into(),
+                field: "inpaints_used".into(),
+            },
+        )
+        .await;
 
-        let get = handle_api_request(&pool, ApiRequest::BudgetGet {
-            session_uuid: "sess-1".into(),
-        }).await;
+        let get = handle_api_request(
+            &pool,
+            ApiRequest::BudgetGet {
+                session_uuid: "sess-1".into(),
+            },
+        )
+        .await;
         assert_eq!(get.inpaints_used, Some(1));
-        assert_eq!(get.retries_used,  Some(0)); // unchanged
+        assert_eq!(get.retries_used, Some(0)); // unchanged
     }
 
     #[tokio::test]
     async fn test_budget_update_unknown_field_returns_error() {
         let pool = make_pool().await;
-        handle_api_request(&pool, ApiRequest::BudgetInit {
-            session_uuid: "sess-1".into(), max_retries: 3, max_inpaints: 2,
-        }).await;
+        handle_api_request(
+            &pool,
+            ApiRequest::BudgetInit {
+                session_uuid: "sess-1".into(),
+                max_retries: 3,
+                max_inpaints: 2,
+            },
+        )
+        .await;
 
-        let resp = handle_api_request(&pool, ApiRequest::BudgetUpdate {
-            session_uuid: "sess-1".into(),
-            field:        "nonexistent_field".into(),
-        }).await;
+        let resp = handle_api_request(
+            &pool,
+            ApiRequest::BudgetUpdate {
+                session_uuid: "sess-1".into(),
+                field: "nonexistent_field".into(),
+            },
+        )
+        .await;
         assert!(!resp.ok);
     }
 
@@ -531,21 +672,27 @@ mod tests {
     #[tokio::test]
     async fn test_session_init_inserts_row() {
         let pool = make_pool().await;
-        let resp = handle_api_request(&pool, ApiRequest::SessionInit {
-            image_uuid:         "img-1".into(),
-            session_uuid:       "sess-1".into(),
-            sequence_number:    1,
-            prompt:             "a tiger".into(),
-            workflow_path:      "/workflows/default.json".into(),
-            workflow_params:    "{}".into(),
-            score_timeout_secs: 60,
-        }).await;
+        let resp = handle_api_request(
+            &pool,
+            ApiRequest::SessionInit {
+                image_uuid: "img-1".into(),
+                session_uuid: "sess-1".into(),
+                sequence_number: 1,
+                prompt: "a tiger".into(),
+                workflow_path: "/workflows/default.json".into(),
+                workflow_params: "{}".into(),
+                score_timeout_secs: 60,
+            },
+        )
+        .await;
         assert!(resp.ok);
 
         let row = sqlx::query!(
             "SELECT image_uuid, prompt FROM scorer_session WHERE image_uuid = 'img-1'"
         )
-        .fetch_optional(&pool).await.unwrap();
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
         assert!(row.is_some());
         assert_eq!(row.unwrap().prompt.unwrap_or_default(), "a tiger");
     }
@@ -554,21 +701,26 @@ mod tests {
     async fn test_session_init_idempotent() {
         let pool = make_pool().await;
         for _ in 0..3 {
-            let resp = handle_api_request(&pool, ApiRequest::SessionInit {
-                image_uuid:         "img-1".into(),
-                session_uuid:       "sess-1".into(),
-                sequence_number:    1,
-                prompt:             "a tiger".into(),
-                workflow_path:      "/workflows/default.json".into(),
-                workflow_params:    "{}".into(),
-                score_timeout_secs: 60,
-            }).await;
+            let resp = handle_api_request(
+                &pool,
+                ApiRequest::SessionInit {
+                    image_uuid: "img-1".into(),
+                    session_uuid: "sess-1".into(),
+                    sequence_number: 1,
+                    prompt: "a tiger".into(),
+                    workflow_path: "/workflows/default.json".into(),
+                    workflow_params: "{}".into(),
+                    score_timeout_secs: 60,
+                },
+            )
+            .await;
             assert!(resp.ok);
         }
-        let count: i32 = sqlx::query_scalar!(
-            "SELECT COUNT(*) FROM scorer_session WHERE image_uuid = 'img-1'"
-        )
-        .fetch_one(&pool).await.unwrap();
+        let count: i32 =
+            sqlx::query_scalar!("SELECT COUNT(*) FROM scorer_session WHERE image_uuid = 'img-1'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -582,14 +734,16 @@ mod tests {
             "INSERT INTO xa_log (xid, state, participants, created_at)
              VALUES ('xid-1', 'committed', '[]', 1000)"
         )
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
 
         recover_prepared_transactions(&pool).await.unwrap();
 
-        let state: String = sqlx::query_scalar!(
-            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
-        )
-        .fetch_one(&pool).await.unwrap();
+        let state: String = sqlx::query_scalar!("SELECT state FROM xa_log WHERE xid = 'xid-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "committed");
     }
 
@@ -602,7 +756,9 @@ mod tests {
                  VALUES (?1, 'prepared', '[]', 1000)",
                 xid
             )
-            .execute(&pool).await.unwrap();
+            .execute(&pool)
+            .await
+            .unwrap();
         }
 
         recover_prepared_transactions(&pool).await.unwrap();
@@ -610,7 +766,9 @@ mod tests {
         let states: Vec<String> = sqlx::query_scalar!(
             "SELECT state FROM xa_log WHERE xid IN ('xid-1', 'xid-2') ORDER BY xid"
         )
-        .fetch_all(&pool).await.unwrap();
+        .fetch_all(&pool)
+        .await
+        .unwrap();
         assert_eq!(states, vec!["rolledback", "rolledback"]);
     }
 
@@ -623,7 +781,9 @@ mod tests {
         xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
 
         let row = sqlx::query!("SELECT xid, state FROM xa_log WHERE xid = 'xid-1'")
-            .fetch_optional(&pool).await.unwrap();
+            .fetch_optional(&pool)
+            .await
+            .unwrap();
         assert!(row.is_some());
 
         let guard = registry.lock().await;
@@ -636,7 +796,9 @@ mod tests {
         let pool = make_pool().await;
         let registry: XaRegistry = Arc::new(Mutex::new(HashMap::new()));
         xa_begin(&pool, &registry, "xid-1".into()).await.unwrap();
-        xa_enlist(&registry, "xid-1", Resource::Artemis).await.unwrap();
+        xa_enlist(&registry, "xid-1", Resource::Artemis)
+            .await
+            .unwrap();
 
         let guard = registry.lock().await;
         assert!(guard["xid-1"].participants.contains(&"Artemis".to_string()));
@@ -663,10 +825,10 @@ mod tests {
 
         assert!(!registry.lock().await.contains_key("xid-1"));
 
-        let state: String = sqlx::query_scalar!(
-            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
-        )
-        .fetch_one(&pool).await.unwrap();
+        let state: String = sqlx::query_scalar!("SELECT state FROM xa_log WHERE xid = 'xid-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "committed");
     }
 
@@ -679,10 +841,10 @@ mod tests {
 
         assert!(!registry.lock().await.contains_key("xid-1"));
 
-        let state: String = sqlx::query_scalar!(
-            "SELECT state FROM xa_log WHERE xid = 'xid-1'"
-        )
-        .fetch_one(&pool).await.unwrap();
+        let state: String = sqlx::query_scalar!("SELECT state FROM xa_log WHERE xid = 'xid-1'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(state, "rolledback");
     }
 

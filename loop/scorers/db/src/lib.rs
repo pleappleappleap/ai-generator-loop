@@ -19,8 +19,8 @@
 //! }
 //! ```
 
-use sqlx::{
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous},
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
 };
 use std::time::Duration;
 use tracing::info;
@@ -29,10 +29,7 @@ use tracing::info;
 ///
 /// `busy_timeout_ms` controls how long a blocked write waits before returning
 /// an error. 5000 ms is the recommended default.
-pub async fn open_pool(
-    path: &str,
-    busy_timeout_ms: u64,
-) -> Result<SqlitePool, sqlx::Error> {
+pub async fn open_pool(path: &str, busy_timeout_ms: u64) -> Result<SqlitePool, sqlx::Error> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .journal_mode(SqliteJournalMode::Wal)
