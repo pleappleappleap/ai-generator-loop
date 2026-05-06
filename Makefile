@@ -45,20 +45,36 @@ clean:
 	$(MAKE) -C loop clean
 	$(MAKE) -C tactical-llm clean
 
-# Remove everything that can be regenerated, using git as the single source of
-# truth.  git clean reads .gitignore to identify generated files and
-# automatically preserves all tracked files (including .gitkeep sentinels and
-# ComfyUI scaffold files) without any hardcoded lists.
-# The only explicit exclusions protect user-placed files that are gitignored
-# but have no canonical download URL (SDXL checkpoints, custom workflows).
+# Auto-downloaded scorer model directories are declared in .gitignore.
+# distclean reads that file directly — no git command required — so adding a
+# new model directory to .gitignore is sufficient to make distclean handle it.
+# Within each such directory a .gitkeep sentinel (if present) is preserved so
+# the placeholder survives and make models knows where to put files.
+SCORER_MODEL_DIRS := $(shell grep -E '^loop/scorers/models/' .gitignore | sed 's|/*$$||')
+
+# Remove everything that can be regenerated: venvs, the ComfyUI clone, and
+# auto-downloaded model files.  Reads .gitignore and .gitkeep files as the
+# source of truth — does not require the git CLI or a .git directory.
+# The only hardcoded exclusions protect user-placed data that cannot be
+# re-downloaded (SDXL checkpoints, custom workflows).
 # After distclean, restore with: make setup
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
-	git clean -fdx -- venv/ loop/scorers/venv/
-	@echo "==> Removing auto-downloaded scorer models (tracked .gitkeep sentinels preserved)..."
-	git clean -fdx -- loop/scorers/models/
+	rm -rf venv loop/scorers/venv
+	@echo "==> Removing auto-downloaded scorer models (preserving .gitkeep sentinels)..."
+	@for d in $(SCORER_MODEL_DIRS); do \
+	  if [ -d "$$d" ]; then \
+	    echo "    cleaning $$d"; \
+	    keep=0; [ -f "$$d/.gitkeep" ] && keep=1; \
+	    rm -rf "$$d"; \
+	    mkdir -p "$$d"; \
+	    [ "$$keep" = "1" ] && touch "$$d/.gitkeep"; \
+	  fi; \
+	done
 	@echo "==> Removing ComfyUI clone (models/ and workflows/ preserved)..."
-	git clean -fdx -e models/ -e workflows/ -- loop/ComfyUI/
+	find loop/ComfyUI -mindepth 1 -maxdepth 1 \
+	  ! -name models ! -name workflows ! -name launch.sh ! -name README.md \
+	  -exec rm -rf {} +
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 	@echo "    NOTE: SDXL checkpoints in loop/ComfyUI/models/ were preserved."
 
