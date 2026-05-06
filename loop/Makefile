@@ -25,3 +25,5 @@ sqlx-prepare:
 
 clean:
 	$(MAKE) -C scorers clean
+	rm -rf __pycache__
+	rm -f *.pyc

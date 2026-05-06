@@ -1,26 +1,27 @@
 .PHONY: all lint typecheck test build format docs clean sqlx-prepare
 
-export PATH := $(HOME)/.cargo/bin:$(PATH)
+# Use cargo from rustup install location; override with make CARGO=/path/to/cargo
+CARGO ?= $(HOME)/.cargo/bin/cargo
 
 all: lint typecheck test build
 
 lint:
 	venv/bin/ruff check .
-	cargo clippy --workspace -- -D warnings
+	$(CARGO) clippy --workspace -- -D warnings
 
 typecheck:
 	venv/bin/pyright .
 
 test:
 	venv/bin/pytest tests/ -v
-	SQLX_OFFLINE=true cargo test --workspace
+	SQLX_OFFLINE=true $(CARGO) test --workspace
 
 format:
 	venv/bin/ruff format .
-	cargo fmt --all
+	$(CARGO) fmt --all
 
 build:
-	SQLX_OFFLINE=true cargo build --release --workspace
+	SQLX_OFFLINE=true $(CARGO) build --release --workspace
 
 docs:
 	venv/bin/pdoc \
@@ -28,12 +29,12 @@ docs:
 		artifact_scorer \
 		vlm_scorer \
 		-o docs/
-	cargo doc --no-deps --workspace
+	$(CARGO) doc --no-deps --workspace
 
 clean:
-	cargo clean
-	rm -rf __pycache__ .pytest_cache docs
-	rm -f *.pyc
+	$(CARGO) clean
+	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache docs
+	rm -f *.pyc tests/*.pyc
 
 # Generate the sqlx offline query cache (.sqlx/).
 # Requires sqlx-cli: cargo install sqlx-cli --no-default-features --features sqlite
@@ -48,6 +49,6 @@ db.executescript(open('db/schema.sql').read()); \
 db.close(); \
 print('    Schema applied.')"
 	DATABASE_URL=sqlite:////tmp/sqlx_prepare/pipeline.db \
-		cargo sqlx prepare --workspace
+		$(CARGO) sqlx prepare --workspace
 	@echo "==> sqlx offline cache updated in .sqlx/"
 	@echo "    Commit the .sqlx/ directory to git."

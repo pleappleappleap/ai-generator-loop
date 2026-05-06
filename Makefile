@@ -41,6 +41,7 @@ sqlx-prepare:
 clean:
 	latexmk -C ARCHITECTURE.tex
 	rm -f *.aux *.log *.out *.toc *.fls *.fdb_latexmk
+	rm -rf __pycache__
 	$(MAKE) -C loop clean
 	$(MAKE) -C tactical-llm clean
 

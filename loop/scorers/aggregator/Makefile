@@ -1,24 +1,26 @@
 .PHONY: all lint typecheck test build format docs clean
 
+CARGO ?= $(HOME)/.cargo/bin/cargo
+
 all: lint test build
 
 lint:
-	cargo clippy -- -D warnings
+	$(CARGO) clippy -- -D warnings
 
 typecheck:
-	cargo check
+	$(CARGO) check
 
 test:
-	SQLX_OFFLINE=true cargo test
+	SQLX_OFFLINE=true $(CARGO) test
 
 format:
-	cargo fmt
+	$(CARGO) fmt
 
 build:
-	SQLX_OFFLINE=true cargo build --release
+	SQLX_OFFLINE=true $(CARGO) build --release
 
 docs:
-	cargo doc --no-deps
+	$(CARGO) doc --no-deps
 
 clean:
-	cargo clean
+	$(CARGO) clean
