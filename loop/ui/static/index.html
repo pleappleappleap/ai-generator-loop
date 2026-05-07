@@ -178,9 +178,14 @@
     text-transform: uppercase;
     flex: 1;
   }
-  .verdict-candidate { background: rgba(76,175,80,0.2); color: #81c784; }
-  .verdict-rejected  { background: rgba(244,67,54,0.2);  color: #e57373; }
-  .verdict-accepted  { background: rgba(74,158,255,0.2); color: #64b5f6; }
+  .verdict-queued    { background: rgba(136,136,136,0.2); color: #aaa; }
+  .verdict-scoring   { background: rgba(255,193,7,0.2);   color: #ffd54f; }
+  .verdict-candidate { background: rgba(76,175,80,0.2);   color: #81c784; }
+  .verdict-rejected  { background: rgba(244,67,54,0.2);   color: #e57373; }
+  .verdict-accepted  { background: rgba(74,158,255,0.2);  color: #64b5f6; }
+  .verdict-retry     { background: rgba(255,152,0,0.2);   color: #ffb74d; }
+  .verdict-inpaint   { background: rgba(156,39,176,0.2);  color: #ce93d8; }
+  .verdict-give_up   { background: rgba(96,96,96,0.2);    color: #999; }
 
   .btn-thumb {
     background: none;
@@ -316,6 +321,7 @@
   }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover { filter: brightness(1.2); }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; filter: none; }
   .btn-cancel  { background: var(--border); color: var(--text); }
   .btn-cancel:hover { background: #3a3a3a; }
 
@@ -344,7 +350,7 @@
 <aside id="sidebar">
   <div id="sidebar-header">
     <h2>Workflows</h2>
-    <button id="btn-new-session">+ Session</button>
+    <button id="btn-new-session">+ Conversation</button>
   </div>
   <div id="workflow-list"></div>
   <div id="sidebar-footer">
@@ -366,20 +372,20 @@
 <aside id="chat-panel">
   <div id="chat-header">Creative Director</div>
   <div id="chat-messages">
-    <div class="chat-msg system">Discuss your creative direction. Start a new session to begin.</div>
+    <div class="chat-msg system">Discuss your creative direction. Start a new conversation to begin.</div>
   </div>
   <div id="chat-input-row">
-    <textarea id="chat-input" placeholder="Describe your vision…" rows="2"></textarea>
-    <button id="btn-send">Send</button>
+    <textarea id="chat-input" placeholder="Create a conversation to start chatting…" rows="2"></textarea>
+    <button id="btn-send" disabled>Send</button>
   </div>
 </aside>
 
-<!-- New Session Modal -->
+<!-- New Conversation Modal -->
 <div class="modal-backdrop hidden" id="modal-session">
   <div class="modal">
-    <h3>New Session</h3>
+    <h3>New Conversation</h3>
     <div class="form-row">
-      <label>Session name (optional)</label>
+      <label>Conversation name (optional)</label>
       <input type="text" id="session-name" placeholder="e.g. Fantasy portraits">
     </div>
     <div class="modal-actions">
@@ -430,7 +436,7 @@
 <!-- Generate Modal -->
 <div class="modal-backdrop hidden" id="modal-generate">
   <div class="modal">
-    <h3>Generate Images</h3>
+    <h3 id="modal-gen-title">Generate Images</h3>
     <div class="form-row">
       <label>Prompt</label>
       <textarea id="gen-prompt" rows="4" placeholder="Describe the image…"></textarea>
@@ -448,12 +454,36 @@
 // ── State ──────────────────────────────────────────────────────────────────────
 const state = {
   conversationId: null,
-  activeWorkflow: null,  // { workflow_id, run_id, name, workflow_path }
-  workflows: [],         // [{ workflow_id, name, conversation_id, ... }]
-  images: {},            // workflow_id → [{ image_uuid, verdict, rating }]
+  activeWorkflow: null,  // { workflow_id, run_id, name, workflow_path, conversation_id }
+  workflows: [],         // [{ workflow_id, name, conversation_id, workflow_path, run_id }]
+  images: {},            // workflow_id → [{ image_uuid, verdict, rating, run_id }]
   chatWs: null,
   galleryWs: null,
 };
+
+// ── Persistence ───────────────────────────────────────────────────────────────
+function saveState() {
+  try {
+    localStorage.setItem('ai_conv_id',    state.conversationId || '');
+    localStorage.setItem('ai_workflows',  JSON.stringify(state.workflows));
+    if (state.activeWorkflow) {
+      localStorage.setItem('ai_active_wf', JSON.stringify(state.activeWorkflow));
+    } else {
+      localStorage.removeItem('ai_active_wf');
+    }
+  } catch {}
+}
+
+function restoreState() {
+  try {
+    const cid = localStorage.getItem('ai_conv_id');
+    const wfs = localStorage.getItem('ai_workflows');
+    const awf = localStorage.getItem('ai_active_wf');
+    if (cid) state.conversationId = cid;
+    if (wfs) try { state.workflows = JSON.parse(wfs); } catch {}
+    if (awf) try { state.activeWorkflow = JSON.parse(awf); } catch {}
+  } catch {}
+}
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function status(msg, duration = 2500) {
@@ -466,9 +496,23 @@ function status(msg, duration = 2500) {
 
 async function api(method, path, body) {
   const opts = { method, headers: { 'Content-Type': 'application/json' } };
-  if (body) opts.body = JSON.stringify(body);
+  if (body !== undefined) opts.body = JSON.stringify(body);
   const r = await fetch(path, opts);
   return r.json();
+}
+
+function setLoading(btnId, loading, label) {
+  const btn = document.getElementById(btnId);
+  btn.disabled = loading;
+  btn.textContent = loading ? 'Working…' : label;
+}
+
+function updateChatEnabled() {
+  const enabled = Boolean(state.conversationId);
+  document.getElementById('btn-send').disabled = !enabled;
+  document.getElementById('chat-input').placeholder = enabled
+    ? 'Describe your vision…'
+    : 'Create a conversation to start chatting…';
 }
 
 // ── WebSocket setup ────────────────────────────────────────────────────────────
@@ -518,7 +562,7 @@ function handleImageReady(msg) {
   if (!wfId) return;
   if (!state.images[wfId]) state.images[wfId] = [];
 
-  // Check if we already have a placeholder for this uuid (from optimistic start-run).
+  // Update placeholder card if one exists for this uuid (from optimistic start-run).
   const existing = state.images[wfId].find(e => e.image_uuid === msg.image_uuid);
   if (existing) {
     existing.verdict = 'scoring';
@@ -531,13 +575,14 @@ function handleImageReady(msg) {
   if (state.activeWorkflow?.workflow_id === wfId) prependImageCard(entry);
 }
 
-// decision: tactical LLM made a decision — update verdict badge on the card
+// decision: tactical LLM made a decision — update verdict badge on the card.
+// msg.decision is the decision string ("accept", "retry", "inpaint", "give_up").
 function handleDecision(msg) {
   const wfId = msg.workflow_id;
   if (!wfId) return;
   const list = state.images[wfId] || [];
   const entry = list.find(e => e.image_uuid === msg.image_uuid);
-  const label = msg.decision || msg.verdict || 'unknown';
+  const label = msg.decision || 'unknown';
   if (entry) entry.verdict = label;
   if (state.activeWorkflow?.workflow_id === wfId) refreshCardBadge(msg.image_uuid, label);
 }
@@ -619,9 +664,9 @@ async function submitFeedback(img, rating, card) {
   card.querySelectorAll('.btn-thumb').forEach(b => {
     b.classList.remove('rated-up', 'rated-down');
   });
-  card.querySelector('.btn-thumb:first-of-type').classList.toggle('rated-up', rating === 'up');
-  card.querySelector('.btn-thumb:last-of-type').classList.toggle('rated-down', rating === 'down');
-  status(`Feedback recorded`);
+  card.querySelector('.btn-thumb:first-of-type').classList.toggle('rated-up',   rating === 'up');
+  card.querySelector('.btn-thumb:last-of-type').classList.toggle('rated-down',  rating === 'down');
+  status('Feedback recorded');
 }
 
 // ── Workflow sidebar ───────────────────────────────────────────────────────────
@@ -637,12 +682,51 @@ function renderWorkflowList() {
   });
 }
 
-function selectWorkflow(wf) {
-  state.activeWorkflow = wf;
+async function selectWorkflow(wf) {
+  state.activeWorkflow = { ...wf };
   document.getElementById('gallery-title').textContent = wf.name;
-  document.getElementById('btn-start-run').disabled = false;
+  document.getElementById('btn-start-run').disabled = true;
   renderWorkflowList();
   renderGallery();
+
+  // Restore chat history from the server.
+  if (state.conversationId && wf.workflow_id) {
+    try {
+      const hist = await api('GET',
+        `/history?conversation_id=${state.conversationId}&workflow_id=${wf.workflow_id}&limit=30`);
+      if (hist.chat?.length) {
+        const msgs = document.getElementById('chat-messages');
+        msgs.innerHTML = '';
+        hist.chat.forEach(m => appendChatMsg(m.role, m.content));
+      }
+    } catch {}
+  }
+
+  // Auto-resume if no run_id — gives a fresh session_uuid for this generation run.
+  if (!state.activeWorkflow.run_id) {
+    await _resumeActiveWorkflow();
+  } else {
+    document.getElementById('btn-start-run').disabled = false;
+  }
+
+  saveState();
+}
+
+async function _resumeActiveWorkflow() {
+  const wf = state.activeWorkflow;
+  if (!wf) return;
+  status('Resuming workflow…', 5000);
+  const resp = await api('POST', `/workflow/${wf.workflow_id}/resume`, {});
+  if (resp.ok !== false) {
+    state.activeWorkflow.run_id          = resp.run_id;
+    state.activeWorkflow.conversation_id = resp.conversation_id || wf.conversation_id;
+    state.activeWorkflow.workflow_path   = resp.workflow_path   || wf.workflow_path;
+    document.getElementById('btn-start-run').disabled = false;
+    saveState();
+    status(`Ready (run ${(resp.run_id || '').slice(0, 8)}…)`);
+  } else {
+    status(`Resume failed: ${resp.error || 'unknown error'}`);
+  }
 }
 
 function escHtml(s) {
@@ -697,34 +781,45 @@ function sendChat(text) {
 function showModal(id) { document.getElementById(id).classList.remove('hidden'); }
 function hideModal(id) { document.getElementById(id).classList.add('hidden'); }
 
-// Session modal
+// Conversation modal
 document.getElementById('btn-new-session').onclick = () => {
   document.getElementById('session-name').value = '';
   showModal('modal-session');
 };
 document.getElementById('modal-session-cancel').onclick = () => hideModal('modal-session');
 document.getElementById('modal-session-ok').onclick = async () => {
+  setLoading('modal-session-ok', true, 'Create');
   const name = document.getElementById('session-name').value.trim() || undefined;
-  const resp = await api('POST', '/session/start', { name });
-  if (resp.ok !== false) {
-    state.conversationId = resp.conversation_id;
-    state.workflows = [];
-    state.images = {};
-    state.activeWorkflow = null;
-    renderWorkflowList();
-    renderGallery();
-    document.getElementById('gallery-title').textContent = 'Select a workflow';
-    document.getElementById('btn-start-run').disabled = true;
-    document.getElementById('chat-messages').innerHTML =
-      '<div class="chat-msg system">New session started. What would you like to create?</div>';
-    status('Session created');
+  try {
+    const resp = await api('POST', '/session/start', { name });
+    if (resp.ok !== false) {
+      state.conversationId = resp.conversation_id;
+      state.workflows = [];
+      state.images = {};
+      state.activeWorkflow = null;
+      saveState();
+      renderWorkflowList();
+      renderGallery();
+      document.getElementById('gallery-title').textContent = 'Select a workflow';
+      document.getElementById('btn-start-run').disabled = true;
+      document.getElementById('chat-messages').innerHTML =
+        '<div class="chat-msg system">New conversation started. What would you like to create?</div>';
+      updateChatEnabled();
+      status('Conversation created');
+    } else {
+      status(`Error: ${resp.error || 'could not create conversation'}`);
+    }
+  } catch (e) {
+    status('Error creating conversation');
+  } finally {
+    setLoading('modal-session-ok', false, 'Create');
+    hideModal('modal-session');
   }
-  hideModal('modal-session');
 };
 
 // Workflow modal
 document.getElementById('btn-new-workflow').onclick = () => {
-  if (!state.conversationId) { status('Create a session first'); return; }
+  if (!state.conversationId) { status('Create a conversation first'); return; }
   document.getElementById('wf-name').value = '';
   document.getElementById('wf-path').value = '';
   document.getElementById('wf-desc').value = '';
@@ -734,48 +829,52 @@ document.getElementById('modal-wf-cancel').onclick = () => hideModal('modal-work
 document.getElementById('modal-wf-ok').onclick = async () => {
   const wfName = document.getElementById('wf-name').value.trim() || 'Untitled Workflow';
   const wfPath = document.getElementById('wf-path').value.trim();
-  const resp = await api('POST', '/workflow/new', {
-    conversation_id: state.conversationId,
-    name:            wfName,
-    workflow_path:   wfPath,
-    description:     document.getElementById('wf-desc').value.trim() || undefined,
-    budget_policy:   document.getElementById('wf-budget-policy').value,
-    max_retries:     parseInt(document.getElementById('wf-max-retries').value),
-    max_inpaints:    parseInt(document.getElementById('wf-max-inpaints').value),
-  });
-  if (resp.ok !== false && resp.workflow_id) {
-    const wf = {
-      workflow_id:     resp.workflow_id,
-      name:            wfName,
+  setLoading('modal-wf-ok', true, 'Create');
+  try {
+    const resp = await api('POST', '/workflow/new', {
       conversation_id: state.conversationId,
+      name:            wfName,
       workflow_path:   wfPath,
-      run_id:          resp.run_id,
-    };
-    state.workflows.unshift(wf);
-    renderWorkflowList();
-    selectWorkflow(wf);
-    status('Workflow created');
-  } else {
-    status(`Error: ${resp.error || 'could not create workflow'}`);
+      description:     document.getElementById('wf-desc').value.trim() || undefined,
+      budget_policy:   document.getElementById('wf-budget-policy').value,
+      max_retries:     parseInt(document.getElementById('wf-max-retries').value),
+      max_inpaints:    parseInt(document.getElementById('wf-max-inpaints').value),
+    });
+    if (resp.ok !== false && resp.workflow_id) {
+      const wf = {
+        workflow_id:     resp.workflow_id,
+        name:            wfName,
+        conversation_id: state.conversationId,
+        workflow_path:   wfPath,
+        run_id:          resp.run_id,
+      };
+      state.workflows.unshift(wf);
+      saveState();
+      renderWorkflowList();
+      selectWorkflow(wf);
+      status('Workflow created');
+    } else {
+      status(`Error: ${resp.error || 'could not create workflow'}`);
+    }
+  } catch (e) {
+    status('Error creating workflow');
+  } finally {
+    setLoading('modal-wf-ok', false, 'Create');
+    hideModal('modal-workflow');
   }
-  hideModal('modal-workflow');
 };
 
-// Resume button
+// Resume button — manual resume with optional budget override
 document.getElementById('btn-resume-workflow').onclick = async () => {
-  if (!state.activeWorkflow) { status('Select a workflow to resume'); return; }
-  const resp = await api('POST', `/workflow/${state.activeWorkflow.workflow_id}/resume`, {});
-  if (resp.ok !== false) {
-    state.activeWorkflow.run_id          = resp.run_id;
-    state.activeWorkflow.conversation_id = resp.conversation_id || state.activeWorkflow.conversation_id;
-    state.activeWorkflow.workflow_path   = resp.workflow_path   || state.activeWorkflow.workflow_path;
-    status(`Workflow resumed (run ${(resp.run_id || '').slice(0,8)}…)`);
-  }
+  if (!state.activeWorkflow) { status('Select a workflow first'); return; }
+  await _resumeActiveWorkflow();
 };
 
 // Generate modal
 document.getElementById('btn-start-run').onclick = () => {
   if (!state.activeWorkflow) return;
+  document.getElementById('modal-gen-title').textContent =
+    `Generate — ${state.activeWorkflow.name}`;
   document.getElementById('gen-prompt').value = '';
   showModal('modal-generate');
 };
@@ -784,23 +883,30 @@ document.getElementById('modal-gen-ok').onclick = async () => {
   const prompt = document.getElementById('gen-prompt').value.trim();
   if (!prompt) { status('Enter a prompt'); return; }
   const wf = state.activeWorkflow;
-  if (!wf?.run_id) { status('No active run — resume the workflow first'); return; }
-  hideModal('modal-generate');
-  const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
-    prompt,
-    run_id:          wf.run_id,
-    conversation_id: wf.conversation_id || state.conversationId || '',
-    workflow_path:   wf.workflow_path   || '',
-  });
-  if (resp.ok) {
-    status(`Generation queued (${(resp.image_uuid || '').slice(0,8)}…)`);
-    // Optimistic placeholder — updated when image_ready arrives.
-    const pending = { image_uuid: resp.image_uuid, verdict: 'queued', run_id: wf.run_id, rating: null };
-    if (!state.images[wf.workflow_id]) state.images[wf.workflow_id] = [];
-    state.images[wf.workflow_id].unshift(pending);
-    prependImageCard(pending);
-  } else {
-    status(`Error: ${resp.error || 'unknown'}`);
+  if (!wf?.run_id) { status('No active run — click Resume first'); return; }
+  setLoading('modal-gen-ok', true, 'Start');
+  try {
+    const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
+      prompt,
+      run_id:          wf.run_id,
+      conversation_id: wf.conversation_id || state.conversationId || '',
+      workflow_path:   wf.workflow_path   || '',
+    });
+    if (resp.ok) {
+      status(`Generation queued (${(resp.image_uuid || '').slice(0, 8)}…)`);
+      // Optimistic placeholder — verdict updated when image_ready arrives.
+      const pending = { image_uuid: resp.image_uuid, verdict: 'queued', run_id: wf.run_id, rating: null };
+      if (!state.images[wf.workflow_id]) state.images[wf.workflow_id] = [];
+      state.images[wf.workflow_id].unshift(pending);
+      prependImageCard(pending);
+      hideModal('modal-generate');
+    } else {
+      status(`Error: ${resp.error || 'unknown'}`);
+    }
+  } catch (e) {
+    status('Error starting generation');
+  } finally {
+    setLoading('modal-gen-ok', false, 'Start');
   }
 };
 
@@ -820,6 +926,16 @@ document.getElementById('chat-input').addEventListener('keydown', (e) => {
 });
 
 // ── Init ───────────────────────────────────────────────────────────────────────
+restoreState();
+renderWorkflowList();
+updateChatEnabled();
+
+if (state.activeWorkflow) {
+  // Re-select the previously active workflow; auto-resumes if run_id is absent.
+  document.getElementById('gallery-title').textContent = state.activeWorkflow.name;
+  selectWorkflow(state.activeWorkflow);
+}
+
 connectGalleryWs();
 connectChatWs();
 </script>
