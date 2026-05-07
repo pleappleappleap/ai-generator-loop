@@ -5,12 +5,16 @@ ifeq ($(OS),Windows_NT)
 endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
-        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup
+        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup \
+        artemis-broker
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
-all: venv/.installed loop/scorers/venv/.installed lint typecheck test build
+ARTEMIS_BROKER := loop/artemis-broker
+
+all: venv/.installed loop/scorers/venv/.installed models $(ARTEMIS_BROKER)/bin/artemis \
+     lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
@@ -100,6 +104,68 @@ config.yaml:
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
+# ── Artemis broker setup ──────────────────────────────────────────────────────
+
+# Create and configure the Artemis broker instance under loop/artemis-broker/.
+# Idempotent: skipped entirely if loop/artemis-broker/bin/artemis already exists.
+# On macOS, installs activemq-artemis via Homebrew if the CLI is not on PATH.
+# On Linux, the artemis CLI must be installed manually first
+# (download from https://activemq.apache.org/components/artemis/download/).
+artemis-broker: $(ARTEMIS_BROKER)/bin/artemis
+
+$(ARTEMIS_BROKER)/bin/artemis:
+	@ARTEMIS_CLI=""; \
+	for c in \
+	    "$$(command -v artemis 2>/dev/null)" \
+	    /opt/homebrew/opt/activemq-artemis/bin/artemis \
+	    /usr/local/opt/activemq-artemis/bin/artemis \
+	    /opt/artemis/bin/artemis \
+	    /usr/local/artemis/bin/artemis; do \
+	  [ -x "$$c" ] && ARTEMIS_CLI="$$c" && break; \
+	done; \
+	if [ -z "$$ARTEMIS_CLI" ]; then \
+	  if command -v brew >/dev/null 2>&1; then \
+	    echo "==> Installing activemq-artemis via Homebrew..."; \
+	    brew install activemq-artemis; \
+	    for c in \
+	        /opt/homebrew/opt/activemq-artemis/bin/artemis \
+	        /usr/local/opt/activemq-artemis/bin/artemis; do \
+	      [ -x "$$c" ] && ARTEMIS_CLI="$$c" && break; \
+	    done; \
+	  fi; \
+	fi; \
+	if [ -z "$$ARTEMIS_CLI" ]; then \
+	  echo "ERROR: artemis CLI not found. Install ActiveMQ Artemis and ensure" >&2; \
+	  echo "       the 'artemis' binary is on PATH, then re-run make." >&2; \
+	  echo "       Download: https://activemq.apache.org/components/artemis/download/" >&2; \
+	  exit 1; \
+	fi; \
+	echo "==> Creating Artemis broker at $(ARTEMIS_BROKER)..."; \
+	"$$ARTEMIS_CLI" create $(ARTEMIS_BROKER) \
+	  --user admin \
+	  --password admin \
+	  --require-login \
+	  --allow-anonymous false \
+	  --no-input; \
+	echo "==> Enabling AMQP and STOMP acceptors in broker.xml..."; \
+	python3 -c "\
+import re, pathlib; \
+f = pathlib.Path('$(ARTEMIS_BROKER)/etc/broker.xml'); \
+xml = f.read_text(); \
+amqp  = '      <acceptor name=\"amqp\">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>'; \
+stomp = '      <acceptor name=\"stomp\">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>'; \
+changed = False; \
+if 'name=\"amqp\"' not in xml: \
+    xml = xml.replace('<acceptors>', '<acceptors>\n' + amqp, 1); changed = True; \
+if 'name=\"stomp\"' not in xml: \
+    xml = xml.replace('<acceptors>', '<acceptors>\n' + stomp, 1); changed = True; \
+if changed: \
+    f.write_text(xml); \
+    print('    broker.xml updated — AMQP and STOMP acceptors added.'); \
+else: \
+    print('    broker.xml already has AMQP and STOMP acceptors.')"; \
+	echo "==> Artemis broker ready."
+
 # Full first-time setup: system deps → Python venvs → config → models → build.
 setup: prereqs-system prereqs-python config models build
 
@@ -162,6 +228,24 @@ prereqs-system:
 	    dnf)      sudo dnf install -y java-latest-openjdk ;; \
 	    pacman)   sudo pacman -S --noconfirm jre-openjdk ;; \
 	    zypper)   sudo zypper install -y java-openjdk ;; \
+	  esac; \
+	fi; \
+	\
+	echo "==> ActiveMQ Artemis CLI"; \
+	ARTEMIS_FOUND=0; \
+	for c in \
+	    "$$(command -v artemis 2>/dev/null)" \
+	    /opt/homebrew/opt/activemq-artemis/bin/artemis \
+	    /usr/local/opt/activemq-artemis/bin/artemis \
+	    /opt/artemis/bin/artemis; do \
+	  [ -x "$$c" ] && ARTEMIS_FOUND=1 && echo "    already installed: $$c" && break; \
+	done; \
+	if [ "$$ARTEMIS_FOUND" = "0" ]; then \
+	  case "$$PKG" in \
+	    homebrew) brew install activemq-artemis ;; \
+	    *) echo "    Not installed. Download from:" ; \
+	       echo "    https://activemq.apache.org/components/artemis/download/" ; \
+	       echo "    Extract and add bin/ to PATH, then re-run make." ;; \
 	  esac; \
 	fi; \
 	\
