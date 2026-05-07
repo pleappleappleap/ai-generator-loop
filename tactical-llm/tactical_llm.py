@@ -479,8 +479,10 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
             decision["reasoning"] += " (retry budget exhausted — overriding to give_up)"
             print(f"[tactical] give_up {image_uuid}  (retry budget exhausted)")
         else:
-            new_uuid = _publish_retry(conn, verdict, decision)
+            # C3: increment before publish so a publish failure cannot leave an
+            # in-flight message with a stale (under-counted) budget.
             _increment_budget(session_uuid, "retries_used")
+            new_uuid = _publish_retry(conn, verdict, decision)
             print(
                 f"[tactical] retry   {image_uuid} → {new_uuid}  "
                 f"({budget['retries_used'] + 1}/{budget['max_retries']})"
@@ -494,20 +496,34 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
                 decision["reasoning"] += " (inpaint budget exhausted — downgrading to retry)"
                 if not decision.get("retry_prompt"):
                     decision["retry_prompt"] = prompt_text
-                new_uuid = _publish_retry(conn, verdict, decision)
+                # C3: increment before publish.
                 _increment_budget(session_uuid, "retries_used")
+                new_uuid = _publish_retry(conn, verdict, decision)
                 print(f"[tactical] retry   {image_uuid} → {new_uuid}  (inpaint budget exhausted)")
             else:
                 action = "give_up"
                 decision["decision"] = "give_up"
                 print(f"[tactical] give_up {image_uuid}  (all budgets exhausted)")
         else:
-            _publish_inpaint(conn, verdict, decision)
-            _increment_budget(session_uuid, "inpaints_used")
-            print(
-                f"[tactical] inpaint {image_uuid}  "
-                f"({budget['inpaints_used'] + 1}/{budget['max_inpaints']})"
-            )
+            # C2: inpaint workflow not yet implemented — loop.inpaint.request has
+            # no consumer.  Downgrade to retry to avoid wasting the inpaint budget
+            # on an unconsumed message.  When the inpaint pipeline is built, replace
+            # this block with _publish_inpaint() + _increment_budget("inpaints_used").
+            if budget["retries_used"] < budget["max_retries"]:
+                action = "retry"
+                decision["decision"] = "retry"
+                decision["reasoning"] += " (inpaint not yet implemented — downgrading to retry)"
+                if not decision.get("retry_prompt"):
+                    decision["retry_prompt"] = prompt_text
+                # C3: increment before publish.
+                _increment_budget(session_uuid, "retries_used")
+                new_uuid = _publish_retry(conn, verdict, decision)
+                print(f"[tactical] retry   {image_uuid} → {new_uuid}  (inpaint stub)")
+            else:
+                action = "give_up"
+                decision["decision"] = "give_up"
+                decision["reasoning"] += " (inpaint not yet implemented, retry budget exhausted)"
+                print(f"[tactical] give_up {image_uuid}  (inpaint stub, all budgets exhausted)")
 
     else:  # give_up
         print(f"[tactical] give_up {image_uuid}  reasoning: {decision.get('reasoning', '')}")

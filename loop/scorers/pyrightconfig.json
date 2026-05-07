@@ -2,7 +2,7 @@
   "venvPath": ".",
   "venv": "venv",
   "pythonVersion": "3.11",
-  "extraPaths": ["../../", "../"],
+  "extraPaths": ["../../", "../", "../ui"],
   "reportPrivateImportUsage": "none",
   "reportAttributeAccessIssue": "none",
   "reportCallIssue": "none",
