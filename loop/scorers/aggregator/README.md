@@ -15,14 +15,17 @@ threshold logic and emits verdicts to `scorer.result`.
 ## SQLite State
 
 Uses the `scorer_session` table in `pipeline.db` (owned by coordinator).
-Merges results with `BEGIN IMMEDIATE` transactions. Rows expire via
-`score_timeout_secs` and are cleaned up by the coordinator's background task.
+Each row includes `workflow_id` and `conversation_id` from the originating
+`loop.request` message, carried through `loop.events` and forwarded in the
+`scorer.result` verdict payload. Merges results with `BEGIN IMMEDIATE`
+transactions. Rows expire via `score_timeout_secs` and are cleaned up by
+the coordinator's background task.
 
 ## Build and Run
 
 ```bash
 cd ~/ai-image/loop/scorers
-cargo build --release -p aggregator
+~/.cargo/bin/cargo build --release -p aggregator
 AI_IMAGE_ROOT=~/ai-image ./target/release/aggregator
 ```
 

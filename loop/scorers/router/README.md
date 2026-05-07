@@ -8,11 +8,15 @@ simultaneously.
 No business logic. Message payload is forwarded unchanged with subject
 property set to `score.<image_uuid>`.
 
+Note: `loop.events` is a multicast address. The router is one of two
+subscribers — the UI server (`loop/ui/server.py`) also subscribes via STOMP
+to cache the `image_uuid → image_path` mapping for serving images to browsers.
+
 ## Build and Run
 
 ```bash
 cd ~/ai-image/loop/scorers
-cargo build --release -p router
+~/.cargo/bin/cargo build --release -p router
 AI_IMAGE_ROOT=~/ai-image ./target/release/router
 ```
 

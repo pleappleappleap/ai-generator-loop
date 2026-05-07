@@ -106,7 +106,7 @@ contains both of these entries:
 <!-- AMQP 1.0: used by Rust components (router, aggregator, coordinator, lancedb_manager) -->
 <acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
 
-<!-- STOMP: used by Python components (comfyui_worker, scorers, tactical_llm, monitor) -->
+<!-- STOMP: used by Python components (comfyui_worker, scorers, tactical_llm, server, monitor) -->
 <acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
 ```
 
@@ -158,9 +158,10 @@ working directory if it contains `config.yaml` and a `loop/` subdirectory.
 
 There are **three** separate virtual environments:
 
-- **Root venv** (`venv/`): used by `comfyui_worker.py`, `session.py`, and utilities.
-- **Scorers venv** (`loop/scorers/venv/`): used by the three scorer processes
-  and `tactical_llm.py`, which share large ML libraries.
+- **Root venv** (`venv/`): used by utilities such as `check_env.py` and `model_picker.py`.
+- **Scorers venv** (`loop/scorers/venv/`): used by all scorer processes,
+  `tactical_llm.py`, and the UI server (`server.py`), which share large ML
+  libraries and the FastAPI/uvicorn stack.
 - **ComfyUI venv** (`loop/ComfyUI/venv/`): used exclusively by ComfyUI,
   managed by `make prereqs`.
 
@@ -199,6 +200,9 @@ pip install llama-cpp-python --no-binary llama-cpp-python
 pip install -r requirements.txt
 deactivate
 ```
+
+The scorers `requirements.txt` includes the UI server dependencies:
+`fastapi`, `uvicorn[standard]`, `httpx`, `openai`, and `starlette`.
 
 To activate the scorers environment in a shell, use the provided script:
 
@@ -253,6 +257,10 @@ curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.
 Qwen3-72B is a hybrid thinking model: it reasons step-by-step through
 ambiguous decisions and responds directly for clear-cut cases, controlled
 by a `<think>` token in the prompt.
+
+The tactical LLM runs as a **llama.cpp HTTP server** (started automatically
+by `start_loop.sh`). The `tactical_llm.py` Python process calls it via the
+OpenAI-compatible REST API.
 
 ```bash
 mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/tactical
@@ -356,9 +364,16 @@ database:
 models:
   vlm:
     filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+
 tactical:
   model:
-    filename: Qwen3-72B-abliterated-Q4_K_M.gguf
+    filename:   Qwen3-72B-abliterated-Q4_K_M.gguf
+    server_url: http://localhost:8080/v1
+    model_name: qwen3-72b
+
+ui:
+  host: 0.0.0.0
+  port: 7860
 ```
 
 The `backend: auto` setting detects the platform at startup: macOS → MPS;
@@ -378,7 +393,7 @@ python check_env.py
 
 ```bash
 cd $AI_IMAGE_ROOT/loop/scorers
-cargo build --release
+~/.cargo/bin/cargo build --release
 ```
 
 This produces four binaries in `target/release/`:
@@ -387,38 +402,48 @@ This produces four binaries in `target/release/`:
 |--------|------|
 | `router` | Fans out `loop.events` → `scorer.requests` |
 | `aggregator` | Merges scorer results, emits verdicts |
-| `coordinator` | XA 2PC + Python budget API (Unix socket) |
+| `coordinator` | XA 2PC + conversation/workflow/budget API (Unix socket) |
 | `lancedb_manager` | Writes terminal records to LanceDB |
 
 ---
 
 ## 10. First Run
 
-Start each component in order. The broker must be running before any pipeline
-process starts.
-
 ```bash
-# Terminal 1: Artemis broker and Redis
+# Terminal 1: Artemis broker
 $AI_IMAGE_ROOT/loop/start_broker.sh
 
-# Terminal 2: Full pipeline (all Python and Rust components)
+# Terminal 2: Full pipeline (all components, including llama.cpp server and UI)
 $AI_IMAGE_ROOT/loop/start_loop.sh
 
-# Terminal 3: Submit a session
-cd $AI_IMAGE_ROOT
-source venv/bin/activate
-python tactical-llm/session.py \
-  --prompt "two people walking in a park, photorealistic, golden hour" \
-  --max-retries 3 \
-  --monitor
+# Terminal 3: Open the browser UI
+open http://localhost:7860
 ```
 
-The `--monitor` flag polls the coordinator's budget state and prints live
-progress until the session resolves (accepted, give_up, or budget exhausted).
+`start_loop.sh` starts components in this order:
+1. **Parallel**: Artemis broker readiness check, ComfyUI, llama.cpp server
+2. Sleep 10 s for slow-starting services
+3. Coordinator
+4. Sleep 1 s
+5. Rust workers (router, aggregator, lancedb_manager), Python scorers
+   (clip, artifact, vlm), comfyui_worker, tactical_llm
+6. UI server (`server.py`)
+7. Monitor
+
+From the browser UI at `http://localhost:7860`:
+1. Create a **conversation** (a named project).
+2. Create a **workflow** (choose a workflow JSON and parameters).
+3. Click **Start** to submit a prompt — images appear in the gallery as they
+   are generated and scored.
 
 ---
 
 ## 11. Verification
+
+### Browser UI
+
+Open `http://localhost:7860`. The gallery section should be visible. Creating
+a conversation and workflow exercises the coordinator socket API end-to-end.
 
 ### Broker console
 
@@ -429,6 +454,7 @@ the following addresses appear under **Addresses**:
 - `loop.events` (multicast)
 - `scorer.requests` (multicast)
 - `scorer.result` (anycast)
+- `tactical.decisions` (multicast)
 - `pipeline.dead` (anycast)
 
 ### Dead-letter monitor
@@ -437,8 +463,7 @@ In a separate terminal, start the dead-letter monitor to catch any messages
 that fail processing:
 
 ```bash
-source $AI_IMAGE_ROOT/venv/bin/activate
-python $AI_IMAGE_ROOT/loop/monitor.py
+$AI_IMAGE_ROOT/loop/scorers/venv/bin/python $AI_IMAGE_ROOT/loop/monitor.py
 ```
 
 Any message appearing in the monitor output indicates a processing error; the
@@ -448,15 +473,14 @@ log will include the original queue name and message body.
 
 ```bash
 cd $AI_IMAGE_ROOT/loop/scorers
-cargo test -p coordinator
+~/.cargo/bin/cargo test -p coordinator
 ```
 
 ### Python tests
 
 ```bash
-cd $AI_IMAGE_ROOT/tactical-llm
-. ../venv/bin/activate
-python -m pytest tests/ -v
+cd $AI_IMAGE_ROOT/loop/scorers
+venv/bin/pytest tests/ -v
 ```
 
 ---
@@ -466,6 +490,7 @@ python -m pytest tests/ -v
 On macOS and Linux:
 
 ```bash
+pkill -f "server.py"
 pkill -f comfyui_worker
 pkill -f clip_scorer
 pkill -f artifact_scorer
@@ -476,6 +501,7 @@ pkill -f router
 pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
+pkill -f "llama.server"
 "$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis" stop
 ```
 
@@ -487,5 +513,6 @@ taskkill /f /fi "IMAGENAME eq coordinator.exe"
 taskkill /f /fi "IMAGENAME eq router.exe"
 taskkill /f /fi "IMAGENAME eq aggregator.exe"
 taskkill /f /fi "IMAGENAME eq lancedb_manager.exe"
+taskkill /f /fi "IMAGENAME eq llama-server.exe"
 "$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis.cmd" stop
 ```

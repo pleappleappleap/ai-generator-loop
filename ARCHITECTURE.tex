@@ -75,6 +75,13 @@ natural language prompt and iteratively generates, scores, and refines
 images until a candidate meeting all quality thresholds is accepted by a
 tactical large language model (LLM).
 
+A browser-based pipeline UI at \texttt{http://localhost:7860} provides the
+primary operator interface: create and resume creative workflows, watch images
+arrive in a live gallery as they are generated and scored, send thumbs
+up/down feedback, and chat with the tactical LLM to refine creative direction.
+The UI backend is a FastAPI server that subscribes to Artemis topics and
+streams events to the browser over WebSocket.
+
 The pipeline is designed around three principles:
 
 \begin{enumerate}
@@ -82,6 +89,7 @@ The pipeline is designed around three principles:
         inspectable queues and addresses. Artemis's management console
         provides real-time visibility into all message flows. Dead-letter
         messages accumulate in \texttt{pipeline.dead} for operator review.
+        The browser UI streams image and decision events live.
   \item \textbf{Scalable}: each component is independently deployable. The
         message broker provides natural decoupling. Adding scorer capacity
         requires only adding subscriber processes.
@@ -229,7 +237,7 @@ Edit \texttt{loop/artemis-broker/etc/broker.xml}. Ensure the
 <!-- AMQP 1.0: Rust components (router, aggregator, coordinator, lancedb_manager) -->
 <acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
 
-<!-- STOMP: Python components (comfyui_worker, scorers, tactical_llm, monitor) -->
+<!-- STOMP: Python components (comfyui_worker, scorers, tactical_llm, monitor, ui) -->
 <acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
 \end{lstlisting}
 
@@ -263,10 +271,12 @@ There are three separate virtual environments:
 
 \begin{itemize}
   \item \textbf{Root venv} (\texttt{venv/}): used by
-        \texttt{comfyui\_worker.py}, \texttt{session.py}, and utilities.
+        \texttt{comfyui\_worker.py}, \texttt{monitor.py}, and utilities.
   \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): used by the
-        three scorer processes and \texttt{tactical\_llm.py}, which share
-        large ML libraries.
+        three scorer processes, \texttt{tactical\_llm.py}, and the
+        \textbf{UI server} (\texttt{loop/ui/server.py}). These processes
+        share large ML libraries (transformers, llama-cpp-python) and the
+        UI web framework (fastapi, uvicorn, httpx).
   \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}): used
         exclusively by ComfyUI and managed by \texttt{make prereqs}.
 \end{itemize}
@@ -313,12 +323,8 @@ pip install -r requirements.txt
 deactivate
 \end{lstlisting}
 
-The helper script \texttt{loop/scorers/activate.sh} activates this
-environment from any working directory:
-
-\begin{lstlisting}[style=shell]
-. $AI_IMAGE_ROOT/loop/scorers/activate.sh
-\end{lstlisting}
+\texttt{make prereqs-python} runs all of the above automatically, including
+GPU backend detection.
 
 \subsection{Model Downloads}
 
@@ -449,9 +455,19 @@ database:
 models:
   vlm:
     filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+
 tactical:
   model:
-    filename: Qwen3-72B-abliterated-Q4_K_M.gguf
+    filename:   Qwen3-72B-abliterated-Q4_K_M.gguf
+    server_url: http://localhost:8080/v1   # llama.cpp OpenAI-compatible server
+    model_name: default                   # model name sent in API requests
+
+ui:
+  port: 7860       # browser UI port
+  host: 0.0.0.0    # bind address; 127.0.0.1 to restrict to localhost
+  # chat_backend:  # optional override for the chat LLM
+  #   server_url: http://localhost:8081/v1
+  #   model_name: strategic-model
 \end{lstlisting}
 
 The \texttt{backend: auto} setting detects the platform at startup:
@@ -482,7 +498,7 @@ This produces four binaries in \texttt{target/release/}:
 \midrule
 \texttt{router}          & Fans out \texttt{loop.events} $\to$ \texttt{scorer.requests} \\
 \texttt{aggregator}      & Merges scorer results; applies threshold logic; emits verdicts \\
-\texttt{coordinator}     & XA 2PC log; budget API for Python processes (Unix socket) \\
+\texttt{coordinator}     & XA 2PC log; workflow/conversation hierarchy; Python API (Unix socket) \\
 \texttt{lancedb\_manager} & Writes terminal Loop records to LanceDB \\
 \bottomrule
 \end{tabular}
@@ -502,9 +518,10 @@ Operational state & SQLite WAL (\texttt{pipeline.db}) & Crash-safe, zero-depende
 Vector store & LanceDB & Embedded, Arrow-native, supports ANN search \\
 Image generation & ComfyUI + SDXL & Workflow-based; supports ControlNet / LoRA \\
 Holistic scoring & Qwen2.5-VL-7B (Q5\_K\_M) & Fast local VLM; no API dependency \\
-Tactical decisions & Qwen3-72B (Q4\_K\_M, hybrid thinking) & Local LLM for prompt revision and routing \\
+Tactical LLM & Qwen3-72B (Q4\_K\_M, hybrid thinking) via llama.cpp & Local; OpenAI-compatible server \\
+Browser UI & FastAPI + uvicorn + WebSocket & Workflow management; live gallery; chat \\
 Rust binaries & router, aggregator, coordinator, lancedb\_manager & Zero-GIL concurrency; compile-time safety \\
-Python processes & scorers, comfyui\_worker, tactical\_llm & ML model hosting; stomp.py for STOMP \\
+Python processes & scorers, comfyui\_worker, tactical\_llm, ui/server & ML model hosting; stomp.py for STOMP \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -524,39 +541,54 @@ Four components are implemented in Rust:
   \item[Aggregator] Manages concurrent state across multiple incoming scorer
         result streams. Rust's ownership model prevents data races at compile
         time. State is accumulated in SQLite via \texttt{BEGIN IMMEDIATE}.
-  \item[Coordinator] XA 2-phase-commit manager and Python budget API. Owns
-        the \texttt{xa\_log}, \texttt{scorer\_session}, and
-        \texttt{tactical\_budget} SQLite tables. Exposes a Unix domain socket
-        for synchronous JSON RPC from Python processes.
+  \item[Coordinator] XA 2-phase-commit manager and Python API. Owns all
+        SQLite tables: \texttt{xa\_log}, \texttt{scorer\_session},
+        \texttt{tactical\_budget}, \texttt{conversation}, \texttt{workflow},
+        \texttt{feedback}, and \texttt{chat\_message}. Exposes a Unix domain
+        socket for synchronous JSON RPC from Python processes.
   \item[LanceDB Manager] Terminal event writer. Reads accumulated scorer
         results from SQLite and writes a single durable Loop record to LanceDB
         on each \texttt{loop.accepted} or \texttt{cancel.*} event.
 \end{description}
 
 All components with ML model dependencies are Python (STOMP via stomp.py).
+The \textbf{llama.cpp server} runs as a standalone process (started by
+\texttt{start\_loop.sh}) and exposes an OpenAI-compatible HTTP API on port
+8080. Both \texttt{tactical\_llm.py} and the UI chat endpoint consume it via
+the \texttt{openai} Python client, so the model is loaded exactly once.
 
 \subsection{Component Diagram}
 
 \begin{center}
-\begin{tikzpicture}[node distance=0.9cm and 1.6cm]
+\begin{tikzpicture}[node distance=0.9cm and 1.4cm]
+  % Generation layer
   \node[component] (worker)    {comfyui\_worker};
   \node[component,below=0.5cm of worker] (comfyui) {ComfyUI};
-  \node[component,right=1.8cm of worker]  (router)   {router (Rust)};
-  \node[component,right=1.8cm of router,yshift=1.4cm]  (clip)     {clip\_scorer};
-  \node[component,right=1.8cm of router]               (artifact) {artifact\_scorer};
-  \node[component,right=1.8cm of router,yshift=-1.4cm] (vlm)      {vlm\_scorer};
-  \node[component,right=1.8cm of artifact] (agg)      {aggregator};
-  \node[component,right=1.8cm of agg,yshift=1.0cm]  (tactical) {tactical LLM};
-  \node[component,right=1.8cm of agg,yshift=-1.0cm] (ldb)      {lancedb\_mgr};
+  % Routing
+  \node[component,right=1.6cm of worker]  (router)   {router (Rust)};
+  % Scorers
+  \node[component,right=1.6cm of router,yshift=1.4cm]  (clip)     {clip\_scorer};
+  \node[component,right=1.6cm of router]               (artifact) {artifact\_scorer};
+  \node[component,right=1.6cm of router,yshift=-1.4cm] (vlm)      {vlm\_scorer};
+  % Aggregator and downstream
+  \node[component,right=1.6cm of artifact] (agg)      {aggregator};
+  \node[component,right=1.6cm of agg,yshift=1.0cm]  (tactical) {tactical LLM};
+  \node[component,right=1.6cm of agg,yshift=-1.0cm] (ldb)      {lancedb\_mgr};
+  % Stores
   \node[store,below=1.2cm of agg]  (sqlite)  {pipeline.db};
   \node[store,right=0.4cm of sqlite] (lancedb) {LanceDB};
+  % Coordinator
   \node[component,below=0.6cm of sqlite] (coord) {coordinator};
+  % LLM server and UI
+  \node[component,above=0.8cm of tactical] (llmserver) {llama.cpp server};
+  \node[component,above=0.8cm of worker]   (ui)        {UI server};
 
+  % Generation path
   \draw[arrow] (worker)   -- (router)   node[lbl,above] {loop.events};
   \draw[arrow] (router)   -- (clip)     node[lbl,above,xshift=-3mm] {scorer.requests};
   \draw[arrow] (router)   -- (artifact);
   \draw[arrow] (router)   -- (vlm);
-  \draw[arrow] (clip)     -- (agg)      node[lbl,above,xshift=3mm] {};
+  \draw[arrow] (clip)     -- (agg);
   \draw[arrow] (artifact) -- (agg);
   \draw[arrow] (vlm)      -- (agg);
   \draw[arrow] (agg)      -- (tactical) node[lbl,above] {scorer.result};
@@ -565,10 +597,24 @@ All components with ML model dependencies are Python (STOMP via stomp.py).
   \draw[arrow] (ldb)      -- (lancedb);
   \draw[arrow] (agg)      -- (sqlite);
   \draw[arrow] (worker)   -- (comfyui)  node[lbl,right] {HTTP/WS};
-  \draw[arrow,dashed] (worker)   -- (coord)   node[lbl,right,yshift=-4mm] {socket};
-  \draw[arrow,dashed] (tactical) -- (coord)   node[lbl,right] {socket};
+  % Socket connections
+  \draw[arrow,dashed] (worker)   -- (coord)     node[lbl,right,yshift=-4mm] {socket};
+  \draw[arrow,dashed] (tactical) -- (coord)     node[lbl,right] {socket};
+  \draw[arrow,dashed] (ui)       -- (coord)     node[lbl,left]  {socket};
+  % LLM server
+  \draw[arrow,dashed] (tactical) -- (llmserver) node[lbl,right] {HTTP};
+  \draw[arrow,dashed] (ui)       -- (llmserver) node[lbl,above] {HTTP};
+  % UI STOMP subscriptions
+  \draw[arrow,dotted] (tactical) -- (ui)        node[lbl,above] {tactical.decisions};
+  % UI submits generation
+  \draw[arrow] (ui)       -- (worker)   node[lbl,left] {loop.request};
 \end{tikzpicture}
 \end{center}
+
+Solid arrows are AMQP~1.0 or STOMP message flows. Dashed arrows are HTTP or
+Unix socket calls. The dotted arrow represents the UI's STOMP topic
+subscription (\texttt{/topic/tactical.decisions}) that delivers LLM decisions
+to the gallery.
 
 % ============================================================
 \section{Address and Queue Topology}
@@ -583,17 +629,17 @@ receive). The table below lists all pipeline addresses.
 \toprule
 \textbf{Address} & \textbf{Type} & \textbf{Protocol} & \textbf{Publisher} & \textbf{Consumer(s)} \\
 \midrule
-\texttt{loop.request}          & anycast   & STOMP     & tactical LLM, session & comfyui\_worker \\
-\texttt{loop.events}           & multicast & STOMP/AMQP & comfyui\_worker       & router \\
-\texttt{scorer.requests}       & multicast & AMQP~1.0  & router                & all scorers \\
-\texttt{scorer.events}         & multicast & AMQP~1.0  & aggregator            & all scorers, lancedb\_mgr \\
+\texttt{loop.request}          & anycast   & STOMP      & UI server             & comfyui\_worker \\
+\texttt{loop.events}           & multicast & STOMP/AMQP & comfyui\_worker       & router, UI server \\
+\texttt{scorer.requests}       & multicast & AMQP~1.0   & router                & all scorers \\
+\texttt{scorer.events}         & multicast & AMQP~1.0   & aggregator            & all scorers, lancedb\_mgr \\
 \texttt{aggregator.clip.queue} & anycast   & STOMP/AMQP & clip\_scorer          & aggregator \\
-\texttt{aggregator.artifact.queue} & anycast & STOMP/AMQP & artifact\_scorer    & aggregator \\
+\texttt{aggregator.artifact.queue} & anycast & STOMP/AMQP & artifact\_scorer   & aggregator \\
 \texttt{aggregator.vlm.queue}  & anycast   & STOMP/AMQP & vlm\_scorer           & aggregator \\
-\texttt{scorer.result}         & anycast   & AMQP~1.0  & aggregator            & tactical LLM \\
+\texttt{scorer.result}         & anycast   & AMQP~1.0   & aggregator            & tactical LLM \\
 \texttt{loop.accepted}         & multicast & STOMP/AMQP & tactical LLM          & lancedb\_mgr \\
-\texttt{tactical.decisions}    & multicast & STOMP     & tactical LLM          & strategic LLM \\
-\texttt{pipeline.dead}         & anycast   & AMQP~1.0  & (DLX from all queues) & monitor \\
+\texttt{tactical.decisions}    & multicast & STOMP      & tactical LLM          & UI server \\
+\texttt{pipeline.dead}         & anycast   & AMQP~1.0   & (DLX from all queues) & monitor \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -617,28 +663,46 @@ preserving messages across scorer restarts.
 \end{tabular}
 \end{center}
 
+The UI server uses non-durable topic subscriptions (\texttt{client-id:
+ui-server}) on \texttt{/topic/loop.events} and
+\texttt{/topic/tactical.decisions}. These are broadcast topics; the UI
+server receives every message without competing with pipeline consumers.
+
 % ============================================================
 \section{Data Flow}
 % ============================================================
 
 \begin{enumerate}
-  \item \texttt{session.py} initialises the tactical budget in the coordinator
-        via Unix socket (\texttt{BudgetInit}), writes a Session record to
-        LanceDB, and publishes the first generation request to
-        \texttt{/queue/loop.request} via STOMP.
+  \item The operator opens the browser UI at \texttt{http://localhost:7860}.
+        They create a conversation (\texttt{ConversationCreate}) and a
+        workflow (\texttt{WorkflowCreate} + \texttt{WorkflowResume}) via the
+        UI server, which calls the coordinator over its Unix socket.
+        Clicking \textbf{Generate} causes the UI server to publish a
+        generation request to \texttt{/queue/loop.request} via STOMP,
+        carrying the \texttt{workflow\_id}, \texttt{conversation\_id},
+        \texttt{run\_id} (= session\_uuid), and prompt.
+
   \item \texttt{comfyui\_worker} receives the request, registers the image
         session with the coordinator (\texttt{SessionInit}), submits the
         ComfyUI workflow, and waits for completion via WebSocket.
+
   \item On completion, publishes the result to \texttt{/topic/loop.events}
-        via STOMP.
+        via STOMP. The UI server's STOMP listener receives this message,
+        caches the \texttt{image\_uuid $\to$ image\_path} mapping, and
+        pushes an \texttt{image\_ready} event over the gallery WebSocket to
+        the browser.
+
   \item Rust \texttt{router} receives from \texttt{loop.events} via AMQP~1.0
         and fans out to \texttt{scorer.requests} (multicast) with subject
         \texttt{score.<uuid>}.
+
   \item All three scorers receive the message simultaneously and begin scoring
         in parallel (durable STOMP subscriptions).
+
   \item As results arrive, the Rust \texttt{aggregator} merges them into the
         \texttt{scorer\_session} SQLite row using \texttt{BEGIN IMMEDIATE}
         transactions.
+
   \item Threshold evaluation on each arrival:
     \begin{itemize}
       \item CLIP score below threshold: mark rejected in SQLite, publish
@@ -648,18 +712,27 @@ preserving messages across scorer restarts.
       \item All three results within bounds: mark candidate in SQLite, emit
             candidate verdict to \texttt{scorer.result}.
     \end{itemize}
+
   \item \texttt{tactical\_llm} receives the verdict, queries the coordinator
-        for budget state (\texttt{BudgetGet}), retrieves LanceDB session
-        history, and runs local LLM inference to decide accept / retry /
-        inpaint / give\_up.
-  \item On accept: publishes to \texttt{/topic/loop.accepted}. On retry:
-        publishes a new request to \texttt{/queue/loop.request} and increments
-        the retry counter via \texttt{BudgetUpdate}.
-  \item \texttt{lancedb\_manager} receives terminal events (\texttt{loop.accepted}
-        or \texttt{cancel.*}), reads the completed \texttt{scorer\_session}
-        row, performs an idempotent existence check, and writes the final Loop
-        record to LanceDB. The \texttt{scorer\_session} row is deleted after a
-        successful write.
+        for budget state (\texttt{BudgetGet}) and user context
+        (\texttt{ContextGet} — recent chat messages and thumbs ratings),
+        retrieves LanceDB session history, and calls the llama.cpp server's
+        OpenAI-compatible API (\texttt{tactical.model.server\_url}) to decide
+        accept / retry / inpaint / give\_up. The decision and verdict are
+        published to \texttt{/topic/tactical.decisions} via STOMP.
+
+  \item The UI server receives the decision on \texttt{tactical.decisions} and
+        pushes a \texttt{decision} event over the gallery WebSocket to the
+        browser, which updates the image card's verdict badge.
+
+  \item On accept: tactical LLM publishes to \texttt{/topic/loop.accepted}.
+        On retry: publishes a new request to \texttt{/queue/loop.request} and
+        increments the retry counter via \texttt{BudgetUpdate}.
+
+  \item \texttt{lancedb\_manager} receives terminal events
+        (\texttt{loop.accepted} or \texttt{cancel.*}), reads the completed
+        \texttt{scorer\_session} row, performs an idempotent existence check,
+        and writes the final Loop record to LanceDB.
 \end{enumerate}
 
 \subsection{Cancel Flow}
@@ -692,7 +765,7 @@ preserving messages across scorer restarts.
 \subsection{SQLite Operational Database (\texttt{pipeline.db})}
 
 The coordinator owns \texttt{pipeline.db} in WAL mode with
-\texttt{PRAGMA synchronous=FULL}. Three tables are defined:
+\texttt{PRAGMA synchronous=FULL}. Seven tables are defined.
 
 \subsubsection{xa\_log}
 Durable XA transaction log for 2-phase commit coordination.
@@ -721,7 +794,9 @@ read by aggregator and lancedb\_manager.
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
 \texttt{image\_uuid}      & TEXT PRIMARY KEY & Unique per generated image \\
-\texttt{session\_uuid}    & TEXT             & Parent session \\
+\texttt{session\_uuid}    & TEXT             & Parent run (= run\_id) \\
+\texttt{workflow\_id}     & TEXT?            & Parent workflow \\
+\texttt{conversation\_id} & TEXT?            & Parent conversation \\
 \texttt{sequence\_number} & INTEGER          & Position within session \\
 \texttt{prompt}           & TEXT?            & Generation prompt \\
 \texttt{workflow\_path}   & TEXT?            & Workflow file path \\
@@ -739,23 +814,123 @@ read by aggregator and lancedb\_manager.
 \end{center}
 
 \subsubsection{tactical\_budget}
-Per-session retry and inpaint budget counters.
+Per-run retry and inpaint budget counters.
 
 \begin{center}
 \begin{tabular}{lll}
 \toprule
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
-\texttt{session\_uuid}  & TEXT PRIMARY KEY & Session identifier \\
-\texttt{retries\_used}  & INTEGER          & Retry attempts consumed \\
-\texttt{inpaints\_used} & INTEGER          & Inpaint passes consumed \\
-\texttt{max\_retries}   & INTEGER          & Session retry ceiling \\
-\texttt{max\_inpaints}  & INTEGER          & Session inpaint ceiling \\
-\texttt{created\_at}    & INTEGER          & Unix timestamp \\
-\texttt{expires\_at}    & INTEGER          & Unix timestamp (24\,h TTL) \\
+\texttt{session\_uuid}    & TEXT PRIMARY KEY & Run identifier \\
+\texttt{workflow\_id}     & TEXT?            & Parent workflow \\
+\texttt{conversation\_id} & TEXT?            & Parent conversation \\
+\texttt{retries\_used}    & INTEGER          & Retry attempts consumed \\
+\texttt{inpaints\_used}   & INTEGER          & Inpaint passes consumed \\
+\texttt{max\_retries}     & INTEGER          & Run retry ceiling \\
+\texttt{max\_inpaints}    & INTEGER          & Run inpaint ceiling \\
+\texttt{created\_at}      & INTEGER          & Unix timestamp \\
+\texttt{expires\_at}      & INTEGER          & Unix timestamp (24\,h TTL) \\
 \bottomrule
 \end{tabular}
 \end{center}
+
+\subsubsection{conversation}
+Top-level grouping of related workflows.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id}         & INTEGER PRIMARY KEY & Auto-increment \\
+\texttt{uuid}       & TEXT UNIQUE         & External identifier \\
+\texttt{name}       & TEXT?               & Human-readable label \\
+\texttt{created\_at}& INTEGER             & Unix timestamp \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{workflow}
+A stable creative direction within a conversation. Each \textit{resume}
+creates a new run (a new \texttt{tactical\_budget} row); the workflow itself
+is long-lived.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
+\texttt{uuid}             & TEXT UNIQUE         & External identifier \\
+\texttt{conversation\_id} & TEXT                & FK to conversation.uuid \\
+\texttt{name}             & TEXT?               & Human-readable label \\
+\texttt{workflow\_path}   & TEXT                & ComfyUI workflow JSON path \\
+\texttt{description}      & TEXT?               & Creative intent \\
+\texttt{budget\_policy}   & TEXT                & fresh $|$ carry \\
+\texttt{max\_retries}     & INTEGER             & Default retry ceiling \\
+\texttt{max\_inpaints}    & INTEGER             & Default inpaint ceiling \\
+\texttt{created\_at}      & INTEGER             & Unix timestamp \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{feedback}
+User thumbs up/down ratings recorded by the UI.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
+\texttt{image\_uuid}      & TEXT                & Image rated \\
+\texttt{workflow\_id}     & TEXT                & Parent workflow \\
+\texttt{run\_id}          & TEXT                & Parent run \\
+\texttt{rating}           & TEXT                & up $|$ down \\
+\texttt{comment}          & TEXT?               & Optional text \\
+\texttt{created\_at}      & INTEGER             & Unix timestamp \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsubsection{chat\_message}
+Chat history between the operator and the tactical LLM, stored per conversation.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Field} & \textbf{Type} & \textbf{Description} \\
+\midrule
+\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
+\texttt{conversation\_id} & TEXT                & FK to conversation.uuid \\
+\texttt{workflow\_id}     & TEXT?               & Optional workflow scope \\
+\texttt{role}             & TEXT                & user $|$ assistant \\
+\texttt{content}          & TEXT                & Message body \\
+\texttt{created\_at}      & INTEGER             & Unix timestamp \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Conversation and Workflow Hierarchy}
+
+The data model is a four-level hierarchy:
+
+\[
+\texttt{conversation} \;\to\; \texttt{workflow} \;\to\; \texttt{run (session\_uuid)} \;\to\; \texttt{image\_uuid}
+\]
+
+\begin{description}
+  \item[Conversation] Persistent across the life of a creative project. Owns
+        the chat history. Multiple workflows may exist within one conversation.
+  \item[Workflow] A stable creative direction (subject matter, workflow file,
+        budget policy). A workflow is \textit{resumed} to start a new run;
+        the workflow record itself is never replaced.
+  \item[Run] One invocation of the generation loop. Corresponds to a
+        \texttt{session\_uuid} in the operational tables. Each run has its
+        own \texttt{tactical\_budget} row.
+  \item[Image] One generated image within a run. Corresponds to an
+        \texttt{image\_uuid} in \texttt{scorer\_session} and LanceDB.
+\end{description}
 
 \subsection{Coordinator Unix Socket API}
 
@@ -768,10 +943,16 @@ newline-delimited JSON objects.
 \toprule
 \textbf{Request} & \textbf{Effect} \\
 \midrule
-\texttt{BudgetInit}   & Insert row into \texttt{tactical\_budget} (\texttt{INSERT OR IGNORE}) \\
-\texttt{BudgetGet}    & Return budget counters for a session \\
-\texttt{BudgetUpdate} & Atomically increment \texttt{retries\_used} or \texttt{inpaints\_used} \\
-\texttt{SessionInit}  & Insert row into \texttt{scorer\_session} (\texttt{INSERT OR IGNORE}) \\
+\texttt{ConversationCreate} & Insert row into \texttt{conversation}; return \texttt{conversation\_id} \\
+\texttt{WorkflowCreate}     & Insert row into \texttt{workflow}; return \texttt{workflow\_id} \\
+\texttt{WorkflowResume}     & Insert \texttt{tactical\_budget} for a new run; return \texttt{run\_id} \\
+\texttt{BudgetInit}         & Insert row into \texttt{tactical\_budget} (\texttt{INSERT OR IGNORE}) \\
+\texttt{BudgetGet}          & Return budget counters for a run \\
+\texttt{BudgetUpdate}       & Atomically increment \texttt{retries\_used} or \texttt{inpaints\_used} \\
+\texttt{SessionInit}        & Insert row into \texttt{scorer\_session} (\texttt{INSERT OR IGNORE}) \\
+\texttt{FeedbackAdd}        & Insert row into \texttt{feedback} \\
+\texttt{ChatAdd}            & Insert row into \texttt{chat\_message} \\
+\texttt{ContextGet}         & Return recent chat messages and feedback for LLM context \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -779,17 +960,27 @@ newline-delimited JSON objects.
 Example request/response pairs:
 
 \begin{lstlisting}[style=shell]
-# BudgetInit
-{"op":"BudgetInit","session_uuid":"...","max_retries":3,"max_inpaints":2}
-{"ok":true}
+# ConversationCreate
+{"op":"ConversationCreate","name":"beach portraits"}
+{"ok":true,"conversation_id":"conv-uuid-..."}
+
+# WorkflowCreate
+{"op":"WorkflowCreate","conversation_id":"conv-uuid-...",
+ "workflow_path":"workflows/sdxl_base.json","max_retries":3,"max_inpaints":2}
+{"ok":true,"workflow_id":"wf-uuid-...","conversation_id":"conv-uuid-..."}
+
+# WorkflowResume (creates a new run)
+{"op":"WorkflowResume","workflow_id":"wf-uuid-..."}
+{"ok":true,"run_id":"run-uuid-..."}
 
 # BudgetGet
-{"op":"BudgetGet","session_uuid":"..."}
+{"op":"BudgetGet","session_uuid":"run-uuid-..."}
 {"ok":true,"retries_used":1,"inpaints_used":0,"max_retries":3,"max_inpaints":2}
 
-# BudgetUpdate
-{"op":"BudgetUpdate","session_uuid":"...","field":"retries_used"}
-{"ok":true}
+# ContextGet
+{"op":"ContextGet","conversation_id":"conv-uuid-...","workflow_id":"wf-uuid-...","limit":20}
+{"ok":true,"chat":[{"role":"user","content":"more dramatic lighting"},...],
+ "feedback":[{"image_uuid":"img-...","rating":"up","comment":"nice"},...]}
 
 # Session not found
 {"ok":false,"error":"session not found"}
@@ -818,8 +1009,10 @@ Example request/response pairs:
 \textbf{Field} & \textbf{Type} & \textbf{Description} \\
 \midrule
 \texttt{image\_uuid}      & string  & Primary key \\
-\texttt{session\_uuid}    & string  & FK to sessions \\
-\texttt{sequence\_number} & int64   & Position within session \\
+\texttt{session\_uuid}    & string  & Run identifier \\
+\texttt{workflow\_id}     & string? & Parent workflow \\
+\texttt{conversation\_id} & string? & Parent conversation \\
+\texttt{sequence\_number} & int64   & Position within run \\
 \texttt{created\_at}      & string  & ISO 8601 \\
 \texttt{prompt}           & string? & Generation prompt \\
 \texttt{workflow\_path}   & string? & Workflow file path \\
@@ -839,6 +1032,64 @@ Example request/response pairs:
 \bottomrule
 \end{tabular}
 \end{center}
+
+% ============================================================
+\section{Browser UI}
+\label{sec:ui}
+% ============================================================
+
+The pipeline UI is a single-page application served by a FastAPI + uvicorn
+server at \texttt{loop/ui/server.py}. It runs in the scorers venv alongside
+\texttt{tactical\_llm.py}.
+
+\subsection{REST Endpoints}
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Method} & \textbf{Path} & \textbf{Description} \\
+\midrule
+\texttt{GET}  & \texttt{/}                           & Single-page application (index.html) \\
+\texttt{POST} & \texttt{/session/start}               & Create a conversation \\
+\texttt{POST} & \texttt{/workflow/new}                & Create a workflow and first run \\
+\texttt{POST} & \texttt{/workflow/\{id\}/resume}      & Resume a workflow (new run) \\
+\texttt{POST} & \texttt{/workflow/\{id\}/start-run}   & Enqueue a generation request \\
+\texttt{POST} & \texttt{/feedback}                    & Record thumbs up/down for an image \\
+\texttt{GET}  & \texttt{/history}                     & Recent chat and feedback for a workflow \\
+\texttt{GET}  & \texttt{/image/\{uuid\}}              & Proxy ComfyUI image by UUID \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{WebSocket Endpoints}
+
+\begin{description}
+  \item[\texttt{/ws/gallery}] Pushes \texttt{image\_ready} and
+        \texttt{decision} events to all connected browsers. The server's
+        STOMP listener translates Artemis topic messages into gallery events
+        broadcast to every open WebSocket connection.
+  \item[\texttt{/ws/chat}] Bidirectional streaming chat with the LLM.
+        Browser sends \texttt{\{conversation\_id, workflow\_id, message\}};
+        server streams back \texttt{\{type:"chunk", text:"...\}$\ldots$\{type:"done"\}}.
+        Each exchange is stored via \texttt{ChatAdd} so the tactical LLM
+        can retrieve operator intent from \texttt{ContextGet}.
+\end{description}
+
+\subsection{Image Path Cache}
+
+Image paths are cached in-process (\texttt{image\_uuid $\to$ URL or local path})
+from \texttt{/topic/loop.events} STOMP messages. The \texttt{GET
+/image/\{uuid\}} endpoint resolves the path from this cache and either
+proxies the ComfyUI HTTP URL or reads the file from disk, depending on
+the prefix.
+
+\subsection{Chat Backend Configuration}
+
+By default the chat WebSocket calls the tactical LLM server at
+\texttt{tactical.model.server\_url}. Set \texttt{ui.chat\_backend.server\_url}
+and \texttt{ui.chat\_backend.model\_name} in \texttt{config.yaml} to switch
+the chat panel to a different LLM (e.g., a future strategic model) without
+code changes.
 
 % ============================================================
 \section{Data-Loss Protection}
@@ -880,24 +1131,31 @@ to \texttt{pipeline.dead} and logs all arriving messages for operator review.
 \subsection{Starting the Pipeline}
 
 Ensure \texttt{AI\_IMAGE\_ROOT} is exported in your shell environment (see
-Section~2.4). Start components in the order shown; the broker must be
-running before any pipeline process connects.
+Section~2.4). Run the single start script; it manages all startup ordering
+internally.
 
 \begin{lstlisting}[style=shell]
-# 1. Start the Artemis broker
-$AI_IMAGE_ROOT/loop/start_broker.sh
-
-# 2. Start all pipeline components
 $AI_IMAGE_ROOT/loop/start_loop.sh
 \end{lstlisting}
 
-\texttt{start\_loop.sh} launches all Rust binaries and Python processes in
-the background. Each script accepts \texttt{AI\_IMAGE\_ROOT} as an optional
-first argument, falling back to the environment variable, then to
-\texttt{\$PWD} if it looks like the repository root.
+\texttt{start\_loop.sh} starts three slow-initialising processes in parallel
+(Artemis, ComfyUI, llama.cpp server), waits for them to be ready, then
+starts the coordinator, all workers, and the UI server. The full startup
+sequence:
 
-Individual components can also be started manually for development or
-debugging:
+\begin{enumerate}
+  \item Artemis broker, ComfyUI, and llama.cpp server start in parallel
+        (none depend on each other).
+  \item \texttt{sleep 10} — covers model loading for ComfyUI and llama.cpp.
+  \item Coordinator starts; \texttt{sleep 1} for its Unix socket to bind.
+  \item comfyui\_worker, router, aggregator, lancedb\_manager start.
+  \item clip\_scorer, artifact\_scorer, vlm\_scorer start.
+  \item tactical\_llm starts (connects to llama.cpp server).
+  \item UI server starts (FastAPI + uvicorn on \texttt{ui.port}).
+  \item monitor starts.
+\end{enumerate}
+
+Individual components can also be started manually for development:
 
 \begin{lstlisting}[style=shell]
 # Rust binaries
@@ -909,33 +1167,42 @@ $AI_IMAGE_ROOT/loop/scorers/target/release/lancedb_manager
 # ComfyUI
 $AI_IMAGE_ROOT/loop/ComfyUI/launch.sh
 
-# Python components -- root venv
+# llama.cpp OpenAI-compatible server (loads tactical LLM model)
+cd $AI_IMAGE_ROOT/loop/scorers
+source venv/bin/activate
+python -m llama_cpp.server \
+  --model models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
+  --n_gpu_layers -1 \
+  --host 0.0.0.0 \
+  --port 8080
+
+# Python workers -- root venv
 source $AI_IMAGE_ROOT/venv/bin/activate
 PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/comfyui_worker.py
 
-# Python components -- scorers venv
-. $AI_IMAGE_ROOT/loop/scorers/activate.sh
+# Python workers -- scorers venv
+source $AI_IMAGE_ROOT/loop/scorers/venv/bin/activate
 python $AI_IMAGE_ROOT/loop/scorers/clip_scorer.py
 python $AI_IMAGE_ROOT/loop/scorers/artifact_scorer.py
 python $AI_IMAGE_ROOT/loop/scorers/vlm_scorer.py
 PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/tactical-llm/tactical_llm.py
+
+# UI server -- scorers venv
+PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/ui/server.py
 \end{lstlisting}
 
-\subsection{Submitting a Session}
+\subsection{Using the Browser UI}
 
-\begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT
-source venv/bin/activate
-python tactical-llm/session.py \
-  --prompt "two people in a park, photorealistic, golden hour" \
-  --max-retries 3 \
-  --max-inpaints 2 \
-  --monitor
-\end{lstlisting}
-
-The \texttt{--monitor} flag polls the coordinator's \texttt{BudgetGet} socket
-API and prints live progress until the session resolves (accepted,
-give\_up, or budget exhausted).
+Open \texttt{http://localhost:7860} (or the host and port configured in
+\texttt{ui.host} / \texttt{ui.port}). The left sidebar lists your
+conversations and workflows. Click \textbf{New Session} to create a
+conversation, then \textbf{New Workflow} to select a ComfyUI workflow file
+and budget parameters. Click \textbf{Generate} to submit a prompt and watch
+the gallery fill with images and verdicts in real time. Use the thumbs
+up/down buttons on each image card to record feedback; the tactical LLM
+reads this via \texttt{ContextGet} when making future decisions. The chat
+panel in the right sidebar is a persistent conversation with the LLM for
+creative direction.
 
 \subsection{Stopping the Pipeline}
 
@@ -947,23 +1214,14 @@ pkill -f clip_scorer
 pkill -f artifact_scorer
 pkill -f vlm_scorer
 pkill -f tactical_llm
+pkill -f "ui/server"
+pkill -f "llama_cpp.server"
 pkill -f monitor
 pkill -f router
 pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
 "$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis" stop
-\end{lstlisting}
-
-On Windows (Git Bash), use \texttt{taskkill} in place of \texttt{pkill}:
-
-\begin{lstlisting}[style=shell]
-taskkill /f /fi "IMAGENAME eq python.exe"
-taskkill /f /fi "IMAGENAME eq coordinator.exe"
-taskkill /f /fi "IMAGENAME eq router.exe"
-taskkill /f /fi "IMAGENAME eq aggregator.exe"
-taskkill /f /fi "IMAGENAME eq lancedb_manager.exe"
-"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis.cmd" stop
 \end{lstlisting}
 
 \subsection{Monitoring}
@@ -982,6 +1240,13 @@ The Artemis web console is available at \texttt{http://localhost:8161}
 Verify on first start that the following addresses appear under
 \textbf{Addresses}: \texttt{loop.request}, \texttt{loop.events},
 \texttt{scorer.requests}, \texttt{scorer.result}, \texttt{pipeline.dead}.
+
+\subsubsection{Pipeline UI}
+
+The browser UI at \texttt{http://localhost:7860} shows live image and
+decision events as they occur. It is the primary operator interface for
+monitoring generation progress, reviewing verdicts, and interacting with
+the tactical LLM.
 
 \subsubsection{Dead-letter monitor}
 
@@ -1017,9 +1282,11 @@ clip\_scorer (Python)     & Prompt adherence + embedding         & $\sim$1.7\,GB
 artifact\_scorer (Python) & Photorealism scoring                 & $\sim$500\,MB \\
 vlm\_scorer (Python)      & Holistic image evaluation            & $\sim$6\,GB \\
 aggregator (Rust)         & Result collection and verdict        & $\sim$5\,MB \\
-coordinator (Rust)        & XA coordinator + Python budget API   & $\sim$5\,MB \\
+coordinator (Rust)        & XA coordinator + Python API          & $\sim$5\,MB \\
 lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
-Tactical LLM (Qwen3-72B Q4\_K\_M)   & Prompt revision and routing  & $\sim$43\,GB \\
+llama.cpp server (Qwen3-72B Q4\_K\_M) & Tactical LLM + chat    & $\sim$43\,GB \\
+tactical\_llm (Python)    & Decision logic (model via HTTP)      & $\sim$50\,MB \\
+UI server (Python)        & FastAPI + uvicorn + WebSocket        & $\sim$80\,MB \\
 ActiveMQ Artemis          & Message broker                       & $\sim$300\,MB \\
 OS / system overhead      &                                      & $\sim$2\,GB \\
 \midrule
@@ -1028,11 +1295,11 @@ OS / system overhead      &                                      & $\sim$2\,GB \
 \end{tabular}
 \end{center}
 
-The VLM scorer and tactical LLM do not run simultaneously in the hot path
-(VLM scoring completes before tactical inference begins), but both processes
-remain resident in GPU memory throughout the session. Systems with less than
-66\,GB of combined GPU memory should offload tactical LLM layers to CPU;
-expect latency increases proportional to the number of offloaded layers.
+The llama.cpp server serves both \texttt{tactical\_llm.py} and the UI chat
+endpoint from a single model instance. The VLM scorer and llama.cpp server
+do not run simultaneously in the hot path (VLM scoring completes before
+tactical inference begins), but both remain resident in GPU memory
+throughout the session.
 
 % ============================================================
 \section{Threshold Calibration}
@@ -1070,31 +1337,54 @@ No code changes are required for recalibration.
 \subsection{Rust Tests}
 
 The coordinator test suite covers the XA state machine, crash recovery,
-budget operations, and \texttt{SessionInit} idempotency. Tests run against
+budget operations, \texttt{SessionInit} idempotency, and the full
+conversation/workflow hierarchy (ConversationCreate, WorkflowCreate,
+WorkflowResume, FeedbackAdd, ChatAdd, ContextGet). Tests run against
 an in-memory SQLite database.
 
 \begin{lstlisting}[style=shell]
 cd $AI_IMAGE_ROOT/loop/scorers
 cargo test -p coordinator
-\end{lstlisting}
 
-To run all Rust crates in the workspace:
-
-\begin{lstlisting}[style=shell]
+# All crates in the workspace
 cargo test
 \end{lstlisting}
 
 \subsection{Python Tests}
 
-The tactical-LLM test suite covers prompt construction, LanceDB retrieval
-helpers, heuristic decision logic, budget enforcement, and the full
-\texttt{\_handle\_verdict} dispatch path. All external dependencies
-(LanceDB, Unix socket, STOMP) are mocked.
+All Python tests run from the scorers venv:
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/tactical-llm
-source ../venv/bin/activate
-python -m pytest tests/ -v
+cd $AI_IMAGE_ROOT/loop/scorers
+venv/bin/pytest tests/ -v
+\end{lstlisting}
+
+Test files and their coverage:
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+\textbf{File} & \textbf{Coverage} \\
+\midrule
+\texttt{test\_clip\_scorer.py}     & CLIP scoring, cancel event handling \\
+\texttt{test\_artifact\_scorer.py} & Artifact detection, cancel event handling \\
+\texttt{test\_vlm\_scorer.py}      & VLM scoring, cancel event, malformed JSON \\
+\texttt{test\_monitor.py}          & Dead-letter formatting, listener ack/count \\
+\texttt{test\_ui\_server.py}       & REST endpoints, WebSocket events, image proxy,
+                                     gallery manager, STOMP listener \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+External dependencies (LanceDB, Unix socket, STOMP broker, llama.cpp server)
+are mocked in all tests. The UI server tests inject a fake config module so
+they run without \texttt{config.yaml}.
+
+\subsection{Full Suite}
+
+\begin{lstlisting}[style=shell]
+cd $AI_IMAGE_ROOT
+make all    # lint + typecheck + test + build
 \end{lstlisting}
 
 % ============================================================
@@ -1111,6 +1401,9 @@ python -m pytest tests/ -v
   \item[Managed broker] Migrate to Amazon MQ for ActiveMQ (AMQP~1.0 / STOMP
         compatible).
   \item[Cloud LanceDB] Change \texttt{paths.lancedb} to an S3 URI.
+  \item[Strategic LLM for chat] Set \texttt{ui.chat\_backend.server\_url} and
+        \texttt{ui.chat\_backend.model\_name} in \texttt{config.yaml}. No code
+        changes required.
 \end{description}
 
 \end{document}

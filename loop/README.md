@@ -3,12 +3,14 @@
 The generation loop subsystem. Accepts generation requests via the
 `loop.request` anycast queue, generates images via ComfyUI, scores them
 in parallel, and emits verdicts to the `scorer.result` queue for the
-tactical LLM to act on.
+tactical LLM to act on. The browser UI coordinates sessions and displays
+generated images in real time.
 
 ## Components
 
 | Component | Language | Role |
 |-----------|----------|------|
+| `ui/server.py` | Python (FastAPI / STOMP) | Browser UI backend; REST + WebSocket gallery; subscribes to `loop.events` and `tactical.decisions` |
 | `comfyui_worker.py` | Python (STOMP) | Consumes `loop.request`, registers image with coordinator, drives ComfyUI API, publishes to `loop.events` |
 | `monitor.py` | Python (STOMP) | Dead-letter consumer — logs all messages in `pipeline.dead` |
 | `scorers/router` | Rust (AMQP 1.0) | Consumes `loop.events`, fans out to `scorer.requests` multicast |
@@ -16,7 +18,7 @@ tactical LLM to act on.
 | `scorers/artifact_scorer.py` | Python (STOMP) | AI artifact detection |
 | `scorers/vlm_scorer.py` | Python (STOMP) | VLM holistic image evaluation |
 | `scorers/aggregator` | Rust (AMQP 1.0) | Accumulates scorer results in SQLite, emits verdicts, publishes cancels |
-| `scorers/coordinator` | Rust (Unix socket) | XA 2PC coordinator; Python budget API |
+| `scorers/coordinator` | Rust (Unix socket) | XA 2PC coordinator; conversation/workflow/budget API |
 | `scorers/lancedb_manager` | Rust (AMQP 1.0) | Reads scorer_session from SQLite, writes Loop records to LanceDB |
 
 ## Starting the Loop
@@ -25,9 +27,20 @@ tactical LLM to act on.
 ~/ai-image/loop/start_loop.sh
 ```
 
+`start_loop.sh` starts components in parallel where possible:
+1. **Parallel**: ComfyUI, llama.cpp server (tactical LLM backend)
+2. Sleep 10 s
+3. Coordinator
+4. Sleep 1 s
+5. Rust workers (router, aggregator, lancedb_manager), Python scorers,
+   comfyui_worker, tactical_llm
+6. UI server (port 7860)
+7. Monitor
+
 ## Stopping the Loop
 
 ```bash
+pkill -f "server.py"
 pkill -f comfyui_worker
 pkill -f clip_scorer
 pkill -f artifact_scorer
@@ -38,32 +51,30 @@ pkill -f router
 pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
+pkill -f "llama.server"
 "$ARTEMIS_DATA/bin/artemis" stop
 ```
 
 ## Monitoring
 
-Artemis management console: http://localhost:8161
-
-Dead-letter messages land in `pipeline.dead`. Start the monitor to watch:
-
-```bash
-python ~/ai-image/loop/monitor.py
-```
+- **Browser UI**: http://localhost:7860 — real-time image gallery
+- **Artemis management console**: http://localhost:8161
+- **Dead-letter monitor**: `python ~/ai-image/loop/monitor.py`
 
 ## Address Topology
 
 ```
-loop.request             [anycast  / STOMP]    session.py, tactical_llm → comfyui_worker
-loop.events              [multicast / STOMP+AMQP] comfyui_worker → router
-scorer.requests          [multicast / AMQP 1.0]  router → all scorers
-scorer.events            [multicast / AMQP 1.0]  aggregator → all scorers, lancedb_manager
-aggregator.clip.queue    [anycast  / STOMP+AMQP] clip_scorer → aggregator
-aggregator.artifact.queue [anycast / STOMP+AMQP] artifact_scorer → aggregator
-aggregator.vlm.queue     [anycast  / STOMP+AMQP] vlm_scorer → aggregator
-scorer.result            [anycast  / AMQP 1.0]   aggregator → tactical_llm
-loop.accepted            [multicast / STOMP+AMQP] tactical_llm → lancedb_manager
-pipeline.dead            [anycast  / AMQP 1.0]   DLX → monitor
+loop.request              [anycast  / STOMP]      UI server, tactical_llm → comfyui_worker
+loop.events               [multicast / STOMP+AMQP] comfyui_worker → router, UI server
+scorer.requests           [multicast / AMQP 1.0]  router → all scorers
+scorer.events             [multicast / AMQP 1.0]  aggregator → all scorers, lancedb_manager
+aggregator.clip.queue     [anycast  / STOMP+AMQP] clip_scorer → aggregator
+aggregator.artifact.queue [anycast  / STOMP+AMQP] artifact_scorer → aggregator
+aggregator.vlm.queue      [anycast  / STOMP+AMQP] vlm_scorer → aggregator
+scorer.result             [anycast  / AMQP 1.0]   aggregator → tactical_llm
+loop.accepted             [multicast / STOMP+AMQP] tactical_llm → lancedb_manager
+tactical.decisions        [multicast / STOMP]      tactical_llm → UI server
+pipeline.dead             [anycast  / AMQP 1.0]   DLX → monitor
 ```
 
 ## Threshold Configuration

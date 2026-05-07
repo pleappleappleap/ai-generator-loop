@@ -13,9 +13,13 @@ aggregator, which applies cascade threshold logic and emits a verdict.
 | `vlm_scorer.py` | Python (STOMP) | Qwen2.5-VL-7B Q5\_K\_M; durable sub to `scorer.requests` |
 | `router/` | Rust (AMQP 1.0) | Fans out `loop.events` → `scorer.requests` multicast |
 | `aggregator/` | Rust (AMQP 1.0) | Merges results into SQLite `scorer_session`; emits verdicts |
-| `coordinator/` | Rust (Unix socket) | XA 2PC log; `BudgetInit/Get/Update`, `SessionInit` API |
+| `coordinator/` | Rust (Unix socket) | XA 2PC log; conversation/workflow/budget API |
 | `lancedb_manager/` | Rust (AMQP 1.0) | Writes terminal Loop records to LanceDB |
 | `db/` | Rust (library) | Shared SQLite pool, schema, cleanup task |
+
+The scorers Python venv (`venv/`) is also used by the UI server
+(`loop/ui/server.py`) and `tactical_llm.py`, which share the same ML
+libraries and the FastAPI/uvicorn stack.
 
 ## Activating the Python Environment
 
@@ -27,7 +31,7 @@ source ~/ai-image/loop/scorers/activate.sh
 
 ```bash
 cd ~/ai-image/loop/scorers
-cargo build --release
+~/.cargo/bin/cargo build --release
 ```
 
 ## Running Tests
@@ -35,14 +39,25 @@ cargo build --release
 ### Rust
 ```bash
 cd ~/ai-image/loop/scorers
-cargo test -p coordinator
+~/.cargo/bin/cargo test -p coordinator
 ```
 
 ### Python
 ```bash
 cd ~/ai-image/loop/scorers
-source venv/bin/activate
-pytest tests/ -v
+venv/bin/pytest tests/ -v
+```
+
+The `tests/` directory covers:
+- `test_clip_scorer.py` — CLIP scorer unit tests
+- `test_artifact_scorer.py` — artifact scorer unit tests
+- `test_vlm_scorer.py` — VLM scorer unit tests
+- `test_ui_server.py` — UI server REST, WebSocket, and STOMP listener tests
+
+### Full suite (lint + typecheck + Rust + Python)
+```bash
+cd ~/ai-image/loop
+make all
 ```
 
 ## Adding a New Scorer
@@ -64,5 +79,6 @@ pytest tests/ -v
 ```
 models/
 ├── artifact-detector/    umm-maybe/AI-image-detector (HuggingFace)
-└── vlm/                  Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+├── vlm/                  Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+└── tactical/             Qwen3-72B-abliterated-Q4_K_M.gguf (served via llama.cpp server)
 ```

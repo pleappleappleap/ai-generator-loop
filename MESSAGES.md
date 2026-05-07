@@ -11,14 +11,16 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ## Anycast Addresses (queue semantics)
 
 ### `loop.request`
-**Publisher:** `session.py`, tactical LLM (retry)  
-**Consumer:** `comfyui_worker.py`  
+**Publisher:** UI server (`server.py`), tactical LLM (retry)
+**Consumer:** `comfyui_worker.py`
 **Protocol:** STOMP
 
 ```json
 {
   "image_uuid":      "string",
   "session_uuid":    "string",
+  "workflow_id":     "string",
+  "conversation_id": "string",
   "sequence_number": "integer",
   "workflow_path":   "string",
   "prompt":          "string",
@@ -33,7 +35,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `aggregator.clip.queue`
-**Publisher:** `clip_scorer.py`  **Consumer:** `aggregator` (Rust)  
+**Publisher:** `clip_scorer.py`  **Consumer:** `aggregator` (Rust)
 **Protocol:** STOMP → AMQP 1.0
 
 ```json
@@ -41,7 +43,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `aggregator.artifact.queue`
-**Publisher:** `artifact_scorer.py`  **Consumer:** `aggregator` (Rust)  
+**Publisher:** `artifact_scorer.py`  **Consumer:** `aggregator` (Rust)
 **Protocol:** STOMP → AMQP 1.0
 
 ```json
@@ -49,7 +51,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `aggregator.vlm.queue`
-**Publisher:** `vlm_scorer.py`  **Consumer:** `aggregator` (Rust)  
+**Publisher:** `vlm_scorer.py`  **Consumer:** `aggregator` (Rust)
 **Protocol:** STOMP → AMQP 1.0
 
 ```json
@@ -66,16 +68,18 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `scorer.result`
-**Publisher:** `aggregator` (Rust)  **Consumer:** `tactical_llm.py`  
+**Publisher:** `aggregator` (Rust)  **Consumer:** `tactical_llm.py`
 **Protocol:** AMQP 1.0 → STOMP
 
 ```json
 {
-  "image_uuid": "string",
-  "verdict":    "candidate | rejected",
-  "reason":     "clip_threshold | artifact_threshold (omitted for candidate)",
+  "image_uuid":      "string",
+  "verdict":         "candidate | rejected",
+  "reason":          "clip_threshold | artifact_threshold (omitted for candidate)",
   "prompt":          "string",
   "session_uuid":    "string",
+  "workflow_id":     "string",
+  "conversation_id": "string",
   "workflow_path":   "string",
   "sequence_number": "integer",
   "scores": {
@@ -89,7 +93,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `pipeline.dead`
-**Publisher:** Artemis DLX (from all failed queues)  **Consumer:** `monitor.py`  
+**Publisher:** Artemis DLX (from all failed queues)  **Consumer:** `monitor.py`
 **Protocol:** AMQP 1.0
 
 Original message body preserved. Artemis adds headers:
@@ -102,13 +106,16 @@ Original message body preserved. Artemis adds headers:
 ## Multicast Addresses (topic semantics)
 
 ### `loop.events`
-**Publisher:** `comfyui_worker.py`  **Consumer:** `router` (Rust)  
+**Publisher:** `comfyui_worker.py`
+**Consumers:** `router` (Rust), UI server (`server.py`)
 **Protocol:** STOMP → AMQP 1.0
 
 ```json
 {
   "image_uuid":      "string",
   "session_uuid":    "string",
+  "workflow_id":     "string",
+  "conversation_id": "string",
   "sequence_number": "integer",
   "prompt_id":       "string",
   "image_path":      "string",
@@ -118,17 +125,21 @@ Original message body preserved. Artemis adds headers:
 }
 ```
 
+The UI server subscribes to `loop.events` via STOMP to cache the
+`image_uuid → image_path` mapping so it can serve generated images to the
+browser via `/image/{uuid}`.
+
 ### `scorer.requests`
-**Publisher:** `router` (Rust)  **Consumers:** all scorers (durable STOMP subscriptions)  
-**Protocol:** AMQP 1.0 → STOMP  
+**Publisher:** `router` (Rust)  **Consumers:** all scorers (durable STOMP subscriptions)
+**Protocol:** AMQP 1.0 → STOMP
 **Message property:** `subject = score.<image_uuid>`
 
 Payload: unchanged `loop.events` message body.
 
 ### `scorer.events`
-**Publisher:** `aggregator` (Rust)  
-**Consumers:** all scorers (cancel flag), `lancedb_manager` (Rust)  
-**Protocol:** AMQP 1.0  
+**Publisher:** `aggregator` (Rust)
+**Consumers:** all scorers (cancel flag), `lancedb_manager` (Rust)
+**Protocol:** AMQP 1.0
 **Message property:** `subject = cancel.<image_uuid>`
 
 ```json
@@ -136,7 +147,7 @@ Payload: unchanged `loop.events` message body.
 ```
 
 ### `loop.accepted`
-**Publisher:** `tactical_llm.py`  **Consumer:** `lancedb_manager` (Rust)  
+**Publisher:** `tactical_llm.py`  **Consumer:** `lancedb_manager` (Rust)
 **Protocol:** STOMP → AMQP 1.0
 
 ```json
@@ -148,13 +159,18 @@ Payload: unchanged `loop.events` message body.
 ```
 
 ### `tactical.decisions`
-**Publisher:** `tactical_llm.py`  **Consumer:** strategic LLM (planned)  
+**Publisher:** `tactical_llm.py`
+**Consumers:** UI server (`server.py`), strategic LLM (planned)
 **Protocol:** STOMP
+
+The UI server subscribes to `tactical.decisions` to push live decision updates
+to connected browser clients via the WebSocket gallery endpoint.
 
 ```json
 {
   "image_uuid":   "string",
   "session_uuid": "string",
+  "workflow_id":  "string",
   "decision": {
     "decision":    "accept | retry | inpaint | give_up",
     "reasoning":   "string",
@@ -172,10 +188,25 @@ Payload: unchanged `loop.events` message body.
 
 ## Coordinator Unix Socket API
 
-Socket path: `{database.path}.sock` (e.g. `pipeline.db.sock`).  
+Socket path: `{database.path}.sock` (e.g. `pipeline.db.sock`).
 Protocol: newline-delimited JSON (request → response per connection).
 
-### Requests
+### Conversation and Workflow Operations
+
+```json
+{"op":"ConversationCreate", "name": "My Project"}
+{"op":"WorkflowCreate",     "conversation_id":"...", "workflow_path":"sdxl.json",
+                             "max_retries":3, "max_inpaints":2}
+{"op":"WorkflowResume",     "workflow_id":"...", "budget_policy":"carry",
+                             "max_retries":3, "max_inpaints":2}
+{"op":"FeedbackAdd",        "image_uuid":"...", "workflow_id":"...", "run_id":"...",
+                             "rating":"up | down", "comment":"string (optional)"}
+{"op":"ChatAdd",            "conversation_id":"...", "role":"user | assistant",
+                             "content":"string"}
+{"op":"ContextGet",         "conversation_id":"...", "workflow_id":"...", "limit":20}
+```
+
+### Session Budget Operations
 
 ```json
 {"op":"BudgetInit",   "session_uuid":"...", "max_retries":3, "max_inpaints":2}
@@ -190,6 +221,29 @@ Protocol: newline-delimited JSON (request → response per connection).
 
 ```json
 {"ok": true}
+{"ok": true, "conversation_id": "uuid"}
+{"ok": true, "workflow_id": "uuid", "conversation_id": "uuid", "workflow_path": "sdxl.json"}
+{"ok": true, "run_id": "uuid"}
 {"ok": true, "retries_used":1, "inpaints_used":0, "max_retries":3, "max_inpaints":2}
+{"ok": true, "chat": [...], "feedback": [...]}
 {"ok": false, "error": "session not found"}
 ```
+
+---
+
+## UI Server REST and WebSocket API
+
+The UI server (`loop/ui/server.py`) exposes the following endpoints on the
+configured port (default 7860):
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Serves the browser UI (`static/index.html`) |
+| `POST` | `/session/start` | Create a new conversation via coordinator `ConversationCreate` |
+| `POST` | `/workflow/new` | Create + resume a workflow (`WorkflowCreate` then `WorkflowResume`) |
+| `POST` | `/workflow/{id}/resume` | Resume an existing workflow (`WorkflowResume`) |
+| `POST` | `/workflow/{id}/start-run` | Publish a `loop.request` message to start image generation |
+| `POST` | `/feedback` | Submit a thumbs rating (`FeedbackAdd`) |
+| `GET` | `/history` | Fetch conversation context (`ContextGet`) |
+| `GET` | `/image/{uuid}` | Serve a generated image (local file or proxied HTTP URL) |
+| `WS` | `/ws/gallery` | WebSocket — pushes `image_ready` and `decision` events to browsers |
