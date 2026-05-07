@@ -102,6 +102,7 @@ def score_worker(
         if cancel_event.is_set():
             return
         ai_confidence = next((r["score"] for r in results if r["label"] == "artificial"), 0.0)
+        ai_confidence = max(0.0, min(1.0, ai_confidence))
         result = {
             "image_uuid": image_uuid,
             "ai_confidence": ai_confidence,

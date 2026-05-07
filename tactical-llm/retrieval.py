@@ -83,7 +83,7 @@ def _add_vlm_mean(record: dict) -> dict:
     """
     dims = [
         record.get("vlm_photorealism"),
-        record.get("vlm_anatomical"),
+        record.get("vlm_anatomical"),       # VLM JSON key: "anatomical_coherence"
         record.get("vlm_interaction"),
         record.get("vlm_lighting"),
         record.get("vlm_prompt"),

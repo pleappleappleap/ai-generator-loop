@@ -40,6 +40,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixListener;
@@ -838,10 +839,27 @@ async fn run_socket_server(
     // Clean up stale socket from a previous run.
     let _ = std::fs::remove_file(socket_path);
     let listener = UnixListener::bind(socket_path)?;
+    // Restrict socket to owner-only so only the pipeline user can connect.
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
     info!("Coordinator Unix socket listening at {}", socket_path);
 
+    let mut sigterm = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    )?;
+
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, _) = tokio::select! {
+            biased;
+            _ = sigterm.recv() => {
+                info!("SIGTERM received — coordinator shutting down");
+                return Ok(());
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received — coordinator shutting down");
+                return Ok(());
+            }
+            result = listener.accept() => result?,
+        };
         let pool = pool.clone();
         let registry = registry.clone();
         tokio::spawn(async move {

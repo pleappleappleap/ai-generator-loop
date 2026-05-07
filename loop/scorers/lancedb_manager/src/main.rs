@@ -360,8 +360,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("LanceDB manager ready (AMQP 1.0)");
 
+    let mut sigterm = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    )?;
+
     loop {
         tokio::select! {
+            biased;
+            _ = sigterm.recv() => {
+                info!("SIGTERM received — lancedb_manager shutting down");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received — lancedb_manager shutting down");
+                break;
+            }
             delivery = accepted_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let msg: Value = serde_json::from_slice(delivery.body())?;
@@ -410,6 +423,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    Ok(())
 }
 
 /// Process a terminal event: existence-check, write, delete session row.

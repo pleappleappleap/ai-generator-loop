@@ -462,8 +462,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Aggregator ready (AMQP 1.0)");
 
+    let mut sigterm = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    )?;
+
     loop {
         tokio::select! {
+            biased;
+            _ = sigterm.recv() => {
+                info!("SIGTERM received — aggregator shutting down");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received — aggregator shutting down");
+                break;
+            }
             delivery = clip_receiver.recv::<Vec<u8>>() => {
                 let delivery = delivery?;
                 let result: Value = serde_json::from_slice(delivery.body())?;
@@ -492,4 +505,5 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+    Ok(())
 }

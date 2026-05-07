@@ -484,10 +484,11 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
             # C3: increment before publish so a publish failure cannot leave an
             # in-flight message with a stale (under-counted) budget.
             _increment_budget(session_uuid, "retries_used")
+            retry_n = budget["retries_used"] + 1  # post-increment count
             new_uuid = _publish_retry(conn, verdict, decision)
             print(
                 f"[tactical] retry   {image_uuid} → {new_uuid}  "
-                f"({budget['retries_used'] + 1}/{budget['max_retries']})"
+                f"({retry_n}/{budget['max_retries']})"
             )
 
     elif action == "inpaint":

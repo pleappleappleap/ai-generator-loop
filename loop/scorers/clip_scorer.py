@@ -22,6 +22,7 @@ Address publications (STOMP / Artemis):
 """
 
 import json
+import math
 import sys
 import threading
 from pathlib import Path
@@ -144,6 +145,9 @@ def score_worker(
             similarity = (image_features @ text_features.T).item()
             image_embedding = image_features.squeeze().tolist()
             prompt_embedding = text_features.squeeze().tolist()
+        if math.isnan(similarity) or math.isinf(similarity):
+            similarity = 0.0
+        similarity = max(-1.0, min(1.0, similarity))
         result = {
             "image_uuid": image_uuid,
             "clip_score": similarity,

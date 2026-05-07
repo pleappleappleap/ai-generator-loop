@@ -79,8 +79,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Router ready (AMQP 1.0)");
 
+    let mut sigterm = tokio::signal::unix::signal(
+        tokio::signal::unix::SignalKind::terminate(),
+    )?;
+
     loop {
-        let delivery = receiver.recv::<Vec<u8>>().await?;
+        let delivery = tokio::select! {
+            biased;
+            _ = sigterm.recv() => {
+                info!("SIGTERM received — router shutting down");
+                break;
+            }
+            _ = tokio::signal::ctrl_c() => {
+                info!("SIGINT received — router shutting down");
+                break;
+            }
+            result = receiver.recv::<Vec<u8>>() => result?,
+        };
         let payload = delivery.body().clone();
         let message: Value = serde_json::from_slice(&payload)?;
         let image_uuid = message["image_uuid"].as_str().unwrap_or("unknown");
@@ -101,6 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         receiver.accept(&delivery).await?;
         info!("Routed {}", image_uuid);
     }
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

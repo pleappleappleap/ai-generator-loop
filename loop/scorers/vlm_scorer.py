@@ -115,6 +115,13 @@ def score_worker(
             accumulated += token["choices"][0]["text"]
 
         result: dict[str, Any] = json.loads(accumulated)
+        score_fields = (
+            "photorealism", "anatomical_coherence", "interaction_plausibility",
+            "lighting_consistency", "prompt_adherence",
+        )
+        for field in score_fields:
+            if field in result and isinstance(result[field], (int, float)):
+                result[field] = max(0.0, min(10.0, float(result[field])))
         result["image_uuid"] = image_uuid
         conn.send(
             destination="/queue/aggregator.vlm.queue",
