@@ -95,7 +95,12 @@ def score(image_path: str, prompt: str) -> dict[str, Any]:
         text_features = text_features / text_features.norm(dim=-1, keepdim=True)
         similarity = (image_features @ text_features.T).item()
         image_embedding = image_features.squeeze().tolist()
-    return {"clip_score": similarity, "image_embedding": image_embedding}
+        prompt_embedding = text_features.squeeze().tolist()
+    return {
+        "clip_score": similarity,
+        "image_embedding": image_embedding,
+        "prompt_embedding": prompt_embedding,
+    }
 
 
 def score_worker(
@@ -137,10 +142,12 @@ def score_worker(
             text_features = text_features / text_features.norm(dim=-1, keepdim=True)
             similarity = (image_features @ text_features.T).item()
             image_embedding = image_features.squeeze().tolist()
+            prompt_embedding = text_features.squeeze().tolist()
         result = {
             "image_uuid": image_uuid,
             "clip_score": similarity,
             "image_embedding": image_embedding,
+            "prompt_embedding": prompt_embedding,
         }
         conn.send(
             destination="/queue/aggregator.clip.queue",

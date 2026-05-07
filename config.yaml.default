@@ -83,6 +83,8 @@ tactical:
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # token limit for non-thinking responses
     max_tokens_thinking: 4096   # token limit when Qwen3 chain-of-thought is enabled
+    server_url: http://localhost:8080/v1   # llama.cpp OpenAI-compatible server
+    model_name: default                   # model name sent in API requests
   decisions:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session
@@ -91,3 +93,13 @@ tactical:
   retrieval:
     similar_sessions_k: 5      # top-K similar past Loop records for context
     session_history_limit: 10  # max prior images from current session to include
+
+ui:
+  port: 7860           # port the browser UI listens on
+  host: 0.0.0.0        # bind address; set to 127.0.0.1 to restrict to localhost
+  # chat_backend: override which LLM server the chat panel talks to.
+  # Defaults to tactical.model.server_url / model_name when omitted.
+  # Set this to the strategic LLM server when it becomes available.
+  # chat_backend:
+  #   server_url: http://localhost:8081/v1
+  #   model_name: strategic-model

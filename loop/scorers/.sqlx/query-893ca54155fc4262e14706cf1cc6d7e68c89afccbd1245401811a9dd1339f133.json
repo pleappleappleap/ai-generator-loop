@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO scorer_session\n                 (image_uuid, session_uuid, sequence_number, prompt, workflow_path,\n                  workflow_params, workflow_id, conversation_id, created_at, expires_at)\n                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "893ca54155fc4262e14706cf1cc6d7e68c89afccbd1245401811a9dd1339f133"
+}

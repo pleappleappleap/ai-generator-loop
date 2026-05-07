@@ -45,8 +45,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
+import openai
 import stomp
-from llama_cpp import Llama
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import load as _load_config  # noqa: E402
@@ -68,21 +68,15 @@ _STOMP_PORT: int = _u.port or 61613
 _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
 
-# ── LLM initialisation ────────────────────────────────────────────────────────
+# ── LLM client (OpenAI-compatible llama.cpp server) ──────────────────────────
 
-_model_path = str(
-    Path(_model_cfg.get("dir", "")) / _model_cfg.get("filename", "")
-)
+_LLM_SERVER_URL: str = _model_cfg.get("server_url", "http://localhost:8080/v1")
+_LLM_MODEL_NAME: str = _model_cfg.get("model_name", "default")
 
-llm = Llama(
-    model_path=_model_path,
-    n_ctx=_model_cfg.get("context_length", 8192),
-    n_gpu_layers=_tac_compute.get("n_gpu_layers", -1),
-    verbose=False,
-)
+_client = openai.OpenAI(base_url=_LLM_SERVER_URL, api_key="none")
 
-_TEMPERATURE: float     = _model_cfg.get("temperature",          0.1)
-_MAX_TOKENS: int        = _model_cfg.get("max_tokens",            512)
+_TEMPERATURE: float       = _model_cfg.get("temperature",          0.1)
+_MAX_TOKENS: int          = _model_cfg.get("max_tokens",            512)
 _MAX_TOKENS_THINKING: int = _model_cfg.get("max_tokens_thinking", 4096)
 
 _MAX_RETRIES:  int   = _decision_cfg.get("max_retries",  3)
@@ -189,7 +183,8 @@ def _run_inference(decision_prompt: str) -> dict:
     thinking = decision_prompt.rstrip().endswith("/think")
     max_tok  = _MAX_TOKENS_THINKING if thinking else _MAX_TOKENS
 
-    result = llm.create_chat_completion(
+    result = _client.chat.completions.create(
+        model=_LLM_MODEL_NAME,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user",   "content": decision_prompt},
@@ -197,7 +192,7 @@ def _run_inference(decision_prompt: str) -> dict:
         temperature=_TEMPERATURE,
         max_tokens=max_tok,
     )
-    raw = result["choices"][0]["message"]["content"].strip()
+    raw = result.choices[0].message.content.strip()
 
     # Strip Qwen3 chain-of-thought block when thinking mode was enabled.
     if "<think>" in raw:
@@ -280,6 +275,8 @@ def _publish_retry(
         "session_uuid":     scores.get("session_uuid", ""),
         "sequence_number":  seq + 1,
         "workflow_path":    scores.get("workflow_path", ""),
+        "workflow_id":      original_verdict.get("workflow_id", ""),
+        "conversation_id":  original_verdict.get("conversation_id", ""),
         "workflow_params":  {
             **(scores.get("workflow_params") or {}),
             **(decision.get("retry_params") or {}),
@@ -428,11 +425,13 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
         conn: Open STOMP connection for publishing.
         body: JSON-encoded verdict string or bytes from scorer.result.
     """
-    verdict      = json.loads(body)
-    image_uuid   = verdict.get("image_uuid", "")
-    scores       = verdict.get("scores", {})
-    session_uuid = scores.get("session_uuid", "")
-    image_path   = scores.get("image_path")
+    verdict          = json.loads(body)
+    image_uuid       = verdict.get("image_uuid", "")
+    scores           = verdict.get("scores", {})
+    session_uuid     = scores.get("session_uuid", "")
+    image_path       = scores.get("image_path")
+    workflow_id      = verdict.get("workflow_id", "")
+    conversation_id  = verdict.get("conversation_id", "")
 
     budget  = _get_budget(session_uuid)
     history = session_history(session_uuid)
@@ -444,8 +443,22 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
     except Exception:
         past = []
 
+    context: dict | None = None
+    if workflow_id and conversation_id:
+        try:
+            resp = _coordinator_call({
+                "op":             "ContextGet",
+                "conversation_id": conversation_id,
+                "workflow_id":     workflow_id,
+                "limit":           20,
+            })
+            if resp.get("ok"):
+                context = resp
+        except Exception:
+            pass
+
     try:
-        decision_prompt = build_decision_prompt(verdict, history, past, budget)
+        decision_prompt = build_decision_prompt(verdict, history, past, budget, context)
         decision = _run_inference(decision_prompt)
     except Exception:
         decision = {}
@@ -538,7 +551,7 @@ def main() -> None:
         ack="client-individual",
     )
     print("Tactical LLM ready")
-    print(f"  model:           {_model_path}")
+    print(f"  llm_server:      {_LLM_SERVER_URL}")
     print(f"  max_retries:     {_MAX_RETRIES}")
     print(f"  max_inpaints:    {_MAX_INPAINTS}")
     print(f"  accept_vlm_mean: {_VLM_MEAN_MIN}")

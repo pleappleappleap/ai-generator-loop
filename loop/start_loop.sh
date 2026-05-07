@@ -16,22 +16,55 @@ LANCEDB=$(yq '.paths.lancedb' "$CFG")
 [ "$SCORERS" = "auto" ] && SCORERS="$AI_IMAGE_ROOT/loop/scorers"
 [ "$LANCEDB" = "auto" ] && LANCEDB="$AI_IMAGE_ROOT/lancedb"
 
-# Start infrastructure
-"$AI_IMAGE_ROOT/loop/start_broker.sh"
-sleep 3
+# Resolve llama.cpp server config before any sleeps so we can start it early.
+LLM_SERVER_URL=$(python3 -c "
+import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
+from config import load; cfg=load()
+print(cfg.tactical.get('model',{}).get('server_url','http://localhost:8080/v1'))
+" 2>/dev/null || echo "http://localhost:8080/v1")
+LLM_PORT=$(echo "$LLM_SERVER_URL" | sed 's|.*:\([0-9]*\)/.*|\1|; s|http://[^:]*||')
+[ -z "$LLM_PORT" ] && LLM_PORT=8080
+LLM_MODEL_DIR=$(python3 -c "
+import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
+from config import load; cfg=load(); m=cfg.tactical.get('model',{})
+print(m.get('dir','') + '/' + m.get('filename',''))
+" 2>/dev/null || echo "")
+LLM_GPU_LAYERS=$(python3 -c "
+import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
+from config import load; cfg=load()
+print(cfg.compute.get('tactical_llm',{}).get('n_gpu_layers',-1))
+" 2>/dev/null || echo "-1")
 
-# Start ComfyUI
+# Start Artemis, ComfyUI, and llama.cpp server in parallel — none depend on each other.
+# All three are slow to initialise; overlapping them saves the most wall-clock time.
+"$AI_IMAGE_ROOT/loop/start_broker.sh" &
 "$COMFYUI/launch.sh" &
-sleep 5
+cd "$SCORERS"
+. venv/bin/activate
+if [ -n "$LLM_MODEL_DIR" ] && [ -f "$LLM_MODEL_DIR" ]; then
+    python -m llama_cpp.server \
+        --model "$LLM_MODEL_DIR" \
+        --n_gpu_layers "$LLM_GPU_LAYERS" \
+        --host 0.0.0.0 \
+        --port "$LLM_PORT" &
+    LLM_PID=$!
+    echo "llama.cpp server PID=$LLM_PID port=$LLM_PORT"
+else
+    echo "WARNING: LLM model not found at '$LLM_MODEL_DIR' — skipping llama.cpp server"
+fi
+
+# Wait for the slowest of the three to be ready.
+# ComfyUI and the LLM both load large models; 10 s covers Artemis comfortably.
+sleep 10
+
+# Start coordinator first — other processes connect to its Unix socket.
+"$SCORERS/target/release/coordinator" &
+sleep 1   # coordinator must bind its Unix socket before other processes start
 
 # Start ComfyUI MQ worker (uses root venv; config.py is at AI_IMAGE_ROOT)
 cd "$AI_IMAGE_ROOT"
 . venv/bin/activate
 python loop/comfyui_worker.py &
-
-# Start Rust binaries
-"$SCORERS/target/release/coordinator" &
-sleep 1   # coordinator must bind its Unix socket before other processes start
 "$SCORERS/target/release/router" &
 "$SCORERS/target/release/aggregator" &
 "$SCORERS/target/release/lancedb_manager" &
@@ -43,9 +76,17 @@ python clip_scorer.py &
 python artifact_scorer.py &
 python vlm_scorer.py &
 
-# Start tactical LLM (shares the scorers venv; config.py lives at AI_IMAGE_ROOT)
 cd "$AI_IMAGE_ROOT/tactical-llm"
 PYTHONPATH="$AI_IMAGE_ROOT" python tactical_llm.py &
+
+# Start UI server
+cd "$AI_IMAGE_ROOT/loop/ui"
+UI_PORT=$(python3 -c "
+import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
+from config import load; cfg=load()
+print(cfg.get('ui', default={}).get('port', 7860) if cfg.get('ui') else 7860)
+" 2>/dev/null || echo "7860")
+PYTHONPATH="$AI_IMAGE_ROOT" python server.py &
 
 # Start dead-letter monitor (root venv; watches pipeline.dead for unrecoverable failures)
 cd "$AI_IMAGE_ROOT"
@@ -69,4 +110,6 @@ echo "  LanceDB: $LANCEDB"
 echo "    tables: sessions, loop"
 echo ""
 _HOST=$(hostname 2>/dev/null || echo "localhost")
-echo "Management UI: http://${_HOST}:8161 (Hawtio, admin/admin)"
+echo "Management UI:  http://${_HOST}:8161 (Hawtio, admin/admin)"
+echo "Pipeline UI:    http://${_HOST}:${UI_PORT}"
+echo "LLM server:     ${LLM_SERVER_URL}"

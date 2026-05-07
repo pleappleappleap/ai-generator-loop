@@ -10,7 +10,7 @@ from tests.conftest import make_frame
 _FAKE_IMAGE = str(Path(tempfile.gettempdir()) / "test.png")
 
 
-def test_score_returns_clip_score_and_embedding():
+def test_score_returns_clip_score_and_embeddings():
     with (
         patch("clip_scorer.model") as mock_model,
         patch("clip_scorer.preprocess") as mock_preprocess,
@@ -26,9 +26,12 @@ def test_score_returns_clip_score_and_embedding():
         result = score(_FAKE_IMAGE, "test prompt")
         assert "clip_score" in result
         assert "image_embedding" in result
+        assert "prompt_embedding" in result
         assert isinstance(result["clip_score"], float)
         assert isinstance(result["image_embedding"], list)
         assert len(result["image_embedding"]) == 512
+        assert isinstance(result["prompt_embedding"], list)
+        assert len(result["prompt_embedding"]) == 512
 
 
 def test_cancel_event_set_on_events_message(mock_conn):

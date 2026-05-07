@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT budget_policy, max_retries, max_inpaints, conversation_id, workflow_path\n                 FROM workflows WHERE workflow_id = ?1",
+  "describe": {
+    "columns": [
+      {
+        "name": "budget_policy",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "max_retries",
+        "ordinal": 1,
+        "type_info": "Int64"
+      },
+      {
+        "name": "max_inpaints",
+        "ordinal": 2,
+        "type_info": "Int64"
+      },
+      {
+        "name": "conversation_id",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "workflow_path",
+        "ordinal": 4,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "963adafbc190806844c9a2579c54749c0549a092a0644cf4c0e07e2c95a0ac71"
+}

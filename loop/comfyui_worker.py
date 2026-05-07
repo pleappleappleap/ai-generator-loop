@@ -193,6 +193,8 @@ class _Listener(stomp.ConnectionListener):
                 "prompt":          request.get("prompt"),
                 "workflow_path":   request["workflow_path"],
                 "workflow_params": request.get("workflow_params", {}),
+                "workflow_id":     request.get("workflow_id", ""),
+                "conversation_id": request.get("conversation_id", ""),
             }
             score_timeout_secs = int(_cfg.thresholds["score_timeout_secs"])
             _coordinator_call({
@@ -204,6 +206,8 @@ class _Listener(stomp.ConnectionListener):
                 "workflow_path":     request["workflow_path"],
                 "workflow_params":   json.dumps(request.get("workflow_params", {})),
                 "score_timeout_secs": score_timeout_secs,
+                "workflow_id":       request.get("workflow_id", ""),
+                "conversation_id":   request.get("conversation_id", ""),
             })
             self._conn.send(
                 destination="/topic/loop.events",

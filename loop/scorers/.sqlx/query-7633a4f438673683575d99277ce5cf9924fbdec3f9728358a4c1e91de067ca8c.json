@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT role, content, created_at FROM chat_messages\n                 WHERE conversation_id = ?1\n                 ORDER BY created_at DESC, id DESC LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "role",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "content",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7633a4f438673683575d99277ce5cf9924fbdec3f9728358a4c1e91de067ca8c"
+}

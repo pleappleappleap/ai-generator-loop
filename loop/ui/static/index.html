@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Image Pipeline</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0d0d0d;
+    --surface:   #1a1a1a;
+    --border:    #2a2a2a;
+    --text:      #e0e0e0;
+    --muted:     #888;
+    --accent:    #7c5cbf;
+    --accent2:   #4a9eff;
+    --up:        #4caf50;
+    --down:      #f44336;
+    --radius:    6px;
+    --sidebar-w: 260px;
+    --chat-w:    360px;
+  }
+
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    overflow: hidden;
+  }
+
+  /* ── Sidebar ── */
+  #sidebar {
+    width: var(--sidebar-w);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  #sidebar-header {
+    padding: 14px 12px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  #sidebar-header h2 { font-size: 13px; font-weight: 600; flex: 1; }
+
+  #btn-new-session {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 4px 10px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  #btn-new-session:hover { filter: brightness(1.2); }
+
+  #workflow-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .wf-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    font-size: 12px;
+  }
+  .wf-item:hover { background: rgba(255,255,255,0.04); }
+  .wf-item.active { border-left-color: var(--accent); background: rgba(124,92,191,0.12); }
+  .wf-item .wf-name { font-weight: 500; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf-item .wf-meta { color: var(--muted); font-size: 10px; }
+
+  #sidebar-footer {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+  }
+  #sidebar-footer button {
+    flex: 1;
+    background: var(--border);
+    color: var(--text);
+    border: none;
+    border-radius: var(--radius);
+    padding: 6px;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  #sidebar-footer button:hover { background: #3a3a3a; }
+
+  /* ── Gallery ── */
+  #gallery-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  #gallery-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  #gallery-header h1 { font-size: 14px; font-weight: 600; flex: 1; }
+
+  #btn-start-run {
+    background: var(--accent2);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 6px 14px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #btn-start-run:hover { filter: brightness(1.15); }
+  #btn-start-run:disabled { opacity: 0.4; cursor: default; }
+
+  #gallery-grid {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 10px;
+    align-content: start;
+  }
+
+  .img-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    position: relative;
+  }
+
+  .img-card img {
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+    display: block;
+  }
+
+  .img-card .img-placeholder {
+    width: 100%;
+    aspect-ratio: 1;
+    background: var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  .img-card .img-footer {
+    padding: 6px 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .img-card .verdict-badge {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    flex: 1;
+  }
+  .verdict-candidate { background: rgba(76,175,80,0.2); color: #81c784; }
+  .verdict-rejected  { background: rgba(244,67,54,0.2);  color: #e57373; }
+  .verdict-accepted  { background: rgba(74,158,255,0.2); color: #64b5f6; }
+
+  .btn-thumb {
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--muted);
+    cursor: pointer;
+    padding: 3px 7px;
+    font-size: 13px;
+    line-height: 1;
+  }
+  .btn-thumb:hover { border-color: var(--text); color: var(--text); }
+  .btn-thumb.rated-up   { border-color: var(--up);   color: var(--up); }
+  .btn-thumb.rated-down { border-color: var(--down);  color: var(--down); }
+
+  /* ── Chat panel ── */
+  #chat-panel {
+    width: var(--chat-w);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+
+  #chat-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  #chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .chat-msg {
+    max-width: 90%;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .chat-msg.user      { background: rgba(74,158,255,0.18); align-self: flex-end; }
+  .chat-msg.assistant { background: var(--surface); border: 1px solid var(--border); align-self: flex-start; }
+  .chat-msg.system    { background: transparent; color: var(--muted); font-size: 10px; text-align: center; align-self: center; }
+
+  #chat-input-row {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 6px;
+  }
+
+  #chat-input {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 8px;
+    resize: none;
+    min-height: 36px;
+    max-height: 120px;
+    font-family: inherit;
+  }
+  #chat-input:focus { outline: none; border-color: var(--accent); }
+
+  #btn-send {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    border-radius: var(--radius);
+    padding: 0 12px;
+    font-size: 12px;
+    cursor: pointer;
+    align-self: flex-end;
+    height: 36px;
+  }
+  #btn-send:hover { filter: brightness(1.2); }
+  #btn-send:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Modals ── */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-backdrop.hidden { display: none; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    min-width: 360px;
+    max-width: 500px;
+  }
+
+  .modal h3 { font-size: 14px; margin-bottom: 14px; }
+
+  .form-row { margin-bottom: 10px; }
+  .form-row label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .form-row input, .form-row select, .form-row textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-size: 12px;
+    padding: 6px 8px;
+    font-family: inherit;
+  }
+  .form-row textarea { min-height: 60px; resize: vertical; }
+
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }
+  .modal-actions button {
+    padding: 6px 14px;
+    border: none;
+    border-radius: var(--radius);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { filter: brightness(1.2); }
+  .btn-cancel  { background: var(--border); color: var(--text); }
+  .btn-cancel:hover { background: #3a3a3a; }
+
+  #status-bar {
+    position: fixed;
+    bottom: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 6px 14px;
+    font-size: 11px;
+    color: var(--muted);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 200;
+  }
+  #status-bar.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<!-- Sidebar -->
+<aside id="sidebar">
+  <div id="sidebar-header">
+    <h2>Workflows</h2>
+    <button id="btn-new-session">+ Session</button>
+  </div>
+  <div id="workflow-list"></div>
+  <div id="sidebar-footer">
+    <button id="btn-new-workflow">New Workflow</button>
+    <button id="btn-resume-workflow">Resume</button>
+  </div>
+</aside>
+
+<!-- Gallery -->
+<main id="gallery-panel">
+  <div id="gallery-header">
+    <h1 id="gallery-title">Select a workflow</h1>
+    <button id="btn-start-run" disabled>Generate</button>
+  </div>
+  <div id="gallery-grid"></div>
+</main>
+
+<!-- Chat -->
+<aside id="chat-panel">
+  <div id="chat-header">Creative Director</div>
+  <div id="chat-messages">
+    <div class="chat-msg system">Discuss your creative direction. Start a new session to begin.</div>
+  </div>
+  <div id="chat-input-row">
+    <textarea id="chat-input" placeholder="Describe your vision…" rows="2"></textarea>
+    <button id="btn-send">Send</button>
+  </div>
+</aside>
+
+<!-- New Session Modal -->
+<div class="modal-backdrop hidden" id="modal-session">
+  <div class="modal">
+    <h3>New Session</h3>
+    <div class="form-row">
+      <label>Session name (optional)</label>
+      <input type="text" id="session-name" placeholder="e.g. Fantasy portraits">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modal-session-cancel">Cancel</button>
+      <button class="btn-primary" id="modal-session-ok">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- New Workflow Modal -->
+<div class="modal-backdrop hidden" id="modal-workflow">
+  <div class="modal">
+    <h3>New Workflow</h3>
+    <div class="form-row">
+      <label>Workflow name</label>
+      <input type="text" id="wf-name" placeholder="e.g. Dark fantasy female portrait">
+    </div>
+    <div class="form-row">
+      <label>ComfyUI workflow JSON path</label>
+      <input type="text" id="wf-path" placeholder="/path/to/workflow.json">
+    </div>
+    <div class="form-row">
+      <label>Description (optional)</label>
+      <textarea id="wf-desc" placeholder="Describe the aesthetic, subject, or goal…"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Budget policy on resume</label>
+      <select id="wf-budget-policy">
+        <option value="fresh">fresh (reset counters)</option>
+        <option value="accumulated">accumulated (continue counters)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label>Max retries</label>
+      <input type="number" id="wf-max-retries" value="3" min="0" max="20">
+    </div>
+    <div class="form-row">
+      <label>Max inpaints</label>
+      <input type="number" id="wf-max-inpaints" value="2" min="0" max="10">
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modal-wf-cancel">Cancel</button>
+      <button class="btn-primary" id="modal-wf-ok">Create</button>
+    </div>
+  </div>
+</div>
+
+<!-- Generate Modal -->
+<div class="modal-backdrop hidden" id="modal-generate">
+  <div class="modal">
+    <h3>Generate Images</h3>
+    <div class="form-row">
+      <label>Prompt</label>
+      <textarea id="gen-prompt" rows="4" placeholder="Describe the image…"></textarea>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="modal-gen-cancel">Cancel</button>
+      <button class="btn-primary" id="modal-gen-ok">Start</button>
+    </div>
+  </div>
+</div>
+
+<div id="status-bar"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────────────────
+const state = {
+  conversationId: null,
+  activeWorkflow: null,  // { workflow_id, run_id, name, workflow_path }
+  workflows: [],         // [{ workflow_id, name, conversation_id, ... }]
+  images: {},            // workflow_id → [{ image_uuid, verdict, rating }]
+  chatWs: null,
+  galleryWs: null,
+};
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function status(msg, duration = 2500) {
+  const bar = document.getElementById('status-bar');
+  bar.textContent = msg;
+  bar.classList.add('visible');
+  clearTimeout(bar._t);
+  bar._t = setTimeout(() => bar.classList.remove('visible'), duration);
+}
+
+async function api(method, path, body) {
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(path, opts);
+  return r.json();
+}
+
+// ── WebSocket setup ────────────────────────────────────────────────────────────
+function connectGalleryWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/gallery`);
+  ws.onmessage = (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'image_ready') handleImageReady(msg);
+      else if (msg.type === 'decision') handleDecision(msg);
+    } catch {}
+  };
+  ws.onclose = () => setTimeout(connectGalleryWs, 3000);
+  state.galleryWs = ws;
+}
+
+function connectChatWs() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/chat`);
+  ws._currentMsg = null;
+  ws.onmessage = (ev) => {
+    try {
+      const chunk = JSON.parse(ev.data);
+      if (chunk.type === 'chunk') {
+        appendChatChunk(chunk.text);
+      } else if (chunk.type === 'done') {
+        finalizeChatResponse();
+        document.getElementById('btn-send').disabled = false;
+        document.getElementById('chat-input').disabled = false;
+      } else if (chunk.type === 'error') {
+        appendChatMsg('system', `Error: ${chunk.text}`);
+        document.getElementById('btn-send').disabled = false;
+        document.getElementById('chat-input').disabled = false;
+      }
+    } catch {}
+  };
+  ws.onclose = () => setTimeout(connectChatWs, 3000);
+  state.chatWs = ws;
+}
+
+// ── Gallery event handlers ────────────────────────────────────────────────────
+
+// image_ready: ComfyUI finished, image available at /image/{uuid}
+function handleImageReady(msg) {
+  const wfId = msg.workflow_id;
+  if (!wfId) return;
+  if (!state.images[wfId]) state.images[wfId] = [];
+
+  // Check if we already have a placeholder for this uuid (from optimistic start-run).
+  const existing = state.images[wfId].find(e => e.image_uuid === msg.image_uuid);
+  if (existing) {
+    existing.verdict = 'scoring';
+    if (state.activeWorkflow?.workflow_id === wfId) refreshCardBadge(msg.image_uuid, 'scoring');
+    return;
+  }
+
+  const entry = { image_uuid: msg.image_uuid, verdict: 'scoring', run_id: '', rating: null };
+  state.images[wfId].unshift(entry);
+  if (state.activeWorkflow?.workflow_id === wfId) prependImageCard(entry);
+}
+
+// decision: tactical LLM made a decision — update verdict badge on the card
+function handleDecision(msg) {
+  const wfId = msg.workflow_id;
+  if (!wfId) return;
+  const list = state.images[wfId] || [];
+  const entry = list.find(e => e.image_uuid === msg.image_uuid);
+  const label = msg.decision || msg.verdict || 'unknown';
+  if (entry) entry.verdict = label;
+  if (state.activeWorkflow?.workflow_id === wfId) refreshCardBadge(msg.image_uuid, label);
+}
+
+function refreshCardBadge(image_uuid, verdict) {
+  const card = document.querySelector(`.img-card[data-uuid="${image_uuid}"]`);
+  if (!card) return;
+  const badge = card.querySelector('.verdict-badge');
+  if (badge) {
+    badge.className = `verdict-badge verdict-${verdict}`;
+    badge.textContent = verdict;
+  }
+}
+
+// ── Gallery rendering ──────────────────────────────────────────────────────────
+function renderGallery() {
+  const grid = document.getElementById('gallery-grid');
+  grid.innerHTML = '';
+  const wfId = state.activeWorkflow?.workflow_id;
+  if (!wfId) return;
+  const imgs = state.images[wfId] || [];
+  imgs.forEach(img => grid.appendChild(makeCard(img)));
+}
+
+function prependImageCard(img) {
+  const grid = document.getElementById('gallery-grid');
+  const card = makeCard(img);
+  grid.insertBefore(card, grid.firstChild);
+}
+
+function makeCard(img) {
+  const card = document.createElement('div');
+  card.className = 'img-card';
+  card.dataset.uuid = img.image_uuid;
+
+  const imgEl = document.createElement('img');
+  imgEl.src = `/image/${img.image_uuid}`;
+  imgEl.alt = img.image_uuid;
+  imgEl.onerror = () => {
+    imgEl.replaceWith(Object.assign(document.createElement('div'), {
+      className: 'img-placeholder', textContent: 'Generating…'
+    }));
+  };
+  card.appendChild(imgEl);
+
+  const footer = document.createElement('div');
+  footer.className = 'img-footer';
+
+  const badge = document.createElement('span');
+  badge.className = `verdict-badge verdict-${img.verdict}`;
+  badge.textContent = img.verdict;
+  footer.appendChild(badge);
+
+  const btnUp = document.createElement('button');
+  btnUp.className = 'btn-thumb' + (img.rating === 'up' ? ' rated-up' : '');
+  btnUp.textContent = '👍';
+  btnUp.onclick = () => submitFeedback(img, 'up', card);
+  footer.appendChild(btnUp);
+
+  const btnDown = document.createElement('button');
+  btnDown.className = 'btn-thumb' + (img.rating === 'down' ? ' rated-down' : '');
+  btnDown.textContent = '👎';
+  btnDown.onclick = () => submitFeedback(img, 'down', card);
+  footer.appendChild(btnDown);
+
+  card.appendChild(footer);
+  return card;
+}
+
+async function submitFeedback(img, rating, card) {
+  if (!state.activeWorkflow) return;
+  img.rating = rating;
+  await api('POST', '/feedback', {
+    image_uuid:  img.image_uuid,
+    workflow_id: state.activeWorkflow.workflow_id,
+    run_id:      img.run_id || state.activeWorkflow.run_id || '',
+    rating,
+  });
+  card.querySelectorAll('.btn-thumb').forEach(b => {
+    b.classList.remove('rated-up', 'rated-down');
+  });
+  card.querySelector('.btn-thumb:first-of-type').classList.toggle('rated-up', rating === 'up');
+  card.querySelector('.btn-thumb:last-of-type').classList.toggle('rated-down', rating === 'down');
+  status(`Feedback recorded`);
+}
+
+// ── Workflow sidebar ───────────────────────────────────────────────────────────
+function renderWorkflowList() {
+  const list = document.getElementById('workflow-list');
+  list.innerHTML = '';
+  state.workflows.forEach(wf => {
+    const item = document.createElement('div');
+    item.className = 'wf-item' + (state.activeWorkflow?.workflow_id === wf.workflow_id ? ' active' : '');
+    item.innerHTML = `<div class="wf-name">${escHtml(wf.name)}</div><div class="wf-meta">${wf.workflow_id.slice(0, 8)}…</div>`;
+    item.onclick = () => selectWorkflow(wf);
+    list.appendChild(item);
+  });
+}
+
+function selectWorkflow(wf) {
+  state.activeWorkflow = wf;
+  document.getElementById('gallery-title').textContent = wf.name;
+  document.getElementById('btn-start-run').disabled = false;
+  renderWorkflowList();
+  renderGallery();
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Chat ───────────────────────────────────────────────────────────────────────
+function appendChatMsg(role, text) {
+  const msgs = document.getElementById('chat-messages');
+  const el = document.createElement('div');
+  el.className = `chat-msg ${role}`;
+  el.textContent = text;
+  msgs.appendChild(el);
+  msgs.scrollTop = msgs.scrollHeight;
+  return el;
+}
+
+let _streamEl = null;
+let _streamText = '';
+
+function appendChatChunk(text) {
+  if (!_streamEl) {
+    _streamEl = appendChatMsg('assistant', '');
+  }
+  _streamText += text;
+  _streamEl.textContent = _streamText;
+  document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
+}
+
+function finalizeChatResponse() {
+  _streamEl = null;
+  _streamText = '';
+}
+
+function sendChat(text) {
+  if (!state.chatWs || state.chatWs.readyState !== WebSocket.OPEN) {
+    status('Chat not connected — reconnecting…');
+    return;
+  }
+  appendChatMsg('user', text);
+  document.getElementById('btn-send').disabled = true;
+  document.getElementById('chat-input').disabled = true;
+
+  state.chatWs.send(JSON.stringify({
+    conversation_id: state.conversationId || '',
+    workflow_id:     state.activeWorkflow?.workflow_id || null,
+    message:         text,
+  }));
+}
+
+// ── Modals ─────────────────────────────────────────────────────────────────────
+function showModal(id) { document.getElementById(id).classList.remove('hidden'); }
+function hideModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// Session modal
+document.getElementById('btn-new-session').onclick = () => {
+  document.getElementById('session-name').value = '';
+  showModal('modal-session');
+};
+document.getElementById('modal-session-cancel').onclick = () => hideModal('modal-session');
+document.getElementById('modal-session-ok').onclick = async () => {
+  const name = document.getElementById('session-name').value.trim() || undefined;
+  const resp = await api('POST', '/session/start', { name });
+  if (resp.ok !== false) {
+    state.conversationId = resp.conversation_id;
+    state.workflows = [];
+    state.images = {};
+    state.activeWorkflow = null;
+    renderWorkflowList();
+    renderGallery();
+    document.getElementById('gallery-title').textContent = 'Select a workflow';
+    document.getElementById('btn-start-run').disabled = true;
+    document.getElementById('chat-messages').innerHTML =
+      '<div class="chat-msg system">New session started. What would you like to create?</div>';
+    status('Session created');
+  }
+  hideModal('modal-session');
+};
+
+// Workflow modal
+document.getElementById('btn-new-workflow').onclick = () => {
+  if (!state.conversationId) { status('Create a session first'); return; }
+  document.getElementById('wf-name').value = '';
+  document.getElementById('wf-path').value = '';
+  document.getElementById('wf-desc').value = '';
+  showModal('modal-workflow');
+};
+document.getElementById('modal-wf-cancel').onclick = () => hideModal('modal-workflow');
+document.getElementById('modal-wf-ok').onclick = async () => {
+  const wfName = document.getElementById('wf-name').value.trim() || 'Untitled Workflow';
+  const wfPath = document.getElementById('wf-path').value.trim();
+  const resp = await api('POST', '/workflow/new', {
+    conversation_id: state.conversationId,
+    name:            wfName,
+    workflow_path:   wfPath,
+    description:     document.getElementById('wf-desc').value.trim() || undefined,
+    budget_policy:   document.getElementById('wf-budget-policy').value,
+    max_retries:     parseInt(document.getElementById('wf-max-retries').value),
+    max_inpaints:    parseInt(document.getElementById('wf-max-inpaints').value),
+  });
+  if (resp.ok !== false && resp.workflow_id) {
+    const wf = {
+      workflow_id:     resp.workflow_id,
+      name:            wfName,
+      conversation_id: state.conversationId,
+      workflow_path:   wfPath,
+      run_id:          resp.run_id,
+    };
+    state.workflows.unshift(wf);
+    renderWorkflowList();
+    selectWorkflow(wf);
+    status('Workflow created');
+  } else {
+    status(`Error: ${resp.error || 'could not create workflow'}`);
+  }
+  hideModal('modal-workflow');
+};
+
+// Resume button
+document.getElementById('btn-resume-workflow').onclick = async () => {
+  if (!state.activeWorkflow) { status('Select a workflow to resume'); return; }
+  const resp = await api('POST', `/workflow/${state.activeWorkflow.workflow_id}/resume`, {});
+  if (resp.ok !== false) {
+    state.activeWorkflow.run_id          = resp.run_id;
+    state.activeWorkflow.conversation_id = resp.conversation_id || state.activeWorkflow.conversation_id;
+    state.activeWorkflow.workflow_path   = resp.workflow_path   || state.activeWorkflow.workflow_path;
+    status(`Workflow resumed (run ${(resp.run_id || '').slice(0,8)}…)`);
+  }
+};
+
+// Generate modal
+document.getElementById('btn-start-run').onclick = () => {
+  if (!state.activeWorkflow) return;
+  document.getElementById('gen-prompt').value = '';
+  showModal('modal-generate');
+};
+document.getElementById('modal-gen-cancel').onclick = () => hideModal('modal-generate');
+document.getElementById('modal-gen-ok').onclick = async () => {
+  const prompt = document.getElementById('gen-prompt').value.trim();
+  if (!prompt) { status('Enter a prompt'); return; }
+  const wf = state.activeWorkflow;
+  if (!wf?.run_id) { status('No active run — resume the workflow first'); return; }
+  hideModal('modal-generate');
+  const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
+    prompt,
+    run_id:          wf.run_id,
+    conversation_id: wf.conversation_id || state.conversationId || '',
+    workflow_path:   wf.workflow_path   || '',
+  });
+  if (resp.ok) {
+    status(`Generation queued (${(resp.image_uuid || '').slice(0,8)}…)`);
+    // Optimistic placeholder — updated when image_ready arrives.
+    const pending = { image_uuid: resp.image_uuid, verdict: 'queued', run_id: wf.run_id, rating: null };
+    if (!state.images[wf.workflow_id]) state.images[wf.workflow_id] = [];
+    state.images[wf.workflow_id].unshift(pending);
+    prependImageCard(pending);
+  } else {
+    status(`Error: ${resp.error || 'unknown'}`);
+  }
+};
+
+// Chat input
+document.getElementById('btn-send').onclick = () => {
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  sendChat(text);
+};
+document.getElementById('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    document.getElementById('btn-send').click();
+  }
+});
+
+// ── Init ───────────────────────────────────────────────────────────────────────
+connectGalleryWs();
+connectChatWs();
+</script>
+</body>
+</html>

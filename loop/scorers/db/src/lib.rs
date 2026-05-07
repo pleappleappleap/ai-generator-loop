@@ -81,6 +81,33 @@ pub fn spawn_cleanup_task(pool: SqlitePool, interval_secs: u64) {
     });
 }
 
+/// Apply incremental schema migrations to databases that predate the current
+/// schema. On a fresh install these are no-ops (columns already exist in
+/// `schema.sql`); on an existing database they add missing columns.
+///
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, so each `ALTER TABLE` is
+/// attempted and "duplicate column" errors are silently ignored. Any other
+/// error is propagated.
+///
+/// Call once after `init_schema` on every startup.
+pub async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let additions: &[&str] = &[
+        // Added when conversation/workflow hierarchy was introduced.
+        "ALTER TABLE scorer_session  ADD COLUMN workflow_id     TEXT",
+        "ALTER TABLE scorer_session  ADD COLUMN conversation_id TEXT",
+        "ALTER TABLE tactical_budget ADD COLUMN workflow_id     TEXT",
+        "ALTER TABLE tactical_budget ADD COLUMN conversation_id TEXT",
+    ];
+    for stmt in additions {
+        if let Err(e) = sqlx::raw_sql(stmt).execute(pool).await {
+            if !e.to_string().contains("duplicate column") {
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Current Unix timestamp in seconds.
 pub fn now_unix() -> i64 {
     std::time::SystemTime::now()

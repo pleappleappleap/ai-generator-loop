@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT image_uuid, rating, comment, created_at FROM user_feedback\n                 WHERE workflow_id = ?1\n                 ORDER BY created_at DESC, id DESC LIMIT ?2",
+  "describe": {
+    "columns": [
+      {
+        "name": "image_uuid",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "comment",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 3,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "eef54e6ef979c19c79f0d9fd830ae9130c856cd29bdc2afe048a26e664f90fe0"
+}

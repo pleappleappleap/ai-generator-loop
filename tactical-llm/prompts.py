@@ -166,6 +166,34 @@ def _format_history(history: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_context(context: dict) -> str:
+    """Format user chat messages and thumbs ratings for the prompt."""
+    lines = []
+
+    feedback = context.get("feedback", [])
+    if feedback:
+        lines.append("  User ratings for recent images:")
+        for fb in feedback:
+            rating = "👍 accepted" if fb.get("rating") == "up" else "👎 rejected"
+            comment = f"  — "{fb['comment']}"" if fb.get("comment") else ""
+            lines.append(f"    {rating}{comment}  (image {fb.get('image_uuid', '?')[:8]}…)")
+    else:
+        lines.append("  User ratings: (none)")
+
+    chat = context.get("chat", [])
+    if chat:
+        lines.append("")
+        lines.append("  Recent conversation with user:")
+        for msg in chat:
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            content = msg.get("content", "")[:300]
+            lines.append(f"    {role}: {content}")
+    else:
+        lines.append("  Recent chat: (none)")
+
+    return "\n".join(lines)
+
+
 def _format_similar(similar: list[dict]) -> str:
     """Format similar past sessions for the prompt."""
     if not similar:
@@ -241,6 +269,7 @@ def build_decision_prompt(
     session_history: list[dict],
     similar_past: list[dict],
     budget: dict,
+    context: dict | None = None,
     enable_thinking: bool | None = None,
 ) -> str:
     """Construct the single-turn user message sent to the tactical LLM.
@@ -262,6 +291,11 @@ def build_decision_prompt(
             retrieved by ANN search on prompt embedding.
         budget: Dict with ``retries_used``, ``max_retries``,
             ``inpaints_used``, ``max_inpaints``.
+        context: Optional dict from the coordinator ``ContextGet`` response.
+            Contains ``chat`` (list of recent conversation messages) and
+            ``feedback`` (list of user thumbs ratings with optional comments).
+            When provided, injected as a USER CONTEXT section so the LLM can
+            weight its decision against the user's stated preferences.
         enable_thinking: Override thinking-mode selection. ``None`` (default)
             auto-detects via :func:`_should_think`.
 
@@ -346,6 +380,13 @@ def build_decision_prompt(
         f"  Inpaints remaining: {inpaints_remaining} / {budget['max_inpaints']}",
         "",
     ]
+
+    if context:
+        lines += [
+            "── USER CONTEXT (ratings and chat for this workflow) ────────",
+            _format_context(context),
+            "",
+        ]
 
     thinking = enable_thinking if enable_thinking is not None else _should_think(verdict, budget)
     lines.append("/think" if thinking else "/no_think")

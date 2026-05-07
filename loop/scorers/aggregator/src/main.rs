@@ -171,7 +171,7 @@ async fn merge_scorer_result(
 
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
-                clip, artifact, vlm
+                workflow_id, conversation_id, clip, artifact, vlm
          FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2",
         image_uuid,
         now
@@ -246,6 +246,8 @@ async fn merge_scorer_result(
         "sequence_number": row.sequence_number,
         "prompt":          row.prompt.as_deref().unwrap_or(""),
         "workflow_path":   row.workflow_path.as_deref().unwrap_or(""),
+        "workflow_id":     row.workflow_id,
+        "conversation_id": row.conversation_id,
         "clip":            clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "artifact":        artifact.and_then(|s| serde_json::from_str::<Value>(s).ok()),
         "vlm":             vlm.and_then(|s| serde_json::from_str::<Value>(s).ok()),
@@ -265,7 +267,7 @@ async fn fetch_and_reject(
 
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
-                clip, artifact, vlm
+                workflow_id, conversation_id, clip, artifact, vlm
          FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2 AND verdict IS NULL",
         image_uuid,
         now
@@ -308,6 +310,8 @@ async fn fetch_and_reject(
         "sequence_number":  row.sequence_number,
         "prompt":           row.prompt.as_deref().unwrap_or(""),
         "workflow_path":    row.workflow_path.as_deref().unwrap_or(""),
+        "workflow_id":      row.workflow_id,
+        "conversation_id":  row.conversation_id,
         "verdict":          "rejected",
         "rejection_reason": reason,
         "clip":     clip.and_then(|s| serde_json::from_str::<Value>(s).ok()),
@@ -368,6 +372,8 @@ async fn publish_verdict(
         "scores":          session,
         "prompt":          session["prompt"].as_str().unwrap_or(""),
         "session_uuid":    session["session_uuid"].as_str().unwrap_or(""),
+        "workflow_id":     session["workflow_id"],
+        "conversation_id": session["conversation_id"],
         "workflow_path":   session["workflow_path"].as_str().unwrap_or(""),
         "sequence_number": session["sequence_number"].as_i64().unwrap_or(0),
     });

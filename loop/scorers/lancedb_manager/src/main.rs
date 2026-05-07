@@ -84,14 +84,32 @@ async fn open_loop_table(lancedb_path: &str) -> Result<Table, Box<dyn std::error
     Ok(db.open_table("loop").execute().await?)
 }
 
+const CLIP_EMBEDDING_DIM: i32 = 512;
+
+fn embedding_field(name: &str) -> arrow_schema::Field {
+    use arrow_schema::{DataType, Field};
+    Field::new(
+        name,
+        DataType::FixedSizeList(
+            std::sync::Arc::new(Field::new("item", DataType::Float32, true)),
+            CLIP_EMBEDDING_DIM,
+        ),
+        true,
+    )
+}
+
 fn build_loop_schema() -> arrow_schema::SchemaRef {
     use arrow_schema::{DataType, Field, Schema};
     std::sync::Arc::new(Schema::new(vec![
         Field::new("image_uuid", DataType::Utf8, false),
         Field::new("session_uuid", DataType::Utf8, true),
+        Field::new("workflow_id", DataType::Utf8, true),
+        Field::new("conversation_id", DataType::Utf8, true),
         Field::new("sequence_number", DataType::Int64, true),
         Field::new("created_at", DataType::Utf8, true),
         Field::new("prompt", DataType::Utf8, true),
+        embedding_field("prompt_embedding"),
+        embedding_field("image_embedding"),
         Field::new("workflow_path", DataType::Utf8, true),
         Field::new("workflow_params", DataType::Utf8, true),
         Field::new("clip_score", DataType::Float64, true),
@@ -117,6 +135,47 @@ async fn record_exists(
     let filter = format!("image_uuid = '{}'", image_uuid.replace('\'', "''"));
     let count = table.count_rows(Some(filter)).await?;
     Ok(count > 0)
+}
+
+/// Build a single-row `FixedSizeList(Float32, 512)` Arrow array from a JSON array value.
+///
+/// If the value is not a 512-element JSON array of numbers, returns a null list entry.
+fn json_to_embedding(v: &Value) -> arrow_array::ArrayRef {
+    use arrow_array::builder::{FixedSizeListBuilder, PrimitiveBuilder};
+    use arrow_array::types::Float32Type;
+    use std::sync::Arc;
+
+    let floats: Option<Vec<f32>> = v.as_array().and_then(|arr| {
+        if arr.len() == CLIP_EMBEDDING_DIM as usize {
+            arr.iter()
+                .map(|x| x.as_f64().map(|f| f as f32))
+                .collect::<Option<Vec<_>>>()
+        } else {
+            None
+        }
+    });
+
+    let mut builder = FixedSizeListBuilder::new(
+        PrimitiveBuilder::<Float32Type>::new(),
+        CLIP_EMBEDDING_DIM,
+    );
+
+    match floats {
+        Some(vals) => {
+            for f in vals {
+                builder.values().append_value(f);
+            }
+            builder.append(true);
+        }
+        None => {
+            for _ in 0..CLIP_EMBEDDING_DIM {
+                builder.values().append_value(0.0);
+            }
+            builder.append(false);
+        }
+    }
+
+    Arc::new(builder.finish())
 }
 
 /// Write a terminal Loop record to LanceDB from a complete scorer_session row.
@@ -157,12 +216,22 @@ async fn write_loop_record(
         vec![
             Arc::new(StringArray::from(vec![session.image_uuid.as_str()])),
             Arc::new(StringArray::from(vec![session.session_uuid.as_str()])),
+            Arc::new(StringArray::from(vec![session
+                .workflow_id
+                .as_deref()
+                .unwrap_or("")])),
+            Arc::new(StringArray::from(vec![session
+                .conversation_id
+                .as_deref()
+                .unwrap_or("")])),
             Arc::new(Int64Array::from(vec![session.sequence_number])),
             Arc::new(StringArray::from(vec![created_at.as_str()])),
             Arc::new(StringArray::from(vec![session
                 .prompt
                 .as_deref()
                 .unwrap_or("")])),
+            json_to_embedding(&clip["prompt_embedding"]),
+            json_to_embedding(&clip["image_embedding"]),
             Arc::new(StringArray::from(vec![session
                 .workflow_path
                 .as_deref()
@@ -214,6 +283,8 @@ struct SessionRow {
     prompt: Option<String>,
     workflow_path: Option<String>,
     workflow_params: Option<String>,
+    workflow_id: Option<String>,
+    conversation_id: Option<String>,
     clip: Option<String>,
     artifact: Option<String>,
     vlm: Option<String>,
@@ -225,7 +296,7 @@ async fn fetch_session(
 ) -> Result<Option<SessionRow>, sqlx::Error> {
     let row = sqlx::query!(
         "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,
-                workflow_params, clip, artifact, vlm
+                workflow_params, workflow_id, conversation_id, clip, artifact, vlm
          FROM scorer_session WHERE image_uuid = ?1",
         image_uuid
     )
@@ -239,6 +310,8 @@ async fn fetch_session(
         prompt: r.prompt,
         workflow_path: r.workflow_path,
         workflow_params: r.workflow_params,
+        workflow_id: r.workflow_id,
+        conversation_id: r.conversation_id,
         clip: r.clip,
         artifact: r.artifact,
         vlm: r.vlm,
@@ -268,6 +341,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let pool = db::open_pool(&cfg.database.path, cfg.database.busy_timeout_ms).await?;
     db::init_schema(&pool).await?;
+    db::migrate(&pool).await?;
     db::spawn_cleanup_task(pool.clone(), cfg.database.cleanup_interval_secs);
 
     let loop_table = open_loop_table(&cfg.paths.lancedb).await?;

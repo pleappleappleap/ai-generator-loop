@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,\n                workflow_params, clip, artifact, vlm\n         FROM scorer_session WHERE image_uuid = ?1",
+  "query": "SELECT image_uuid, session_uuid, sequence_number, prompt, workflow_path,\n                workflow_id, conversation_id, clip, artifact, vlm\n         FROM scorer_session WHERE image_uuid = ?1 AND expires_at > ?2 AND verdict IS NULL",
   "describe": {
     "columns": [
       {
@@ -29,28 +29,33 @@
         "type_info": "Text"
       },
       {
-        "name": "workflow_params",
+        "name": "workflow_id",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "clip",
+        "name": "conversation_id",
         "ordinal": 6,
         "type_info": "Text"
       },
       {
-        "name": "artifact",
+        "name": "clip",
         "ordinal": 7,
         "type_info": "Text"
       },
       {
-        "name": "vlm",
+        "name": "artifact",
         "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "vlm",
+        "ordinal": 9,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       true,
@@ -61,8 +66,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "7cd8c422cff5f1a93cbb4bbb0a5e5a6609dcf6ec64ea72ffab4954fb39f455c4"
+  "hash": "1d318f8237dbdc7c6b50768bec52856ed84e4928f4679cefb547f237a7e37be7"
 }
