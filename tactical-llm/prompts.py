@@ -175,7 +175,7 @@ def _format_context(context: dict) -> str:
         lines.append("  User ratings for recent images:")
         for fb in feedback:
             rating = "👍 accepted" if fb.get("rating") == "up" else "👎 rejected"
-            comment = f"  — "{fb['comment']}"" if fb.get("comment") else ""
+            comment = f'  \u2014 \u201c{fb["comment"]}\u201d' if fb.get("comment") else ""
             lines.append(f"    {rating}{comment}  (image {fb.get('image_uuid', '?')[:8]}…)")
     else:
         lines.append("  User ratings: (none)")

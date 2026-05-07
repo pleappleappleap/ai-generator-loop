@@ -8,7 +8,7 @@ lint:
 
 typecheck:
 	$(MAKE) -C scorers typecheck
-	scorers/venv/bin/pyright ui/
+	cd ui && ../scorers/venv/bin/pyright .
 
 test:
 	$(MAKE) -C scorers test
