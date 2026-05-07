@@ -18,7 +18,7 @@ Address publications (STOMP / Artemis):
 import json
 import socket
 import sys
-import time
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -46,6 +46,8 @@ _STOMP_HOST: str = _u.hostname or "localhost"
 _STOMP_PORT: int = _u.port or 61613
 _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
+
+_disconnected = threading.Event()
 
 
 def _coordinator_call(req: dict) -> dict:
@@ -165,6 +167,10 @@ class _Listener(stomp.ConnectionListener):
     def on_error(self, frame: stomp.utils.Frame) -> None:
         print(f"[comfyui_worker] STOMP error: {frame.body}", file=sys.stderr)
 
+    def on_disconnected(self) -> None:
+        print("[comfyui_worker] STOMP disconnected — exiting", file=sys.stderr)
+        _disconnected.set()
+
     def on_message(self, frame: stomp.utils.Frame) -> None:
         """Handle a generation request from the loop.request queue.
 
@@ -224,7 +230,10 @@ def main() -> None:
     Connects to Artemis via STOMP, subscribes to loop.request, and
     blocks indefinitely. This is the process entry point.
     """
-    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn = stomp.Connection(
+        host_and_ports=[(_STOMP_HOST, _STOMP_PORT)],
+        heartbeats=(10000, 10000),
+    )
     conn.set_listener("", _Listener(conn))
     conn.connect(
         _STOMP_USER, _STOMP_PASS, wait=True,
@@ -236,8 +245,8 @@ def main() -> None:
         ack="client-individual",
     )
     print("ComfyUI worker ready")
-    while conn.is_connected():
-        time.sleep(1)
+    _disconnected.wait()
+    sys.exit(1)
 
 
 if __name__ == "__main__":

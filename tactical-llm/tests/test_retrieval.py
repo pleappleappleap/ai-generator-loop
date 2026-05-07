@@ -12,11 +12,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_SESS_1 = "00000000-0000-0000-0000-000000000001"
+_SESS_2 = "00000000-0000-0000-0000-000000000002"
+_SESS_OTHER = "00000000-0000-0000-0000-000000000020"
+_SESS_CURRENT = "00000000-0000-0000-0000-000000000010"
+
+
 def _make_loop_record(**kwargs) -> dict:
     """Return a minimal Loop record with defaults for all LanceDB columns."""
     defaults = {
         "image_uuid":         "img-1",
-        "session_uuid":       "sess-1",
+        "session_uuid":       _SESS_1,
         "sequence_number":    1,
         "created_at":         "2026-01-01T00:00:00+00:00",
         "prompt":             "a tiger",
@@ -56,7 +62,7 @@ class TestSessionHistory:
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.session_history("sess-nonexistent")
+            result = retrieval.session_history("00000000-0000-0000-0000-000000000099")
 
         assert result == []
 
@@ -77,7 +83,7 @@ class TestSessionHistory:
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.session_history("sess-1")
+            result = retrieval.session_history(_SESS_1)
 
         assert len(result) == 2
         seqs = [r["sequence_number"] for r in result]
@@ -102,7 +108,7 @@ class TestSessionHistory:
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.session_history("sess-1")
+            result = retrieval.session_history(_SESS_1)
 
         assert "vlm_mean" in result[0]
         expected_mean = (8.0 + 7.0 + 7.0 + 8.0 + 9.0) / 5
@@ -116,7 +122,7 @@ class TestSessionHistory:
         mock_db.list_tables.return_value = []  # no tables
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.session_history("sess-1")
+            result = retrieval.session_history(_SESS_1)
 
         assert result == []
 
@@ -134,7 +140,7 @@ class TestSimilarPast:
         mock_db.list_tables.return_value = []
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.similar_past([0.0] * 512, "sess-1")
+            result = retrieval.similar_past([0.0] * 512, _SESS_1)
 
         assert result == []
 
@@ -143,8 +149,8 @@ class TestSimilarPast:
         import retrieval
 
         # Two records: one from current session (should be excluded), one from other
-        _make_loop_record(session_uuid="sess-1", image_uuid="img-a")
-        rec_other   = _make_loop_record(session_uuid="sess-2", image_uuid="img-b")
+        _make_loop_record(session_uuid=_SESS_1, image_uuid="img-a")
+        rec_other   = _make_loop_record(session_uuid=_SESS_2, image_uuid="img-b")
 
         mock_table = MagicMock()
         # The WHERE clause filters out the current session — mock returns only the other record.
@@ -155,17 +161,17 @@ class TestSimilarPast:
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.similar_past([0.0] * 512, "sess-1")
+            result = retrieval.similar_past([0.0] * 512, _SESS_1)
 
         uuids = [r["session_uuid"] for r in result]
-        assert "sess-1" not in uuids
+        assert _SESS_1 not in uuids
 
     def test_vlm_mean_computed_for_similar(self):
         """similar_past adds vlm_mean to returned records."""
         import retrieval
 
         rec = _make_loop_record(
-            session_uuid="sess-other",
+            session_uuid=_SESS_OTHER,
             vlm_photorealism=6.0,
             vlm_anatomical=6.0,
             vlm_interaction=6.0,
@@ -180,7 +186,7 @@ class TestSimilarPast:
         mock_db.open_table.return_value = mock_table
 
         with patch("lancedb.connect", return_value=mock_db):
-            result = retrieval.similar_past([0.0] * 512, "sess-current")
+            result = retrieval.similar_past([0.0] * 512, _SESS_CURRENT)
 
         assert len(result) == 1
         assert abs(result[0]["vlm_mean"] - 6.0) < 1e-6

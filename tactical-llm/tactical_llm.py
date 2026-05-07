@@ -40,7 +40,7 @@ from __future__ import annotations
 import json
 import socket
 import sys
-import time
+import threading
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -67,6 +67,8 @@ _STOMP_HOST: str = _u.hostname or "localhost"
 _STOMP_PORT: int = _u.port or 61613
 _STOMP_USER: str = _u.username or ""
 _STOMP_PASS: str = _u.password or ""
+
+_disconnected = threading.Event()
 
 # ── LLM client (OpenAI-compatible llama.cpp server) ──────────────────────────
 
@@ -540,6 +542,10 @@ class _Listener(stomp.ConnectionListener):
     def on_error(self, frame: stomp.utils.Frame) -> None:
         print(f"[tactical_llm] STOMP error: {frame.body}", file=sys.stderr)
 
+    def on_disconnected(self) -> None:
+        print("[tactical_llm] STOMP disconnected — exiting", file=sys.stderr)
+        _disconnected.set()
+
     def on_message(self, frame: stomp.utils.Frame) -> None:
         msg_id = frame.headers.get("message-id", "")
         sub_id = frame.headers.get("subscription", "")
@@ -555,7 +561,10 @@ def main() -> None:
     Connects to Artemis via STOMP, subscribes to scorer.result, and
     blocks indefinitely. This is the process entry point.
     """
-    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn = stomp.Connection(
+        host_and_ports=[(_STOMP_HOST, _STOMP_PORT)],
+        heartbeats=(10000, 10000),
+    )
     conn.set_listener("", _Listener(conn))
     conn.connect(
         _STOMP_USER, _STOMP_PASS, wait=True,
@@ -572,8 +581,8 @@ def main() -> None:
     print(f"  max_inpaints:    {_MAX_INPAINTS}")
     print(f"  accept_vlm_mean: {_VLM_MEAN_MIN}")
     print(f"  accept_clip_min: {_CLIP_MIN}")
-    while conn.is_connected():
-        time.sleep(1)
+    _disconnected.wait()
+    sys.exit(1)
 
 
 if __name__ == "__main__":

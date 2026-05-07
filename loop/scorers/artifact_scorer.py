@@ -20,7 +20,6 @@ Address publications (STOMP / Artemis):
 import json
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -57,6 +56,8 @@ _STOMP_PASS: str = _u.password or ""
 
 _SUB_REQUESTS = "1"
 _SUB_EVENTS = "2"
+
+_disconnected = threading.Event()
 
 
 def score(image_path: str) -> dict[str, Any]:
@@ -124,6 +125,10 @@ class _Listener(stomp.ConnectionListener):
     def on_error(self, frame: stomp.utils.Frame) -> None:
         print(f"[artifact_scorer] STOMP error: {frame.body}", file=sys.stderr)
 
+    def on_disconnected(self) -> None:
+        print("[artifact_scorer] STOMP disconnected — exiting", file=sys.stderr)
+        _disconnected.set()
+
     def on_message(self, frame: stomp.utils.Frame) -> None:
         sub_id = frame.headers.get("subscription", "")
         msg_id = frame.headers.get("message-id", "")
@@ -156,7 +161,10 @@ def main() -> None:
     Connects to Artemis via STOMP, subscribes to scorer.requests and
     scorer.events with durable subscriptions, and blocks indefinitely.
     """
-    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    conn = stomp.Connection(
+        host_and_ports=[(_STOMP_HOST, _STOMP_PORT)],
+        heartbeats=(10000, 10000),
+    )
     conn.set_listener("", _Listener(conn))
     conn.connect(
         _STOMP_USER,
@@ -177,8 +185,8 @@ def main() -> None:
         headers={"durable-subscription-name": "scorer.artifact.events"},
     )
     print("Artifact scorer ready")
-    while conn.is_connected():
-        time.sleep(1)
+    _disconnected.wait()
+    sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -271,7 +271,8 @@ class TestHandleVerdict:
         mocks["_publish_retry"].assert_not_called()
         mocks["_increment_budget"].assert_not_called()
 
-    def test_inpaint_publishes_inpaint_and_increments(self):
+    def test_inpaint_downgrades_to_retry_when_stub(self):
+        # inpaint is not yet implemented — always downgrades to retry when budget available
 
         decision = {
             "decision": "inpaint", "confidence": 0.75,
@@ -281,8 +282,9 @@ class TestHandleVerdict:
             "inpaint_prompt": "correct the left hand",
         }
         conn, mocks = self._call_with_mocks(CANDIDATE_VERDICT, BUDGET_FRESH, decision)
-        mocks["_publish_inpaint"].assert_called_once()
-        mocks["_increment_budget"].assert_called_once_with("sess-1", "inpaints_used")
+        mocks["_publish_inpaint"].assert_not_called()
+        mocks["_publish_retry"].assert_called_once()
+        mocks["_increment_budget"].assert_called_once_with("sess-1", "retries_used")
 
     def test_inpaint_downgrades_to_retry_when_inpaint_budget_gone(self):
 

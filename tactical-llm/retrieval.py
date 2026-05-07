@@ -23,6 +23,7 @@ process is I/O-bound between decisions, so connection overhead is negligible.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -51,6 +52,15 @@ else:
     _device = torch.device("cpu")
 
 _model = _model.to(_device)
+
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def _valid_uuid(value: str) -> bool:
+    return bool(_UUID_RE.match(value))
 
 
 def _get_db() -> lancedb.LanceDBConnection:
@@ -123,6 +133,9 @@ def session_history(
         List of Loop record dicts, each augmented with a ``vlm_mean``
         float. Empty list if no records exist for this session.
     """
+    if not _valid_uuid(session_uuid):
+        return []
+
     cfg_limit = _cfg.tactical.get("retrieval", {}).get("session_history_limit", 10)
     effective_limit = limit if limit is not None else cfg_limit
 
@@ -175,6 +188,9 @@ def similar_past(
         augmented with a ``vlm_mean`` float. Empty list if LanceDB is
         unavailable or empty.
     """
+    if not _valid_uuid(current_session_uuid):
+        return []
+
     cfg_k = _cfg.tactical.get("retrieval", {}).get("similar_sessions_k", 5)
     effective_k = k if k is not None else cfg_k
 
