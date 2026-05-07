@@ -137,11 +137,15 @@ def main() -> None:
     ]:
         check(f"import {pkg}", _try_import(import_name))
 
-    # transformers and llama_cpp live in the scorers venv, not the root venv.
+    # These packages live in the scorers venv, not the root venv.
     scorers_python = scorers_root / "venv" / "bin" / "python3"
     for pkg, import_name in [
         ("transformers", "transformers"),
         ("llama_cpp",    "llama_cpp"),
+        ("openai",       "openai"),
+        ("fastapi",      "fastapi"),
+        ("uvicorn",      "uvicorn"),
+        ("httpx",        "httpx"),
     ]:
         check(f"import {pkg}  (scorers venv)",
               _try_import_in(scorers_python, import_name))

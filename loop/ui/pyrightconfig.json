@@ -1,0 +1,14 @@
+{
+  "venvPath": "../scorers",
+  "venv": "venv",
+  "pythonVersion": "3.11",
+  "extraPaths": ["../../"],
+  "reportPrivateImportUsage": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportCallIssue": "none",
+  "reportOperatorIssue": "none",
+  "reportIndexIssue": "none",
+  "reportReturnType": "none",
+  "reportArgumentType": "none",
+  "reportOptionalMemberAccess": "none"
+}

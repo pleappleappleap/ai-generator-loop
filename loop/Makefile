@@ -4,9 +4,11 @@ all: lint typecheck test build
 
 lint:
 	$(MAKE) -C scorers lint
+	scorers/venv/bin/ruff check ui/
 
 typecheck:
 	$(MAKE) -C scorers typecheck
+	scorers/venv/bin/pyright ui/
 
 test:
 	$(MAKE) -C scorers test
@@ -16,6 +18,7 @@ build:
 
 format:
 	$(MAKE) -C scorers format
+	scorers/venv/bin/ruff format ui/
 
 docs:
 	$(MAKE) -C scorers docs
