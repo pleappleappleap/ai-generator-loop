@@ -123,13 +123,14 @@ instance creation or `broker.xml` editing is required — AMQP (5672), STOMP
 
 ### Install Docker
 
-| Platform | Command |
-|----------|---------|
-| macOS (Homebrew) | `brew install --cask docker` |
-| Linux | See https://docs.docker.com/engine/install/ |
-| Windows | See https://docs.docker.com/desktop/install/windows-install/ |
+| Platform | Installed by |
+|----------|-------------|
+| macOS | `make prereqs-system` — installs `colima` + `docker` CLI via Homebrew, then starts colima |
+| Linux | `make prereqs-system` — runs the official get.docker.com script, enables the systemd service |
+| Windows | `make prereqs-system` — installs Docker Desktop via winget |
 
-On macOS, `make prereqs-system` installs Docker Desktop automatically.
+On macOS the pipeline uses **colima** (a lightweight, headless Docker daemon) rather than
+Docker Desktop. No GUI, no licence agreement, no sudo required — just `brew install colima docker`.
 
 ### Pull the image
 
@@ -310,6 +311,14 @@ The TUI writes the chosen filename directly to `config.yaml`.
 - Bootstraps ComfyUI-Manager via `cm-cli.py`
 - Installs custom nodes: **ComfyUI-Inpaint-Nodes** (`inpaint-nodes`) and
   **comfyui_segment_anything** (`sam`)
+
+Custom nodes are installed by cloning their repos directly into
+`loop/ComfyUI/custom_nodes/`:
+
+| Node | Source |
+|------|--------|
+| `comfyui-inpaint-nodes` | github.com/Acly/comfyui-inpaint-nodes |
+| `comfyui_segment_anything` | github.com/storyicon/comfyui_segment_anything |
 
 To run just the custom node step on its own:
 

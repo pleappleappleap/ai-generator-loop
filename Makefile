@@ -112,7 +112,7 @@ config.yaml:
 # ── Docker install ─────────────────────────────────────────────────────────────
 
 # Install Docker if not present. Sentinel prevents re-checks on subsequent runs.
-# macOS:   Docker Desktop via Homebrew cask.
+# macOS:   colima + docker CLI via Homebrew (no sudo, no GUI required).
 # Linux:   Official get.docker.com install script; enables the systemd service.
 # Windows: Docker Desktop via winget (Git Bash only — CMD/PowerShell blocked above).
 docker-install: $(DOCKER_OK)
@@ -135,10 +135,10 @@ $(DOCKER_OK):
 	if docker info >/dev/null 2>&1; then \
 	  echo "==> Docker already running: $$(docker --version)"; \
 	elif command -v brew >/dev/null 2>&1; then \
-	  echo "==> Installing Docker Desktop via Homebrew..."; \
-	  brew install --cask docker; \
-	  echo "==> Launching Docker Desktop..."; \
-	  open -a Docker; \
+	  echo "==> Installing colima + docker CLI via Homebrew..."; \
+	  brew install colima docker; \
+	  echo "==> Starting colima (Docker daemon)..."; \
+	  colima start; \
 	  _docker_wait; \
 	elif [ "$$(uname -s)" = "Linux" ]; then \
 	  echo "==> Installing Docker Engine via get.docker.com..."; \
@@ -306,7 +306,7 @@ venv/.installed: requirements.txt
 loop/ComfyUI/main.py:
 	@echo "==> Cloning ComfyUI..."
 	git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-	cp -rn /tmp/_comfyui_clone/. loop/ComfyUI/
+	cp -rn /tmp/_comfyui_clone/. loop/ComfyUI/ || true
 	rm -rf /tmp/_comfyui_clone
 
 loop/ComfyUI/venv/.installed: loop/ComfyUI/main.py
@@ -316,26 +316,32 @@ loop/ComfyUI/venv/.installed: loop/ComfyUI/main.py
 	@touch loop/ComfyUI/venv/.installed
 	@echo "==> ComfyUI venv ready."
 
-# Install ComfyUI custom nodes via ComfyUI-Manager cm-cli.
+# Install ComfyUI custom nodes by cloning their repos directly.
 # Nodes installed:
-#   inpaint-nodes  — ComfyUI-Inpaint-Nodes by Acly (inpainting workflow)
-#   sam            — comfyui_segment_anything by storyicon (mask generation)
-# cm-cli.py is bootstrapped by cloning ComfyUI-Manager into custom_nodes/.
-# Must be run from the ComfyUI root so cm-cli can locate the venv and nodes dir.
+#   comfyui-inpaint-nodes  — Acly/comfyui-inpaint-nodes (inpainting workflow)
+#   comfyui_segment_anything — storyicon/comfyui_segment_anything (mask generation)
 comfyui-nodes: $(COMFYUI_NODES_OK)
 
 $(COMFYUI_NODES_OK): loop/ComfyUI/venv/.installed
 	@mkdir -p loop/ComfyUI/custom_nodes
-	@if [ ! -d loop/ComfyUI/custom_nodes/ComfyUI-Manager ]; then \
-	  echo "==> Cloning ComfyUI-Manager..."; \
-	  git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager \
-	    loop/ComfyUI/custom_nodes/ComfyUI-Manager; \
+	@if [ ! -d loop/ComfyUI/custom_nodes/comfyui-inpaint-nodes ]; then \
+	  echo "==> Cloning comfyui-inpaint-nodes..."; \
+	  git clone --depth=1 https://github.com/Acly/comfyui-inpaint-nodes \
+	    loop/ComfyUI/custom_nodes/comfyui-inpaint-nodes; \
 	fi
-	@echo "==> Installing ComfyUI custom nodes via cm-cli..."
-	cd loop/ComfyUI && venv/bin/python custom_nodes/ComfyUI-Manager/cm-cli.py \
-	  install inpaint-nodes
-	cd loop/ComfyUI && venv/bin/python custom_nodes/ComfyUI-Manager/cm-cli.py \
-	  install sam
+	@if [ -f loop/ComfyUI/custom_nodes/comfyui-inpaint-nodes/requirements.txt ]; then \
+	  loop/ComfyUI/venv/bin/pip install -q \
+	    -r loop/ComfyUI/custom_nodes/comfyui-inpaint-nodes/requirements.txt; \
+	fi
+	@if [ ! -d loop/ComfyUI/custom_nodes/comfyui_segment_anything ]; then \
+	  echo "==> Cloning comfyui_segment_anything..."; \
+	  git clone --depth=1 https://github.com/storyicon/comfyui_segment_anything \
+	    loop/ComfyUI/custom_nodes/comfyui_segment_anything; \
+	fi
+	@if [ -f loop/ComfyUI/custom_nodes/comfyui_segment_anything/requirements.txt ]; then \
+	  loop/ComfyUI/venv/bin/pip install -q \
+	    -r loop/ComfyUI/custom_nodes/comfyui_segment_anything/requirements.txt; \
+	fi
 	@touch $(COMFYUI_NODES_OK)
 	@echo "==> ComfyUI custom nodes installed."
 
