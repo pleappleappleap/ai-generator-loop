@@ -24,7 +24,7 @@ build:
 	SQLX_OFFLINE=true $(CARGO) build --release --workspace
 
 docs:
-	venv/bin/pdoc \
+	PYTHONPATH=. venv/bin/pdoc \
 		clip_scorer \
 		artifact_scorer \
 		vlm_scorer \

@@ -15,7 +15,7 @@ test:
 	$(VENV)/bin/pytest tests/ -v
 
 docs:
-	$(VENV)/bin/pdoc \
+	PYTHONPATH=. $(VENV)/bin/pdoc \
 		tactical_llm \
 		prompts \
 		retrieval \
