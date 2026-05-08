@@ -393,7 +393,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("AI_IMAGE_ROOT")
         .map(|root| format!("{}/config.yaml", root))
         .unwrap_or_else(|_| "config.yaml".to_string());
-    let cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let mut cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
+
+    // Resolve "auto" sentinel in database.path.
+    if cfg.database.path == "auto" {
+        let repo_root = std::path::Path::new(&config_path)
+            .parent()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| ".".to_string());
+        cfg.database.path = format!("{}/pipeline.db", repo_root);
+    }
 
     let clip_threshold = cfg.thresholds.clip;
     let artifact_threshold = cfg.thresholds.artifact;

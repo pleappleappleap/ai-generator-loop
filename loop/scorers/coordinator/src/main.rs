@@ -890,7 +890,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_path = std::env::var("AI_IMAGE_ROOT")
         .map(|root| format!("{}/config.yaml", root))
         .unwrap_or_else(|_| "config.yaml".to_string());
-    let cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
+    let mut cfg: Config = serde_yaml::from_str(&std::fs::read_to_string(&config_path)?)?;
+
+    // Resolve "auto" sentinels using the repo root (parent of config.yaml).
+    let repo_root = std::path::Path::new(&config_path)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
+    if cfg.database.path == "auto" {
+        cfg.database.path = format!("{}/pipeline.db", repo_root);
+    }
 
     let pool = db::open_pool(&cfg.database.path, cfg.database.busy_timeout_ms).await?;
     db::init_schema(&pool).await?;

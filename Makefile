@@ -390,23 +390,29 @@ snapshot_download(repo_id='umm-maybe/AI-image-detector', \
 	\
 	echo "==> VLM scorer: $$VLM_FILE"; \
 	mkdir -p "$$SCORERS_DIR/models/vlm"; \
-	if [ -f "$$SCORERS_DIR/models/vlm/$$VLM_FILE" ]; then \
-	  echo "    Already present — skipping."; \
-	else \
-	  curl -L --progress-bar \
-	    -o "$$SCORERS_DIR/models/vlm/$$VLM_FILE" \
-	    "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/$$VLM_FILE"; \
-	fi; \
+	venv/bin/python -c "\
+import os, sys; \
+dest = '$$SCORERS_DIR/models/vlm/' + '$$VLM_FILE'; \
+size = os.path.getsize(dest) if os.path.exists(dest) else 0; \
+print('    Already present — skipping.') if size > 1_000_000 else \
+  __import__('huggingface_hub').hf_hub_download( \
+    repo_id='bartowski/Qwen2.5-VL-7B-Instruct-GGUF', \
+    filename='$$VLM_FILE', \
+    local_dir='$$SCORERS_DIR/models/vlm', \
+    force_download=True if size else False)"; \
 	\
 	echo "==> Tactical LLM: $$TACTICAL_FILE"; \
 	mkdir -p "$$SCORERS_DIR/models/tactical"; \
-	if [ -f "$$SCORERS_DIR/models/tactical/$$TACTICAL_FILE" ]; then \
-	  echo "    Already present — skipping."; \
-	else \
-	  curl -L --progress-bar \
-	    -o "$$SCORERS_DIR/models/tactical/$$TACTICAL_FILE" \
-	    "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/$$TACTICAL_FILE"; \
-	fi; \
+	venv/bin/python -c "\
+import os; \
+dest = '$$SCORERS_DIR/models/tactical/' + '$$TACTICAL_FILE'; \
+size = os.path.getsize(dest) if os.path.exists(dest) else 0; \
+print('    Already present — skipping.') if size > 1_000_000 else \
+  __import__('huggingface_hub').hf_hub_download( \
+    repo_id='bartowski/Qwen3-72B-abliterated-GGUF', \
+    filename='$$TACTICAL_FILE', \
+    local_dir='$$SCORERS_DIR/models/tactical', \
+    force_download=True if size else False)"; \
 	\
 	echo ""; \
 	echo "==> Models done."; \
