@@ -117,25 +117,42 @@ config.yaml:
 docker-install: $(DOCKER_OK)
 
 $(DOCKER_OK):
-	@if command -v docker >/dev/null 2>&1; then \
-	  echo "==> Docker already installed: $$(docker --version)"; \
+	@_docker_wait() { \
+	  echo "==> Waiting for Docker daemon (up to 120 s)..."; \
+	  n=0; \
+	  while ! $${DOCKER_CMD:-docker} info >/dev/null 2>&1; do \
+	    n=$$((n+1)); \
+	    if [ $$n -ge 60 ]; then \
+	      echo "ERROR: Docker daemon did not start within 120 s." >&2; \
+	      echo "       Start Docker manually and re-run make." >&2; \
+	      exit 1; \
+	    fi; \
+	    sleep 2; \
+	  done; \
+	  echo "==> Docker daemon ready."; \
+	}; \
+	if docker info >/dev/null 2>&1; then \
+	  echo "==> Docker already running: $$(docker --version)"; \
 	elif command -v brew >/dev/null 2>&1; then \
 	  echo "==> Installing Docker Desktop via Homebrew..."; \
 	  brew install --cask docker; \
 	  echo "==> Launching Docker Desktop..."; \
-	  open -a Docker || true; \
-	  echo "==> Waiting for Docker daemon (up to 60 s)..."; \
-	  for i in $$(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done; \
+	  open -a Docker; \
+	  _docker_wait; \
 	elif [ "$$(uname -s)" = "Linux" ]; then \
 	  echo "==> Installing Docker Engine via get.docker.com..."; \
 	  curl -fsSL https://get.docker.com | sh; \
 	  sudo systemctl enable --now docker; \
 	  sudo usermod -aG docker "$$(id -un)"; \
-	  echo "NOTE: Log out and back in (or run 'newgrp docker') before using docker without sudo."; \
+	  DOCKER_CMD="sudo docker" _docker_wait; \
+	  echo "NOTE: Log out and back in (or run 'newgrp docker') to use docker without sudo."; \
 	elif command -v winget >/dev/null 2>&1; then \
 	  echo "==> Installing Docker Desktop via winget..."; \
 	  winget install --id Docker.DockerDesktop -e \
 	    --accept-package-agreements --accept-source-agreements; \
+	  echo "==> Launching Docker Desktop..."; \
+	  "/c/Program Files/Docker/Docker/Docker Desktop.exe" & \
+	  _docker_wait; \
 	else \
 	  echo "ERROR: Cannot auto-install Docker on this platform." >&2; \
 	  echo "       Install from: https://docs.docker.com/get-docker/" >&2; \
