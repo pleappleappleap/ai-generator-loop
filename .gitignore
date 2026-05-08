@@ -40,6 +40,7 @@ loop/.artemis-image-pulled
 
 # ── ComfyUI (external dependency — cloned by make prereqs) ────────────────────
 loop/ComfyUI/
+loop/ComfyUI/custom_nodes/.nodes-installed
 
 # ── macOS metadata ─────────────────────────────────────────────────────────────
 .DS_Store

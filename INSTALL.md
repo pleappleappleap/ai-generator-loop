@@ -304,42 +304,33 @@ The TUI writes the chosen filename directly to `config.yaml`.
 
 ## 7. ComfyUI
 
-`make prereqs-python` handles this automatically. The manual steps below
-are for reference.
+`make all` handles ComfyUI setup fully automatically:
 
-`make prereqs` clones ComfyUI into `loop/ComfyUI/` and installs its
-dependencies into a dedicated venv at `loop/ComfyUI/venv/`. To run this
-step manually:
+- Clones ComfyUI into `loop/ComfyUI/` and installs its venv
+- Bootstraps ComfyUI-Manager via `cm-cli.py`
+- Installs custom nodes: **ComfyUI-Inpaint-Nodes** (`inpaint-nodes`) and
+  **comfyui_segment_anything** (`sam`)
+
+To run just the custom node step on its own:
 
 ```bash
-git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-cp -rn /tmp/_comfyui_clone/. $AI_IMAGE_ROOT/loop/ComfyUI/
-rm -rf /tmp/_comfyui_clone
-python3.11 -m venv $AI_IMAGE_ROOT/loop/ComfyUI/venv
-$AI_IMAGE_ROOT/loop/ComfyUI/venv/bin/pip install -r $AI_IMAGE_ROOT/loop/ComfyUI/requirements.txt
+make comfyui-nodes
 ```
-
-### Custom nodes
-
-The inpainting workflow requires ComfyUI-Manager and the segment-anything
-custom node. Inside the ComfyUI browser UI:
-
-1. Start ComfyUI: `$AI_IMAGE_ROOT/loop/ComfyUI/launch.sh`
-2. Open `http://127.0.0.1:8188`
-3. Install **ComfyUI-Manager** from the Manager menu
-4. Use Manager to install: `ComfyUI-Inpaint-Nodes`, `comfyui_segment_anything`
 
 ### Optional vision models (for inpainting)
 
+The SAM and Grounding DINO model weights are not downloaded automatically
+(large files, inpainting-only). Download them if you intend to use inpainting:
+
 ```bash
-# Segment Anything (SAM)
+# Segment Anything (SAM) — ~2.5 GB
 mkdir -p loop/ComfyUI/models/sam
-curl -L -o loop/ComfyUI/models/sam/sam_vit_h_4b8939.pth \
+wget -q -O loop/ComfyUI/models/sam/sam_vit_h_4b8939.pth \
   "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth"
 
-# Grounding DINO
+# Grounding DINO — ~660 MB
 mkdir -p loop/ComfyUI/models/grounding-dino
-curl -L -o loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
+wget -q -O loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
   "https://github.com/IDEA-Research/GroundingDINO/releases/download/v0.1.0-alpha/groundingdino_swint_ogc.pth"
 ```
 

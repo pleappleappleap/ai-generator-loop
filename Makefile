@@ -8,17 +8,18 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
         prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup \
-        artemis-broker artemis-pull docker-install
+        artemis-broker artemis-pull docker-install comfyui-nodes
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
-ARTEMIS_IMAGE   := apache/activemq-artemis:latest
-ARTEMIS_PULL_OK := loop/.artemis-image-pulled
-DOCKER_OK       := loop/.docker-installed
+ARTEMIS_IMAGE    := apache/activemq-artemis:latest
+ARTEMIS_PULL_OK  := loop/.artemis-image-pulled
+DOCKER_OK        := loop/.docker-installed
+COMFYUI_NODES_OK := loop/ComfyUI/custom_nodes/.nodes-installed
 
-all: venv/.installed loop/scorers/venv/.installed models $(ARTEMIS_PULL_OK) \
-     lint typecheck test build
+all: venv/.installed loop/scorers/venv/.installed $(COMFYUI_NODES_OK) \
+     models $(ARTEMIS_PULL_OK) lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
@@ -314,6 +315,29 @@ loop/ComfyUI/venv/.installed: loop/ComfyUI/main.py
 	loop/ComfyUI/venv/bin/pip install -r loop/ComfyUI/requirements.txt
 	@touch loop/ComfyUI/venv/.installed
 	@echo "==> ComfyUI venv ready."
+
+# Install ComfyUI custom nodes via ComfyUI-Manager cm-cli.
+# Nodes installed:
+#   inpaint-nodes  — ComfyUI-Inpaint-Nodes by Acly (inpainting workflow)
+#   sam            — comfyui_segment_anything by storyicon (mask generation)
+# cm-cli.py is bootstrapped by cloning ComfyUI-Manager into custom_nodes/.
+# Must be run from the ComfyUI root so cm-cli can locate the venv and nodes dir.
+comfyui-nodes: $(COMFYUI_NODES_OK)
+
+$(COMFYUI_NODES_OK): loop/ComfyUI/venv/.installed
+	@mkdir -p loop/ComfyUI/custom_nodes
+	@if [ ! -d loop/ComfyUI/custom_nodes/ComfyUI-Manager ]; then \
+	  echo "==> Cloning ComfyUI-Manager..."; \
+	  git clone --depth=1 https://github.com/ltdrdata/ComfyUI-Manager \
+	    loop/ComfyUI/custom_nodes/ComfyUI-Manager; \
+	fi
+	@echo "==> Installing ComfyUI custom nodes via cm-cli..."
+	cd loop/ComfyUI && venv/bin/python custom_nodes/ComfyUI-Manager/cm-cli.py \
+	  install inpaint-nodes
+	cd loop/ComfyUI && venv/bin/python custom_nodes/ComfyUI-Manager/cm-cli.py \
+	  install sam
+	@touch $(COMFYUI_NODES_OK)
+	@echo "==> ComfyUI custom nodes installed."
 
 # Scorers venv also serves tactical-llm (see tactical-llm/Makefile).
 # llama-cpp-python requires platform-specific CMAKE_ARGS for GPU support
