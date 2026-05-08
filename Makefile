@@ -274,6 +274,18 @@ prereqs-system: docker-install
 	  esac; \
 	fi; \
 	\
+	echo "==> hf (HuggingFace CLI — required for model downloads)"; \
+	if command -v hf >/dev/null 2>&1; then \
+	  echo "    already installed: $$(hf --version 2>/dev/null || echo ok)"; \
+	else \
+	  case "$$PKG" in \
+	    homebrew) brew install huggingface-cli ;; \
+	    apt|dnf|pacman|zypper) \
+	      pip3 install --user 'huggingface_hub[cli]'; \
+	      echo "NOTE: ensure ~/.local/bin is in your PATH for the hf command." ;; \
+	  esac; \
+	fi; \
+	\
 	echo "==> LaTeX (optional — needed for 'make doc')"; \
 	if command -v latexmk >/dev/null 2>&1; then \
 	  echo "    already installed."; \

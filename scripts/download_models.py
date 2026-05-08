@@ -1,20 +1,14 @@
 """Model download script for the AI image generation pipeline.
 
 Downloads VLM scorer, tactical LLM, artifact detector, and any LoRAs
-listed in config.yaml.
+listed in config.yaml using the ``hf`` CLI (huggingface-cli).
 
-Authentication is read from environment variables only — credentials are
-never stored in config files:
+No HuggingFace token is required for public repos.  For gated repos,
+run ``hf login`` once to store credentials, or set HF_TOKEN in the
+environment — the ``hf`` CLI picks it up automatically.
 
-  HF_TOKEN      HuggingFace token (required for gated repos such as the
-                bartowski GGUF repacks).  Create at:
-                https://huggingface.co/settings/tokens
-
-  CIVITAI_TOKEN Civitai API token (required for LoRAs sourced from Civitai).
-                Create at: https://civitai.com/user/account
-
-Pass tokens for a single invocation:
-  HF_TOKEN=hf_xxx CIVITAI_TOKEN=civ_xxx make models
+Civitai LoRAs still require CIVITAI_TOKEN:
+  CIVITAI_TOKEN=... make models
 
 Sources supported per model/LoRA entry in config.yaml:
   hf:<repo_id>/<filename>      HuggingFace Hub single file
@@ -26,7 +20,10 @@ Sources supported per model/LoRA entry in config.yaml:
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent
@@ -35,41 +32,42 @@ sys.path.insert(0, str(_REPO_ROOT))
 from config import load as _load_config  # noqa: E402
 
 _cfg = _load_config()
-_HF_TOKEN: str | None = os.environ.get("HF_TOKEN") or None
 _CIVITAI_TOKEN: str | None = os.environ.get("CIVITAI_TOKEN") or None
 
 
 # ---------------------------------------------------------------------------
-# HuggingFace helpers
+# HuggingFace helpers (hf CLI)
 # ---------------------------------------------------------------------------
 
-def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> str:
-    """Download a single file from a HuggingFace repo."""
-    from huggingface_hub import hf_hub_download
+def _hf_bin() -> str:
+    hf = shutil.which("hf")
+    if not hf:
+        raise RuntimeError(
+            "hf not found in PATH — run 'make prereqs-system' to install huggingface-cli"
+        )
+    return hf
+
+
+def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> None:
     dest = Path(local_dir) / filename
-    size = dest.stat().st_size if dest.exists() else 0
-    if size > 1_000_000:
-        print(f"    Already present ({size // 1_048_576} MB) — skipping.")
-        return str(dest)
-    if not _HF_TOKEN:
-        print(f"    ERROR: HF_TOKEN not set — cannot download {repo_id}/{filename}.")
-        print("    Run:  HF_TOKEN=hf_xxx make models")
-        sys.exit(1)
-    print(f"    Downloading {repo_id}/{filename} …")
-    return hf_hub_download(
-        repo_id=repo_id,
-        filename=filename,
-        local_dir=local_dir,
-        token=_HF_TOKEN,
-        force_download=bool(size),  # force re-download of corrupt stubs
+    if dest.exists() and dest.stat().st_size > 1_000_000:
+        print(f"    Already present ({dest.stat().st_size // 1_048_576} MB) — skipping.")
+        return
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    print(f"    hf download {repo_id} {filename}")
+    subprocess.run(
+        [_hf_bin(), "download", repo_id, filename, "--local-dir", local_dir],
+        check=True,
     )
 
 
-def _hf_snapshot(repo_id: str, local_dir: str) -> str:
-    """Download an entire HuggingFace repo snapshot."""
-    from huggingface_hub import snapshot_download
-    print(f"    Syncing {repo_id} …")
-    return snapshot_download(repo_id=repo_id, local_dir=local_dir, token=_HF_TOKEN)
+def _hf_snapshot(repo_id: str, local_dir: str) -> None:
+    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    print(f"    hf download {repo_id} (snapshot)")
+    subprocess.run(
+        [_hf_bin(), "download", repo_id, "--local-dir", local_dir],
+        check=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +75,9 @@ def _hf_snapshot(repo_id: str, local_dir: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _civitai_download(version_id: str | int, dest_path: str) -> None:
-    """Download a Civitai model version to dest_path."""
-    import urllib.request
-
     dest = Path(dest_path)
-    size = dest.stat().st_size if dest.exists() else 0
-    if size > 1_000_000:
-        print(f"    Already present ({size // 1_048_576} MB) — skipping.")
+    if dest.exists() and dest.stat().st_size > 1_000_000:
+        print(f"    Already present ({dest.stat().st_size // 1_048_576} MB) — skipping.")
         return
     if not _CIVITAI_TOKEN:
         print(f"    ERROR: CIVITAI_TOKEN not set — cannot download civitai:{version_id}.")
@@ -108,14 +102,12 @@ def _civitai_download(version_id: str | int, dest_path: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _resolve_source(source: str, dest_dir: str, dest_filename: str) -> None:
-    """Download a model file according to its source URI."""
     if source.startswith("hf:"):
         rest = source[3:]
         parts = rest.split("/")
         if len(parts) >= 2 and "." in parts[-1]:
             repo_id = "/".join(parts[:-1])
             filename = parts[-1]
-            Path(dest_dir).mkdir(parents=True, exist_ok=True)
             _hf_download_file(repo_id, filename, dest_dir)
         else:
             _hf_snapshot(rest, dest_dir)
@@ -154,12 +146,17 @@ def _download_vlm() -> None:
     filename = vlm_cfg.get("filename", "")
     local_dir = vlm_cfg.get("dir", "")
     source = vlm_cfg.get("source", "")
+    mmproj_filename = vlm_cfg.get("mmproj_filename", "")
+    mmproj_source = vlm_cfg.get("mmproj_source", "")
     if not filename or not local_dir or not source:
         print("==> VLM scorer: no filename/source configured — skipping.")
         return
     print(f"==> VLM scorer: {filename}")
     Path(local_dir).mkdir(parents=True, exist_ok=True)
     _resolve_source(source, local_dir, filename)
+    if mmproj_filename and mmproj_source:
+        print(f"==> VLM mmproj: {mmproj_filename}")
+        _resolve_source(mmproj_source, local_dir, mmproj_filename)
 
 
 def _download_tactical() -> None:
@@ -199,8 +196,7 @@ def _download_loras() -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    print(f"HuggingFace: {'authenticated' if _HF_TOKEN else 'no token — gated repos will fail'}")
-    print(f"Civitai:     {'authenticated' if _CIVITAI_TOKEN else 'no token — Civitai sources will fail'}")
+    print(f"Civitai: {'authenticated' if _CIVITAI_TOKEN else 'no token — Civitai sources will fail'}")
     print()
 
     _download_artifact_detector()

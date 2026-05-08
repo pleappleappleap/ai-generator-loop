@@ -12,8 +12,10 @@ paths:
 models:
   vlm:
     dir: auto                                      # auto: {scorers}/models/vlm
-    filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
-    source: hf:bartowski/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+    filename: Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
+    source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
+    mmproj_filename: Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
+    mmproj_source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
     context_length: 4096
   artifact_detector:
     dir: auto          # auto: {scorers}/models/artifact-detector
@@ -113,8 +115,8 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    filename: Qwen3-72B-abliterated-Q4_K_M.gguf
-    source: hf:bartowski/Qwen3-72B-abliterated-GGUF/Qwen3-72B-abliterated-Q4_K_M.gguf
+    filename: Soar-qwen-72b-abliterated.Q4_K_M.gguf
+    source: hf:mradermacher/Soar-qwen-72b-abliterated-GGUF/Soar-qwen-72b-abliterated.Q4_K_M.gguf
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # token limit for non-thinking responses

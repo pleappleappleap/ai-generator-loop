@@ -1,15 +1,15 @@
 """VLM holistic image evaluation scorer.
 
-Uses Qwen2.5-VL-7B-Instruct at Q5_K_M quantization via llama-cpp-python
-to evaluate generated images across five quality dimensions: photorealism,
-anatomical coherence, character interaction plausibility, lighting
-consistency, and prompt adherence.
+Uses Qwen3-VL-8B-Instruct-abliterated at Q8_0 quantization via
+llama-cpp-python to evaluate generated images across five quality
+dimensions: photorealism, anatomical coherence, character interaction
+plausibility, lighting consistency, and prompt adherence.
 
-The model is loaded once at process startup and held resident. Scoring
-uses streaming inference, which allows clean cancellation between tokens.
-When a cancel event is set, the worker calls llm.reset() to flush the
-KV cache before exiting, leaving the model in a clean state for the
-next inference.
+The model and its multimodal projector (mmproj) are loaded once at
+process startup and held resident. Scoring uses streaming inference,
+which allows clean cancellation between tokens. When a cancel event is
+set, the worker exits without publishing, leaving the model in a clean
+state for the next inference.
 
 If the VLM produces malformed JSON output, the result is silently
 discarded without publishing — the aggregator will time out the session
@@ -23,6 +23,7 @@ Address publications (STOMP / Artemis):
   /queue/aggregator.vlm.queue  → vlm score results
 """
 
+import base64
 import json
 import sys
 import threading
@@ -32,6 +33,7 @@ from urllib.parse import urlparse
 
 import stomp
 from llama_cpp import Llama
+from llama_cpp.llama_chat_format import Qwen2VLChatHandler
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import load as _load_config  # noqa: E402
@@ -43,10 +45,7 @@ _vlm_compute = _cfg.compute["vlm_scorer"]
 llm: Llama | None = None
 
 active_jobs: dict[str, threading.Event] = {}
-"""Map of image_uuid to cancel Event for in-flight scoring jobs."""
-
 jobs_lock = threading.Lock()
-"""Lock protecting active_jobs for concurrent access."""
 
 _u = urlparse(_cfg.broker["stomp_url"])
 _STOMP_HOST: str = _u.hostname or "localhost"
@@ -71,8 +70,6 @@ EVAL_PROMPT = """Evaluate this image on the following criteria and return a JSON
 }}
 Original prompt: {prompt}
 Return only valid JSON, no preamble."""
-"""Evaluation prompt template. Uses double braces to escape the JSON
-structure for Python's str.format()."""
 
 
 def score_worker(
@@ -84,31 +81,51 @@ def score_worker(
 ) -> None:
     """Score an image using the VLM on a worker thread.
 
-    Runs streaming inference and checks the cancel_event between each
-    token. If cancelled, calls llm.reset() to flush the KV cache and
-    exits without publishing. If the accumulated output is not valid
-    JSON, discards the result silently.
-
-    Publishes to /queue/aggregator.vlm.queue on successful completion.
+    Loads the image from disk, encodes it as base64, and runs streaming
+    chat completion with image + text content. Checks cancel_event
+    between tokens. If cancelled, exits without publishing. If the
+    accumulated output is not valid JSON, discards silently.
 
     Args:
         image_uuid: UUID of the image being scored.
-        image_path: Filesystem path or URL to the image file.
+        image_path: Filesystem path to the image file.
         prompt: The generation prompt used to create the image.
         cancel_event: threading.Event set by the cancel handler.
         conn: STOMP connection for publishing the result (thread-safe).
     """
+    try:
+        with open(image_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode()
+        # Detect image format from file extension for the data URI.
+        ext = Path(image_path).suffix.lower().lstrip(".")
+        mime = "jpeg" if ext in ("jpg", "jpeg") else ext or "png"
+        image_url = f"data:image/{mime};base64,{image_b64}"
+    except OSError as exc:
+        print(f"[vlm_scorer] cannot read image {image_path}: {exc}", file=sys.stderr)
+        with jobs_lock:
+            active_jobs.pop(image_uuid, None)
+        return
+
     accumulated = ""
     try:
-        for token in llm(
-            EVAL_PROMPT.format(prompt=prompt),
-            stream=True,
+        stream = llm.create_chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                        {"type": "text", "text": EVAL_PROMPT.format(prompt=prompt)},
+                    ],
+                }
+            ],
             max_tokens=512,
-        ):
+            stream=True,
+        )
+        for chunk in stream:
             if cancel_event.is_set():
-                llm.reset()
                 return
-            accumulated += token["choices"][0]["text"]
+            delta = chunk["choices"][0].get("delta", {}).get("content") or ""
+            accumulated += delta
 
         result: dict[str, Any] = json.loads(accumulated)
         score_fields = (
@@ -181,20 +198,25 @@ class _Listener(stomp.ConnectionListener):
 
 
 def main() -> None:
-    global llm
-    llm = Llama(
-        model_path=str(Path(_vlm_cfg["dir"]) / _vlm_cfg["filename"]),
-        n_ctx=_vlm_cfg["context_length"],
-        n_gpu_layers=_vlm_compute["n_gpu_layers"],
-    )
     """Start the VLM scorer process.
 
-    Connects to Artemis via STOMP, subscribes to scorer.requests and
-    scorer.events with durable subscriptions, and blocks indefinitely.
-    prefetch_count=1 equivalent: the listener thread blocks while the
-    VLM worker runs (only one active subscription message at a time via
-    ack='client-individual').
+    Loads the model and mmproj, connects to Artemis via STOMP, subscribes
+    to scorer.requests and scorer.events with durable subscriptions, and
+    blocks indefinitely.
     """
+    global llm
+    model_dir = Path(_vlm_cfg["dir"])
+    chat_handler = Qwen2VLChatHandler(
+        clip_model_path=str(model_dir / _vlm_cfg["mmproj_filename"])
+    )
+    llm = Llama(
+        model_path=str(model_dir / _vlm_cfg["filename"]),
+        chat_handler=chat_handler,
+        n_ctx=_vlm_cfg["context_length"],
+        n_gpu_layers=_vlm_compute["n_gpu_layers"],
+        logits_all=True,
+    )
+
     conn = stomp.Connection(
         host_and_ports=[(_STOMP_HOST, _STOMP_PORT)],
         heartbeats=(10000, 10000),
@@ -219,6 +241,8 @@ def main() -> None:
         headers={"durable-subscription-name": "scorer.vlm.events"},
     )
     print("VLM scorer ready")
+    print(f"  model:   {_vlm_cfg['filename']}")
+    print(f"  mmproj:  {_vlm_cfg['mmproj_filename']}")
     _disconnected.wait()
     sys.exit(1)
 
