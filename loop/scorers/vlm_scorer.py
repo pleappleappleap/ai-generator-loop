@@ -40,11 +40,7 @@ _cfg = _load_config()
 _vlm_cfg = _cfg.models["vlm"]
 _vlm_compute = _cfg.compute["vlm_scorer"]
 
-llm = Llama(
-    model_path=str(Path(_vlm_cfg["dir"]) / _vlm_cfg["filename"]),
-    n_ctx=_vlm_cfg["context_length"],
-    n_gpu_layers=_vlm_compute["n_gpu_layers"],
-)
+llm: Llama | None = None
 
 active_jobs: dict[str, threading.Event] = {}
 """Map of image_uuid to cancel Event for in-flight scoring jobs."""
@@ -185,6 +181,12 @@ class _Listener(stomp.ConnectionListener):
 
 
 def main() -> None:
+    global llm
+    llm = Llama(
+        model_path=str(Path(_vlm_cfg["dir"]) / _vlm_cfg["filename"]),
+        n_ctx=_vlm_cfg["context_length"],
+        n_gpu_layers=_vlm_compute["n_gpu_layers"],
+    )
     """Start the VLM scorer process.
 
     Connects to Artemis via STOMP, subscribes to scorer.requests and
