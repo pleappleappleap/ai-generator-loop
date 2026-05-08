@@ -35,6 +35,7 @@ loop/scorers/models/artifact-detector/
 loop/artemis-data/
 
 # ── Makefile sentinels ─────────────────────────────────────────────────────────
+loop/.docker-installed
 loop/.artemis-image-pulled
 
 # ── ComfyUI (external dependency — cloned by make prereqs) ────────────────────

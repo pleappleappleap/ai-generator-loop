@@ -1,18 +1,21 @@
-# Windows CMD/PowerShell is not supported — this project requires Unix sockets
-# and shell scripts. On Windows, run from Git Bash (https://git-scm.com/downloads).
+# Git Bash on Windows sets MSYSTEM (e.g. MINGW64); CMD/PowerShell does not.
+# Only block CMD/PowerShell — Git Bash users can proceed normally.
 ifeq ($(OS),Windows_NT)
-  $(error Windows CMD/PowerShell detected. Run from Git Bash instead: https://git-scm.com/downloads)
+  ifndef MSYSTEM
+    $(error Windows CMD/PowerShell detected. Run from Git Bash instead: https://git-scm.com/downloads)
+  endif
 endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
         prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup \
-        artemis-broker artemis-pull
+        artemis-broker artemis-pull docker-install
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
 ARTEMIS_IMAGE   := apache/activemq-artemis:latest
 ARTEMIS_PULL_OK := loop/.artemis-image-pulled
+DOCKER_OK       := loop/.docker-installed
 
 all: venv/.installed loop/scorers/venv/.installed models $(ARTEMIS_PULL_OK) \
      lint typecheck test build
@@ -105,6 +108,42 @@ config.yaml:
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
+# ── Docker install ─────────────────────────────────────────────────────────────
+
+# Install Docker if not present. Sentinel prevents re-checks on subsequent runs.
+# macOS:   Docker Desktop via Homebrew cask.
+# Linux:   Official get.docker.com install script; enables the systemd service.
+# Windows: Docker Desktop via winget (Git Bash only — CMD/PowerShell blocked above).
+docker-install: $(DOCKER_OK)
+
+$(DOCKER_OK):
+	@if command -v docker >/dev/null 2>&1; then \
+	  echo "==> Docker already installed: $$(docker --version)"; \
+	elif command -v brew >/dev/null 2>&1; then \
+	  echo "==> Installing Docker Desktop via Homebrew..."; \
+	  brew install --cask docker; \
+	  echo "==> Launching Docker Desktop..."; \
+	  open -a Docker || true; \
+	  echo "==> Waiting for Docker daemon (up to 60 s)..."; \
+	  for i in $$(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 2; done; \
+	elif [ "$$(uname -s)" = "Linux" ]; then \
+	  echo "==> Installing Docker Engine via get.docker.com..."; \
+	  curl -fsSL https://get.docker.com | sh; \
+	  sudo systemctl enable --now docker; \
+	  sudo usermod -aG docker "$$(id -un)"; \
+	  echo "NOTE: Log out and back in (or run 'newgrp docker') before using docker without sudo."; \
+	elif command -v winget >/dev/null 2>&1; then \
+	  echo "==> Installing Docker Desktop via winget..."; \
+	  winget install --id Docker.DockerDesktop -e \
+	    --accept-package-agreements --accept-source-agreements; \
+	else \
+	  echo "ERROR: Cannot auto-install Docker on this platform." >&2; \
+	  echo "       Install from: https://docs.docker.com/get-docker/" >&2; \
+	  exit 1; \
+	fi
+	@mkdir -p loop
+	@touch $(DOCKER_OK)
+
 # ── Artemis broker setup (Docker) ─────────────────────────────────────────────
 
 # Pull the official Artemis Docker image once; sentinel file prevents re-pulls.
@@ -114,16 +153,7 @@ config.yaml:
 artemis-broker: $(ARTEMIS_PULL_OK)
 artemis-pull:   $(ARTEMIS_PULL_OK)
 
-$(ARTEMIS_PULL_OK):
-	@if ! command -v docker >/dev/null 2>&1; then \
-	  if command -v brew >/dev/null 2>&1; then \
-	    echo "==> Installing Docker Desktop via Homebrew..."; \
-	    brew install --cask docker; \
-	  else \
-	    echo "ERROR: docker not found. Install Docker Engine: https://docs.docker.com/get-docker/" >&2; \
-	    exit 1; \
-	  fi; \
-	fi
+$(ARTEMIS_PULL_OK): $(DOCKER_OK)
 	docker pull $(ARTEMIS_IMAGE)
 	@mkdir -p loop
 	@touch $(ARTEMIS_PULL_OK)
@@ -137,7 +167,7 @@ prereqs: prereqs-system prereqs-python
 # Install system-level packages using the detected package manager.
 # Installs: Python 3.11, yq, Docker (for Artemis), Rust (via rustup).
 # LaTeX is optional and only needed for `make doc`.
-prereqs-system:
+prereqs-system: docker-install
 	@PKG=""; \
 	if   command -v brew    >/dev/null 2>&1; then PKG=homebrew; \
 	elif command -v apt-get >/dev/null 2>&1; then PKG=apt; \
@@ -178,18 +208,6 @@ prereqs-system:
 	    dnf)    sudo dnf install -y yq ;; \
 	    pacman) sudo pacman -S --noconfirm go-yq ;; \
 	    zypper) sudo zypper install -y yq ;; \
-	  esac; \
-	fi; \
-	\
-	echo "==> Docker (required for ActiveMQ Artemis)"; \
-	if command -v docker >/dev/null 2>&1; then \
-	  echo "    already installed: $$(docker --version)"; \
-	else \
-	  case "$$PKG" in \
-	    homebrew) brew install --cask docker ;; \
-	    *) echo "    Not installed. Install Docker Engine from:"; \
-	       echo "    https://docs.docker.com/get-docker/"; \
-	       echo "    Then re-run make." ;; \
 	  esac; \
 	fi; \
 	\
