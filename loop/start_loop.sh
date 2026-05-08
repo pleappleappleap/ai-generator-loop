@@ -35,18 +35,23 @@ from config import load; cfg=load()
 print(cfg.compute.get('tactical_llm',{}).get('n_gpu_layers',-1))
 " 2>/dev/null || echo "-1")
 
+PIDDIR="/tmp/ai-loop"
+rm -rf "$PIDDIR"
+mkdir -p "$PIDDIR"
+
 # Start Artemis, ComfyUI, and llama.cpp server in parallel — none depend on each other.
 # All three are slow to initialise; overlapping them saves the most wall-clock time.
-"$AI_IMAGE_ROOT/loop/start_broker.sh" &
+"$AI_IMAGE_ROOT/loop/start_broker.sh" &   # Docker-managed; no PID file needed
 "$COMFYUI/launch.sh" &
+echo $! > "$PIDDIR/comfyui.pid"
 if [ -n "$LLM_MODEL_DIR" ] && [ -f "$LLM_MODEL_DIR" ]; then
     "$SCORERS/venv/bin/python" -m llama_cpp.server \
         --model "$LLM_MODEL_DIR" \
         --n_gpu_layers "$LLM_GPU_LAYERS" \
         --host 0.0.0.0 \
         --port "$LLM_PORT" &
-    LLM_PID=$!
-    echo "llama.cpp server PID=$LLM_PID port=$LLM_PORT"
+    echo $! > "$PIDDIR/llama_cpp.pid"
+    echo "llama.cpp server PID=$(cat "$PIDDIR/llama_cpp.pid") port=$LLM_PORT"
 else
     echo "WARNING: LLM model not found at '$LLM_MODEL_DIR' — skipping llama.cpp server"
 fi
@@ -57,20 +62,29 @@ sleep 10
 
 # Start coordinator first — other processes connect to its Unix socket.
 "$SCORERS/target/release/coordinator" &
+echo $! > "$PIDDIR/coordinator.pid"
 sleep 1   # coordinator must bind its Unix socket before other processes start
 
 # Start ComfyUI MQ worker (uses root venv; config.py is at AI_IMAGE_ROOT)
 "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/comfyui_worker.py" &
+echo $! > "$PIDDIR/comfyui_worker.pid"
 "$SCORERS/target/release/router" &
+echo $! > "$PIDDIR/router.pid"
 "$SCORERS/target/release/aggregator" &
+echo $! > "$PIDDIR/aggregator.pid"
 "$SCORERS/target/release/lancedb_manager" &
+echo $! > "$PIDDIR/lancedb_manager.pid"
 
 # Start Python scorers
 PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/clip_scorer.py" &
+echo $! > "$PIDDIR/clip_scorer.pid"
 PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/artifact_scorer.py" &
+echo $! > "$PIDDIR/artifact_scorer.pid"
 PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/vlm_scorer.py" &
+echo $! > "$PIDDIR/vlm_scorer.pid"
 
 PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/tactical-llm/tactical_llm.py" &
+echo $! > "$PIDDIR/tactical_llm.pid"
 
 # Start UI server
 UI_PORT=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
@@ -79,9 +93,11 @@ from config import load; cfg=load()
 print(cfg.get('ui', default={}).get('port', 7860) if cfg.get('ui') else 7860)
 " 2>/dev/null || echo "7860")
 PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/ui/server.py" &
+echo $! > "$PIDDIR/ui_server.pid"
 
 # Start dead-letter monitor (root venv; watches pipeline.dead for unrecoverable failures)
 "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/monitor.py" &
+echo $! > "$PIDDIR/monitor.pid"
 
 echo "Loop infrastructure ready"
 echo ""

@@ -2,27 +2,18 @@
 # Stops all loop processes started by start_loop.sh.
 # Does not stop the broker — use stop_broker.sh for that.
 
-stop_by_match() {
-    pattern="$1"
-    pids=$(pgrep -f "$pattern" 2>/dev/null)
-    if [ -n "$pids" ]; then
-        echo "==> Stopping: $pattern"
-        kill $pids 2>/dev/null
-    fi
-}
+PIDDIR="/tmp/ai-loop"
 
-stop_by_match "coordinator"
-stop_by_match "router"
-stop_by_match "aggregator"
-stop_by_match "lancedb_manager"
-stop_by_match "comfyui_worker.py"
-stop_by_match "clip_scorer.py"
-stop_by_match "artifact_scorer.py"
-stop_by_match "vlm_scorer.py"
-stop_by_match "tactical_llm.py"
-stop_by_match "loop/ui/server.py"
-stop_by_match "loop/monitor.py"
-stop_by_match "llama_cpp.server"
-stop_by_match "main.py --listen"
+for pidfile in "$PIDDIR"/*.pid; do
+    [ -f "$pidfile" ] || continue
+    pid=$(cat "$pidfile")
+    name=$(basename "$pidfile" .pid)
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "==> Stopping $name (PID $pid)"
+        pkill -P "$pid" 2>/dev/null   # kill children (e.g. ComfyUI python under launch.sh shell)
+        kill "$pid" 2>/dev/null
+    fi
+    rm -f "$pidfile"
+done
 
 echo "==> Loop stopped"
