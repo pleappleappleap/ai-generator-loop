@@ -29,7 +29,7 @@ be partially offloaded to CPU via `tactical.model.n_gpu_layers` in
 ## 2. System Software
 
 A POSIX-compatible shell is required on all platforms. On Windows, use
-Git Bash or WSL.
+Git Bash (https://git-scm.com/downloads).
 
 ### Python 3.11
 

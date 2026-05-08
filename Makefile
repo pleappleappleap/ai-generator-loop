@@ -1,7 +1,7 @@
 # Windows CMD/PowerShell is not supported — this project requires Unix sockets
-# and shell scripts. On Windows use WSL2: wsl make <target>
+# and shell scripts. On Windows, run from Git Bash (https://git-scm.com/downloads).
 ifeq ($(OS),Windows_NT)
-  $(error Windows CMD/PowerShell detected. Run inside WSL2: wsl make $(MAKECMDGOALS))
+  $(error Windows CMD/PowerShell detected. Run from Git Bash instead: https://git-scm.com/downloads)
 endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
