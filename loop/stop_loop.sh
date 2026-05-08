@@ -23,6 +23,6 @@ stop_by_match "tactical_llm.py"
 stop_by_match "loop/ui/server.py"
 stop_by_match "loop/monitor.py"
 stop_by_match "llama_cpp.server"
-stop_by_match "ComfyUI/venv/bin/python"
+stop_by_match "main.py --listen"
 
 echo "==> Loop stopped"
