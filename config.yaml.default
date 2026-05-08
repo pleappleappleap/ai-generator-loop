@@ -59,10 +59,9 @@ thresholds:
   # The Rust aggregator reads these from config.yaml via serde_yaml.
 
 broker:
-  amqp_url: amqp://guest:guest@localhost:5672       # Artemis AMQP 1.0 (Rust components)
-  stomp_url: stomp://localhost:61613               # Artemis STOMP (Python components)
-  artemis_console: http://localhost:8161           # replaces RabbitMQ mgmt UI on 15672
-  artemis_data: auto                               # auto: {paths.root}/loop/artemis-broker
+  amqp_url: amqp://admin:admin@localhost:5672      # Artemis AMQP 1.0 (Rust components)
+  stomp_url: stomp://admin:admin@localhost:61613   # Artemis STOMP (Python components)
+  artemis_console: http://localhost:8161
   comfyui_url: http://127.0.0.1:8188
   comfyui_ws: ws://127.0.0.1:8188/ws
 

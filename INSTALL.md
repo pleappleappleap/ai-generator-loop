@@ -67,68 +67,43 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ---
 
-## 3. ActiveMQ Artemis
+## 3. ActiveMQ Artemis (Docker)
 
-The pipeline requires Artemis 2.31 or later with both STOMP and AMQP 1.0
-acceptors enabled.
+The pipeline runs Artemis via the official Docker image. No manual broker
+instance creation or `broker.xml` editing is required — AMQP (5672), STOMP
+(61613), and the management console (8161) are pre-enabled in the image.
 
-### Download and extract
+### Install Docker
+
+Install Docker Desktop (macOS / Windows) or Docker Engine (Linux):
+
+```
+https://docs.docker.com/get-docker/
+```
+
+### Pull the image
+
+`make all` pulls the image automatically. To pull it on its own:
 
 ```bash
-# Download from https://activemq.apache.org/components/artemis/download/
-# Replace X.Y.Z with the actual version
-curl -LO https://downloads.apache.org/activemq/activemq-artemis/X.Y.Z/apache-artemis-X.Y.Z-bin.tar.gz
-tar -xzf apache-artemis-X.Y.Z-bin.tar.gz
-sudo mv apache-artemis-X.Y.Z /opt/artemis
+make artemis-broker
 ```
 
-### Create the broker instance
+This is idempotent — subsequent runs do nothing if the image is already
+present.
 
-The pipeline scripts resolve the broker data directory from `config.yaml`
-(key `broker.artemis_data`; default: `auto`, resolving to
-`{repo_root}/loop/artemis-broker`).
+### Start the broker
 
 ```bash
-cd $AI_IMAGE_ROOT
-/opt/artemis/bin/artemis create loop/artemis-broker \
-  --user admin \
-  --password admin \
-  --require-login \
-  --allow-anonymous false
+loop/start_broker.sh
 ```
 
-### Configure acceptors
+Broker data is persisted in `loop/artemis-data/` (bind-mounted into the
+container), so queue state survives container restarts.
 
-Edit `loop/artemis-broker/etc/broker.xml`. Ensure the `<acceptors>` block
-contains both of these entries:
+### Management console
 
-```xml
-<!-- AMQP 1.0: used by Rust components (router, aggregator, coordinator, lancedb_manager) -->
-<acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
-
-<!-- STOMP: used by Python components (comfyui_worker, scorers, tactical_llm, server, monitor) -->
-<acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
-```
-
-The default Artemis template ships both acceptors commented out. Uncomment or
-add them. The AMQP acceptor on port 5672 is standard; the STOMP acceptor on
-61613 is the Artemis STOMP default.
-
-### Expose the management console on the network
-
-The Artemis web console binds to `localhost` by default. To make it reachable
-from other machines, edit `loop/artemis-broker/etc/bootstrap.xml` and change
-the `<web>` binding:
-
-```xml
-<web path="web" rootRedirectLocation="index.html">
-    <binding uri="http://0.0.0.0:8161" apps="console,metrics"/>
-</web>
-```
-
-The default value is `http://localhost:8161`; replace `localhost` with
-`0.0.0.0` to listen on all interfaces. Restart the broker for the change to
-take effect.
+`http://localhost:8161` — credentials: **admin / admin**
 
 ---
 
@@ -356,7 +331,6 @@ compute:
 
 broker:
   stomp_url:    stomp://admin:admin@localhost:61613
-  artemis_data: auto   # resolves to {repo_root}/loop/artemis-broker
 
 database:
   path: auto           # resolves to {repo_root}/pipeline.db

@@ -31,6 +31,12 @@ loop/scorers/models/vlm/
 loop/scorers/models/tactical/
 loop/scorers/models/artifact-detector/
 
+# ── Artemis broker data (Docker bind mount) ───────────────────────────────────
+loop/artemis-data/
+
+# ── Makefile sentinels ─────────────────────────────────────────────────────────
+loop/.artemis-image-pulled
+
 # ── ComfyUI (external dependency — cloned by make prereqs) ────────────────────
 loop/ComfyUI/
 

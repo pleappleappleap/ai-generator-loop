@@ -6,14 +6,15 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
         prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup \
-        artemis-broker
+        artemis-broker artemis-pull
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
-ARTEMIS_BROKER := loop/artemis-broker
+ARTEMIS_IMAGE   := apache/activemq-artemis:latest
+ARTEMIS_PULL_OK := loop/.artemis-image-pulled
 
-all: venv/.installed loop/scorers/venv/.installed models $(ARTEMIS_BROKER)/bin/artemis \
+all: venv/.installed loop/scorers/venv/.installed models $(ARTEMIS_PULL_OK) \
      lint typecheck test build
 
 lint:
@@ -104,67 +105,24 @@ config.yaml:
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
-# ── Artemis broker setup ──────────────────────────────────────────────────────
+# ── Artemis broker setup (Docker) ─────────────────────────────────────────────
 
-# Create and configure the Artemis broker instance under loop/artemis-broker/.
-# Idempotent: skipped entirely if loop/artemis-broker/bin/artemis already exists.
-# On macOS, installs activemq-artemis via Homebrew if the CLI is not on PATH.
-# On Linux, the artemis CLI must be installed manually first
-# (download from https://activemq.apache.org/components/artemis/download/).
-artemis-broker: $(ARTEMIS_BROKER)/bin/artemis
+# Pull the official Artemis Docker image once; sentinel file prevents re-pulls.
+# The broker runs via start_broker.sh which handles container create/start.
+# AMQP (5672), STOMP (61613), and the management console (8161) are pre-enabled
+# in the apache/activemq-artemis image — no broker.xml patching needed.
+artemis-broker: $(ARTEMIS_PULL_OK)
+artemis-pull:   $(ARTEMIS_PULL_OK)
 
-$(ARTEMIS_BROKER)/bin/artemis:
-	@ARTEMIS_CLI=""; \
-	for c in \
-	    "$$(command -v artemis 2>/dev/null)" \
-	    /opt/homebrew/opt/activemq-artemis/bin/artemis \
-	    /usr/local/opt/activemq-artemis/bin/artemis \
-	    /opt/artemis/bin/artemis \
-	    /usr/local/artemis/bin/artemis; do \
-	  [ -x "$$c" ] && ARTEMIS_CLI="$$c" && break; \
-	done; \
-	if [ -z "$$ARTEMIS_CLI" ]; then \
-	  if command -v brew >/dev/null 2>&1; then \
-	    echo "==> Installing activemq-artemis via Homebrew..."; \
-	    brew install activemq-artemis; \
-	    for c in \
-	        /opt/homebrew/opt/activemq-artemis/bin/artemis \
-	        /usr/local/opt/activemq-artemis/bin/artemis; do \
-	      [ -x "$$c" ] && ARTEMIS_CLI="$$c" && break; \
-	    done; \
-	  fi; \
-	fi; \
-	if [ -z "$$ARTEMIS_CLI" ]; then \
-	  echo "ERROR: artemis CLI not found. Install ActiveMQ Artemis and ensure" >&2; \
-	  echo "       the 'artemis' binary is on PATH, then re-run make." >&2; \
-	  echo "       Download: https://activemq.apache.org/components/artemis/download/" >&2; \
+$(ARTEMIS_PULL_OK):
+	@command -v docker >/dev/null 2>&1 || { \
+	  echo "ERROR: docker not found. Install Docker Desktop (https://docs.docker.com/get-docker/) first." >&2; \
 	  exit 1; \
-	fi; \
-	echo "==> Creating Artemis broker at $(ARTEMIS_BROKER)..."; \
-	"$$ARTEMIS_CLI" create $(ARTEMIS_BROKER) \
-	  --user admin \
-	  --password admin \
-	  --require-login \
-	  --allow-anonymous false \
-	  --no-input; \
-	echo "==> Enabling AMQP and STOMP acceptors in broker.xml..."; \
-	python3 -c "\
-import re, pathlib; \
-f = pathlib.Path('$(ARTEMIS_BROKER)/etc/broker.xml'); \
-xml = f.read_text(); \
-amqp  = '      <acceptor name=\"amqp\">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>'; \
-stomp = '      <acceptor name=\"stomp\">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>'; \
-changed = False; \
-if 'name=\"amqp\"' not in xml: \
-    xml = xml.replace('<acceptors>', '<acceptors>\n' + amqp, 1); changed = True; \
-if 'name=\"stomp\"' not in xml: \
-    xml = xml.replace('<acceptors>', '<acceptors>\n' + stomp, 1); changed = True; \
-if changed: \
-    f.write_text(xml); \
-    print('    broker.xml updated — AMQP and STOMP acceptors added.'); \
-else: \
-    print('    broker.xml already has AMQP and STOMP acceptors.')"; \
-	echo "==> Artemis broker ready."
+	}
+	docker pull $(ARTEMIS_IMAGE)
+	@mkdir -p loop
+	@touch $(ARTEMIS_PULL_OK)
+	@echo "==> Artemis image ready. Start the broker with: loop/start_broker.sh"
 
 # Full first-time setup: system deps → Python venvs → config → models → build.
 setup: prereqs-system prereqs-python config models build
@@ -172,7 +130,7 @@ setup: prereqs-system prereqs-python config models build
 prereqs: prereqs-system prereqs-python
 
 # Install system-level packages using the detected package manager.
-# Installs: Python 3.11, yq, Java (for Artemis), Rust (via rustup).
+# Installs: Python 3.11, yq, Docker (for Artemis), Rust (via rustup).
 # LaTeX is optional and only needed for `make doc`.
 prereqs-system:
 	@PKG=""; \
@@ -218,35 +176,13 @@ prereqs-system:
 	  esac; \
 	fi; \
 	\
-	echo "==> Java (required by ActiveMQ Artemis)"; \
-	if command -v java >/dev/null 2>&1; then \
-	  echo "    already installed: $$(java -version 2>&1 | head -1)"; \
+	echo "==> Docker (required for ActiveMQ Artemis)"; \
+	if command -v docker >/dev/null 2>&1; then \
+	  echo "    already installed: $$(docker --version)"; \
 	else \
-	  case "$$PKG" in \
-	    homebrew) brew install openjdk ;; \
-	    apt)      sudo apt-get install -y default-jdk ;; \
-	    dnf)      sudo dnf install -y java-latest-openjdk ;; \
-	    pacman)   sudo pacman -S --noconfirm jre-openjdk ;; \
-	    zypper)   sudo zypper install -y java-openjdk ;; \
-	  esac; \
-	fi; \
-	\
-	echo "==> ActiveMQ Artemis CLI"; \
-	ARTEMIS_FOUND=0; \
-	for c in \
-	    "$$(command -v artemis 2>/dev/null)" \
-	    /opt/homebrew/opt/activemq-artemis/bin/artemis \
-	    /usr/local/opt/activemq-artemis/bin/artemis \
-	    /opt/artemis/bin/artemis; do \
-	  [ -x "$$c" ] && ARTEMIS_FOUND=1 && echo "    already installed: $$c" && break; \
-	done; \
-	if [ "$$ARTEMIS_FOUND" = "0" ]; then \
-	  case "$$PKG" in \
-	    homebrew) brew install activemq-artemis ;; \
-	    *) echo "    Not installed. Download from:" ; \
-	       echo "    https://activemq.apache.org/components/artemis/download/" ; \
-	       echo "    Extract and add bin/ to PATH, then re-run make." ;; \
-	  esac; \
+	  echo "    Not installed. Install Docker Desktop from:"; \
+	  echo "    https://docs.docker.com/get-docker/"; \
+	  echo "    Then re-run make."; \
 	fi; \
 	\
 	echo "==> Rust"; \
