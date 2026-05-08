@@ -26,48 +26,96 @@ be partially offloaded to CPU via `tactical.model.n_gpu_layers` in
 
 ---
 
-## 2. System Software
+## 2. Bootstrap Prerequisites
 
-A POSIX-compatible shell is required on all platforms. On Windows, use
-Git Bash (https://git-scm.com/downloads).
+These must be in place **before** you can run `make`. Everything else
+(`make prereqs-system`) installs automatically from here.
 
-### Python 3.11
+### macOS
 
-| Platform | Command |
-|----------|---------|
-| macOS (Homebrew) | `brew install python@3.11` |
-| Debian / Ubuntu | `sudo apt install python3.11 python3.11-venv` |
-| Fedora / RHEL | `sudo dnf install python3.11` |
-| Windows (winget) | `winget install Python.Python.3.11` |
-
-### Rust
+**Xcode Command Line Tools** (provides git, make, clang, curl):
 
 ```bash
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. ~/.cargo/env
+xcode-select --install
 ```
 
-### yq (YAML query tool, used by shell scripts)
+**Homebrew** (the macOS package manager):
 
-| Platform | Command |
-|----------|---------|
-| macOS (Homebrew) | `brew install yq` |
-| Linux (snap) | `snap install yq` |
-| Linux (manual) | Download from https://github.com/mikefarah/yq/releases |
-| Windows (Chocolatey) | `choco install yq` |
-| Windows (Scoop) | `scoop install yq` |
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
 
-### TeX distribution (optional, only needed to render ARCHITECTURE.pdf)
+Follow the post-install instructions to add Homebrew to your PATH.
+
+### Linux
+
+Most distributions ship git and make. If not:
+
+| Distro | Command |
+|--------|---------|
+| Debian / Ubuntu | `sudo apt install git make` |
+| Fedora / RHEL | `sudo dnf install git make` |
+| Arch | `sudo pacman -S git make` |
+| openSUSE | `sudo zypper install git make` |
+
+### Windows
+
+1. **Git Bash** — install from https://git-scm.com/downloads. This provides
+   bash, git, make, curl, and wget in one package. Run all `make` commands
+   from the Git Bash terminal, not CMD or PowerShell.
+
+2. **winget** — ships with Windows 11. On Windows 10, install the
+   [App Installer](https://apps.microsoft.com/detail/9NBLGGH4NNS1) from the
+   Microsoft Store. `make prereqs-system` uses winget to install Docker.
+
+### All platforms — clone the repository
+
+```bash
+git clone <repo-url> ~/ai-image
+cd ~/ai-image
+```
+
+Add `AI_IMAGE_ROOT` to your shell profile so the pipeline scripts can locate
+`config.yaml` from any working directory:
+
+```bash
+export AI_IMAGE_ROOT=~/ai-image
+```
+
+---
+
+## 3. System Prerequisites
+
+With the bootstrap in place, run:
+
+```bash
+make prereqs-system
+```
+
+This installs automatically, per platform:
+
+| Tool | macOS | Linux | Notes |
+|------|-------|-------|-------|
+| wget | — | ✓ | macOS uses curl (system native) |
+| Python 3.11 | ✓ | ✓ | via Homebrew / distro package manager |
+| yq | ✓ | ✓ | YAML query tool used by shell scripts |
+| Docker | ✓ | ✓ | Desktop (macOS/Windows) or Engine (Linux) |
+| Rust + cargo | ✓ | ✓ | via rustup |
+| sqlx-cli | ✓ | ✓ | Rust SQLite compile-time query verification |
+| protoc | ✓ | ✓ | required by LanceDB Rust crate |
+
+TeX is **not** installed automatically. It is only needed to regenerate
+`ARCHITECTURE.pdf`:
 
 | Platform | Command |
 |----------|---------|
 | macOS | `brew install --cask mactex` |
-| Linux | `sudo apt install texlive-full` (or equivalent) |
+| Linux | `sudo apt install texlive-full latexmk` (or equivalent) |
 | Windows | Install MiKTeX from https://miktex.org/download |
 
 ---
 
-## 3. ActiveMQ Artemis (Docker)
+## 4. ActiveMQ Artemis (Docker)
 
 The pipeline runs Artemis via the official Docker image. No manual broker
 instance creation or `broker.xml` editing is required — AMQP (5672), STOMP
@@ -106,28 +154,6 @@ container), so queue state survives container restarts.
 ### Management console
 
 `http://localhost:8161` — credentials: **admin / admin**
-
----
-
-## 4. Clone the Repository
-
-```bash
-git clone <repo-url> ~/ai-image
-cd ~/ai-image
-```
-
-Export `AI_IMAGE_ROOT` so the pipeline scripts can locate `config.yaml` from
-any working directory. Add this to your shell profile (`.bashrc`, `.profile`,
-or equivalent):
-
-```bash
-export AI_IMAGE_ROOT=~/ai-image
-```
-
-The pipeline shell scripts determine the repository root using the first of
-the following that is set: (1) a path passed as the first command-line
-argument, (2) the `AI_IMAGE_ROOT` environment variable, or (3) the current
-working directory if it contains `config.yaml` and a `loop/` subdirectory.
 
 ---
 
@@ -190,6 +216,9 @@ To activate the scorers environment in a shell, use the provided script:
 ---
 
 ## 6. Model Downloads
+
+Run `make models` to download everything automatically. The manual steps
+below are for reference or if you need to download individual models.
 
 All models are stored under `loop/scorers/models/`.
 
@@ -274,6 +303,9 @@ The TUI writes the chosen filename directly to `config.yaml`.
 ---
 
 ## 7. ComfyUI
+
+`make prereqs-python` handles this automatically. The manual steps below
+are for reference.
 
 `make prereqs` clones ComfyUI into `loop/ComfyUI/` and installs its
 dependencies into a dedicated venv at `loop/ComfyUI/venv/`. To run this

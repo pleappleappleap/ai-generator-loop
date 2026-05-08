@@ -136,134 +136,101 @@ scorers $\approx$8\,GB). On discrete-GPU systems the tactical LLM can be
 offloaded partially to CPU via the \texttt{n\_gpu\_layers} config key.
 See Section~\ref{sec:memory} for the per-component breakdown.
 
-\subsection{System Software}
+\subsection{Bootstrap Prerequisites}
 
-A POSIX-compatible shell (\texttt{/bin/sh}) and the following tools are
-required on all platforms. On Windows, Git Bash satisfies the shell
-requirement (\url{https://git-scm.com/downloads}).
+The following must be in place \emph{before} running \texttt{make}.
+Everything else is installed automatically by \texttt{make prereqs-system}.
 
-\subsubsection{Python 3.11}
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Platform} & \textbf{Command} \\
-\midrule
-macOS (Homebrew)  & \texttt{brew install python@3.11} \\
-Debian / Ubuntu   & \texttt{sudo apt install python3.11 python3.11-venv} \\
-Fedora / RHEL     & \texttt{sudo dnf install python3.11} \\
-Windows (winget)  & \texttt{winget install Python.Python.3.11} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{Rust}
+\subsubsection{macOS}
 
 \begin{lstlisting}[style=shell]
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-. ~/.cargo/env
+# Xcode Command Line Tools (git, make, clang, curl)
+xcode-select --install
+
+# Homebrew
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 \end{lstlisting}
 
-\subsubsection{yq}
+Follow the post-install instructions to add Homebrew to your PATH.
 
-\texttt{yq} is a YAML query tool used by the pipeline shell scripts to read
-values from \texttt{config.yaml} without a Python interpreter.
+\subsubsection{Linux}
 
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Platform} & \textbf{Command} \\
-\midrule
-macOS (Homebrew)       & \texttt{brew install yq} \\
-Linux (snap)           & \texttt{snap install yq} \\
-Linux (manual)         & Download binary from \url{https://github.com/mikefarah/yq/releases} \\
-Windows (Chocolatey)   & \texttt{choco install yq} \\
-Windows (Scoop)        & \texttt{scoop install yq} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{TeX distribution (optional)}
-
-Required only for rendering this document.
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Platform} & \textbf{Command} \\
-\midrule
-macOS   & \texttt{brew install --cask mactex} \\
-Linux   & \texttt{sudo apt install texlive-full}\ \ (or equivalent) \\
-Windows & Install MiKTeX from \url{https://miktex.org/download} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsection{ActiveMQ Artemis}
-
-The pipeline requires Artemis 2.31 or later with both STOMP and AMQP~1.0
-acceptors enabled.
-
-\subsubsection{Download and install}
+Most distributions include git and make. If not:
 
 \begin{lstlisting}[style=shell]
-# Replace X.Y.Z with the current release version
-curl -LO https://downloads.apache.org/activemq/activemq-artemis/X.Y.Z/apache-artemis-X.Y.Z-bin.tar.gz
-tar -xzf apache-artemis-X.Y.Z-bin.tar.gz
-sudo mv apache-artemis-X.Y.Z /opt/artemis
+# Debian / Ubuntu
+sudo apt install git make
+
+# Fedora / RHEL
+sudo dnf install git make
 \end{lstlisting}
 
-\subsubsection{Create the broker instance}
+\subsubsection{Windows}
 
-The pipeline scripts resolve the broker data directory from
-\texttt{config.yaml} (key \texttt{broker.artemis\_data}; default:
-\texttt{auto}, resolving to \texttt{\{repo\_root\}/loop/artemis-broker}).
+\begin{enumerate}
+  \item \textbf{Git Bash} --- \url{https://git-scm.com/downloads}. Provides
+    bash, git, make, curl, and wget. Run all \texttt{make} commands from Git
+    Bash, not CMD or PowerShell.
+  \item \textbf{winget} --- ships with Windows~11. On Windows~10, install the
+    App Installer from the Microsoft Store.
+\end{enumerate}
 
-\begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT
-/opt/artemis/bin/artemis create loop/artemis-broker \
-  --user admin \
-  --password admin \
-  --require-login \
-  --allow-anonymous false
-\end{lstlisting}
-
-\subsubsection{Configure acceptors}
-
-Edit \texttt{loop/artemis-broker/etc/broker.xml}. Ensure the
-\texttt{<acceptors>} block contains both entries:
-
-\begin{lstlisting}[style=xml]
-<!-- AMQP 1.0: Rust components (router, aggregator, coordinator, lancedb_manager) -->
-<acceptor name="amqp">tcp://0.0.0.0:5672?protocols=AMQP</acceptor>
-
-<!-- STOMP: Python components (comfyui_worker, scorers, tactical_llm, monitor, ui) -->
-<acceptor name="stomp">tcp://0.0.0.0:61613?protocols=STOMP</acceptor>
-\end{lstlisting}
-
-The default Artemis template ships both acceptors commented out; uncomment
-or add them as shown.
-
-\subsection{Clone the Repository}
+\subsubsection{Clone the repository}
 
 \begin{lstlisting}[style=shell]
 git clone <repo-url> ~/ai-image
 cd ~/ai-image
+export AI_IMAGE_ROOT=~/ai-image   # add to shell profile
 \end{lstlisting}
 
-Export \texttt{AI\_IMAGE\_ROOT} so the pipeline scripts can locate
-\texttt{config.yaml} from any working directory. Add this to your shell
-profile (\texttt{.bashrc}, \texttt{.profile}, or equivalent):
+\subsection{System Prerequisites (\texttt{make prereqs-system})}
+
+With the bootstrap in place, run \texttt{make prereqs-system} to install the
+remaining tools automatically. The table below shows what is installed per
+platform.
+
+\begin{center}
+\begin{tabular}{llll}
+\toprule
+\textbf{Tool} & \textbf{macOS} & \textbf{Linux} & \textbf{Notes} \\
+\midrule
+wget        & ---  & \checkmark & macOS uses curl (system native) \\
+Python 3.11 & \checkmark & \checkmark & via Homebrew / distro packages \\
+yq          & \checkmark & \checkmark & YAML query tool for shell scripts \\
+Docker      & \checkmark & \checkmark & Desktop (macOS/Windows) or Engine (Linux) \\
+Rust/cargo  & \checkmark & \checkmark & via rustup \\
+sqlx-cli    & \checkmark & \checkmark & SQLite compile-time query verification \\
+protoc      & \checkmark & \checkmark & required by LanceDB Rust crate \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\LaTeX{} is \emph{not} installed automatically --- it is only needed to
+regenerate this document (\texttt{make doc}).
+
+\subsection{ActiveMQ Artemis (Docker)}
+
+The pipeline runs Artemis via the official Docker image
+(\texttt{apache/activemq-artemis}). AMQP~1.0 (port 5672), STOMP (port
+61613), and the management console (port 8161) are pre-enabled in the image
+--- no \texttt{broker.xml} editing is required.
+
+\texttt{make prereqs-system} installs Docker; \texttt{make all} pulls the
+image. To pull the image on its own:
 
 \begin{lstlisting}[style=shell]
-export AI_IMAGE_ROOT=~/ai-image
+make artemis-broker
 \end{lstlisting}
 
-The pipeline shell scripts determine the repository root using the first of
-the following that is set: (1)~a path passed as the first command-line
-argument, (2)~the \texttt{AI\_IMAGE\_ROOT} environment variable, or
-(3)~the current working directory if it contains \texttt{config.yaml} and a
-\texttt{loop/} subdirectory.
+Start the broker:
+
+\begin{lstlisting}[style=shell]
+loop/start_broker.sh
+\end{lstlisting}
+
+Broker data is persisted in \texttt{loop/artemis-data/} (bind-mounted into
+the container). The management console is available at
+\texttt{http://localhost:8161} (credentials: \texttt{admin} / \texttt{admin}).
 
 \subsection{Python Environments}
 
