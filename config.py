@@ -45,6 +45,52 @@ def _expand_recursive(obj: Any) -> Any:
     return _expand(obj)
 
 
+def _resolve_auto_paths(data: dict) -> dict:
+    """Resolve ``"auto"`` sentinel values in well-known path fields.
+
+    The config.yaml uses ``"auto"`` as a placeholder for paths that are
+    derived from the repository root at runtime.  This mirrors the shell
+    logic in ``start_loop.sh`` so that Python processes see fully-resolved
+    absolute paths rather than the literal string ``"auto"``.
+    """
+    root = str(_REPO_ROOT)
+
+    paths = data.get("paths", {})
+    if paths.get("root") == "auto":
+        paths["root"] = root
+    r = paths.get("root", root)
+
+    if paths.get("scorers") == "auto":
+        paths["scorers"] = str(Path(r) / "loop" / "scorers")
+    if paths.get("lancedb") == "auto":
+        paths["lancedb"] = str(Path(r) / "lancedb")
+    if paths.get("comfyui") == "auto":
+        paths["comfyui"] = str(Path(r) / "loop" / "ComfyUI")
+    if paths.get("output") == "auto":
+        paths["output"] = str(Path(r) / "loop" / "output")
+
+    scorers = paths.get("scorers", str(Path(r) / "loop" / "scorers"))
+
+    models = data.get("models", {})
+    vlm = models.get("vlm", {})
+    if vlm.get("dir") == "auto":
+        vlm["dir"] = str(Path(scorers) / "models" / "vlm")
+    artifact = models.get("artifact_detector", {})
+    if artifact.get("dir") == "auto":
+        artifact["dir"] = str(Path(scorers) / "models" / "artifact-detector")
+
+    tactical = data.get("tactical", {})
+    tmodel = tactical.get("model", {})
+    if tmodel.get("dir") == "auto":
+        tmodel["dir"] = str(Path(scorers) / "models" / "tactical")
+
+    db = data.get("database", {})
+    if db.get("path") == "auto":
+        db["path"] = str(Path(r) / "pipeline.db")
+
+    return data
+
+
 def resolve_backend(backend: str) -> str:
     """Resolve ``"auto"`` to a concrete backend string for the current host.
 
@@ -93,7 +139,7 @@ class Config:
     """
 
     def __init__(self, data: dict) -> None:
-        self._data: dict = _expand_recursive(data)
+        self._data: dict = _expand_recursive(_resolve_auto_paths(data))
 
     @property
     def paths(self) -> dict[str, str]:

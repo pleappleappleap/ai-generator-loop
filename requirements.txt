@@ -5,4 +5,5 @@ stomp.py
 pydantic
 rich
 huggingface_hub
+requests
 yq
