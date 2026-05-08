@@ -17,19 +17,19 @@ LANCEDB=$(yq '.paths.lancedb' "$CFG")
 [ "$LANCEDB" = "auto" ] && LANCEDB="$AI_IMAGE_ROOT/lancedb"
 
 # Resolve llama.cpp server config before any sleeps so we can start it early.
-LLM_SERVER_URL=$(python3 -c "
+LLM_SERVER_URL=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
 import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
 from config import load; cfg=load()
 print(cfg.tactical.get('model',{}).get('server_url','http://localhost:8080/v1'))
 " 2>/dev/null || echo "http://localhost:8080/v1")
 LLM_PORT=$(echo "$LLM_SERVER_URL" | sed 's|.*:\([0-9]*\)/.*|\1|; s|http://[^:]*||')
 [ -z "$LLM_PORT" ] && LLM_PORT=8080
-LLM_MODEL_DIR=$(python3 -c "
+LLM_MODEL_DIR=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
 import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
 from config import load; cfg=load(); m=cfg.tactical.get('model',{})
 print(m.get('dir','') + '/' + m.get('filename',''))
 " 2>/dev/null || echo "")
-LLM_GPU_LAYERS=$(python3 -c "
+LLM_GPU_LAYERS=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
 import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
 from config import load; cfg=load()
 print(cfg.compute.get('tactical_llm',{}).get('n_gpu_layers',-1))
@@ -81,16 +81,16 @@ PYTHONPATH="$AI_IMAGE_ROOT" python tactical_llm.py &
 
 # Start UI server
 cd "$AI_IMAGE_ROOT/loop/ui"
-UI_PORT=$(python3 -c "
+UI_PORT=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
 import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
 from config import load; cfg=load()
 print(cfg.get('ui', default={}).get('port', 7860) if cfg.get('ui') else 7860)
 " 2>/dev/null || echo "7860")
-PYTHONPATH="$AI_IMAGE_ROOT" python server.py &
+PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" server.py &
 
 # Start dead-letter monitor (root venv; watches pipeline.dead for unrecoverable failures)
 cd "$AI_IMAGE_ROOT"
-python loop/monitor.py &
+"$AI_IMAGE_ROOT/venv/bin/python" loop/monitor.py &
 
 echo "Loop infrastructure ready"
 echo ""
