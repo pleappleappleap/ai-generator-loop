@@ -49,4 +49,4 @@ if [ "$LISTEN" = "0.0.0.0" ]; then
 fi
 
 # shellcheck disable=SC2086
-python main.py --listen "$LISTEN" $EXTRA_ARGS
+exec python main.py --listen "$LISTEN" $EXTRA_ARGS
