@@ -180,9 +180,12 @@ prereqs-system:
 	if command -v docker >/dev/null 2>&1; then \
 	  echo "    already installed: $$(docker --version)"; \
 	else \
-	  echo "    Not installed. Install Docker Desktop from:"; \
-	  echo "    https://docs.docker.com/get-docker/"; \
-	  echo "    Then re-run make."; \
+	  case "$$PKG" in \
+	    homebrew) brew install --cask docker ;; \
+	    *) echo "    Not installed. Install Docker Engine from:"; \
+	       echo "    https://docs.docker.com/get-docker/"; \
+	       echo "    Then re-run make." ;; \
+	  esac; \
 	fi; \
 	\
 	echo "==> Rust"; \

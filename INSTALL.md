@@ -75,11 +75,13 @@ instance creation or `broker.xml` editing is required — AMQP (5672), STOMP
 
 ### Install Docker
 
-Install Docker Desktop (macOS / Windows) or Docker Engine (Linux):
+| Platform | Command |
+|----------|---------|
+| macOS (Homebrew) | `brew install --cask docker` |
+| Linux | See https://docs.docker.com/engine/install/ |
+| Windows | See https://docs.docker.com/desktop/install/windows-install/ |
 
-```
-https://docs.docker.com/get-docker/
-```
+On macOS, `make prereqs-system` installs Docker Desktop automatically.
 
 ### Pull the image
 
