@@ -181,6 +181,7 @@ class Config:
         """Tactical LLM configuration."""
         return self._data.get("tactical", {})
 
+
     def get(self, *keys: str, default: Any = None) -> Any:
         """Return a nested config value by key path.
 

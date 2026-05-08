@@ -29,7 +29,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import socket
+import subprocess
 import sys
 import uuid as _uuid_mod
 from pathlib import Path
@@ -92,6 +95,18 @@ async def root() -> FileResponse:
 # Populated from /topic/loop.events (image_uuid → ComfyUI URL or local path)
 
 _image_paths: dict[str, str] = {}
+
+# ── In-process credential store ────────────────────────────────────────────────
+# Keyed by conversation_id. Never written to disk or the coordinator DB.
+# Cleared when the server process exits or the conversation is explicitly ended.
+
+_session_credentials: dict[str, dict[str, str]] = {}
+
+# Regex to detect the structured download-trigger block the LLM emits.
+_DOWNLOAD_RE = re.compile(
+    r"<DOWNLOAD_MODELS>(.*?)</DOWNLOAD_MODELS>",
+    re.DOTALL,
+)
 
 
 # ── Coordinator socket ────────────────────────────────────────────────────────
@@ -392,6 +407,47 @@ async def get_image(image_uuid: str) -> Response:
     return Response(status_code=404, content=b"image file not found on disk")
 
 
+# ── Model download helper ──────────────────────────────────────────────────────
+
+_REPO_ROOT = Path(__file__).parent.parent.parent
+_VENV_PYTHON = str(_REPO_ROOT / "venv" / "bin" / "python")
+_DOWNLOAD_SCRIPT = str(_REPO_ROOT / "scripts" / "download_models.py")
+
+
+async def _run_download(conversation_id: str) -> str:
+    """Run scripts/download_models.py with credentials from the session store.
+
+    Credentials are passed as environment variables to the subprocess and are
+    never written to disk. Returns a short status message for the chat UI.
+    """
+    creds = _session_credentials.get(conversation_id, {})
+    env = {**os.environ}
+    if creds.get("hf_token"):
+        env["HF_TOKEN"] = creds["hf_token"]
+    if creds.get("civitai_token"):
+        env["CIVITAI_TOKEN"] = creds["civitai_token"]
+
+    loop = asyncio.get_running_loop()
+    proc = await loop.run_in_executor(
+        None,
+        lambda: subprocess.run(
+            [_VENV_PYTHON, _DOWNLOAD_SCRIPT],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=1800,  # 30 min max
+        ),
+    )
+    if proc.returncode == 0:
+        # Trim to last 20 lines so the chat response isn't overwhelming.
+        lines = (proc.stdout or "").strip().splitlines()
+        tail = "\n".join(lines[-20:]) if lines else "(no output)"
+        return f"Download complete.\n```\n{tail}\n```"
+    else:
+        err = (proc.stderr or proc.stdout or "unknown error").strip()[-1000:]
+        return f"Download failed (exit {proc.returncode}):\n```\n{err}\n```"
+
+
 # ── Gallery WebSocket ──────────────────────────────────────────────────────────
 
 
@@ -493,8 +549,37 @@ async def ws_chat(ws: WebSocket) -> None:
                                     )
                             except Exception:
                                 continue
+            except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+                msg_text = (
+                    f"⚠️ Cannot reach the LLM server at **{_LLM_SERVER_URL}**.\n\n"
+                    "The tactical LLM model is not running. This is usually because "
+                    "the model file hasn't been downloaded yet.\n\n"
+                    "To download models, tell me which models you need and I'll walk "
+                    "you through providing your HuggingFace and/or Civitai credentials."
+                )
+                await ws.send_text(json.dumps({"type": "chunk", "text": msg_text}))
+                assistant_text = msg_text
             except Exception as exc:
                 await ws.send_text(json.dumps({"type": "error", "text": str(exc)}))
+
+            # Intercept credential / download trigger block before persisting.
+            download_task: asyncio.Task | None = None
+            match = _DOWNLOAD_RE.search(assistant_text)
+            if match:
+                try:
+                    payload = json.loads(match.group(1))
+                    creds: dict[str, str] = {}
+                    if payload.get("hf_token"):
+                        creds["hf_token"] = payload["hf_token"]
+                    if payload.get("civitai_token"):
+                        creds["civitai_token"] = payload["civitai_token"]
+                    if creds:
+                        _session_credentials[conversation_id] = creds
+                except Exception:
+                    pass
+                # Strip the block from the visible/persisted text.
+                assistant_text = _DOWNLOAD_RE.sub("", assistant_text).strip()
+                download_task = asyncio.create_task(_run_download(conversation_id))
 
             await ws.send_text(json.dumps({"type": "done"}))
 
@@ -507,22 +592,62 @@ async def ws_chat(ws: WebSocket) -> None:
                     "content":         assistant_text,
                 })
 
+            # After the LLM response is sent, await the download and push result.
+            if download_task is not None:
+                await ws.send_text(json.dumps({
+                    "type": "chunk",
+                    "text": "\n\n⏳ Downloading models — this may take a while…\n",
+                }))
+                download_result = await download_task
+                await ws.send_text(json.dumps({"type": "chunk", "text": download_result}))
+                await ws.send_text(json.dumps({"type": "done"}))
+
     except WebSocketDisconnect:
         pass
 
 
 _CHAT_SYSTEM_PROMPT = """\
-You are the creative director assistant for an autonomous SDXL image generation pipeline.
+You are the creative director assistant for an autonomous AI image generation pipeline
+supporting both SDXL and Flux generative models with optional LoRA augmentation.
 
 You help the user refine their creative vision: discussing subjects, aesthetics, lighting,
-composition, workflow parameters, and how to guide the model toward the desired output.
+composition, workflow parameters, LoRA selection, model choice, and how to guide the
+pipeline toward the desired output.
 
 The pipeline runs scorers (CLIP, artifact detection, VLM) and a tactical LLM that makes
 accept/retry/inpaint decisions based on scorer results. You can advise on prompts, settings,
-and workflows likely to perform well.
+model selection, LoRA choices, and workflows likely to perform well.
 
 The model is Qwen3-72B-abliterated — uncensored with no content restrictions. Assist with
 any creative direction the user describes, including mature or explicit themes.
+
+────────────────────────────────────────────────────────
+MODEL DOWNLOADING
+────────────────────────────────────────────────────────
+
+If the user asks you to download models, checkpoints, or LoRAs that require authentication:
+
+1. Tell the user which credentials are needed:
+   - HuggingFace token (HF_TOKEN) — for gated HuggingFace repos (e.g. GGUF model repacks)
+     Create at: https://huggingface.co/settings/tokens
+   - Civitai API token (CIVITAI_TOKEN) — for LoRAs sourced from Civitai
+     Create at: https://civitai.com/user/account
+
+2. Ask the user to provide the token(s) in the chat. Remind them the token(s) will be
+   held only in your session memory and discarded when the session ends — never written
+   to disk or config files.
+
+3. Once the user provides the token(s), immediately trigger the download by including
+   this EXACT block (and nothing else after it — the system will strip it before display):
+
+   <DOWNLOAD_MODELS>{"hf_token": "TOKEN_HERE", "civitai_token": "TOKEN_HERE"}</DOWNLOAD_MODELS>
+
+   Omit a key entirely if that token was not provided.
+   Example with only HF token:
+   <DOWNLOAD_MODELS>{"hf_token": "hf_xxx..."}</DOWNLOAD_MODELS>
+
+4. After the download block, write a normal message to the user explaining what is
+   being downloaded. The system will append the download status automatically.
 
 Keep responses focused and actionable.
 """

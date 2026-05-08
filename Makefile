@@ -19,7 +19,7 @@ DOCKER_OK        := loop/.docker-installed
 COMFYUI_NODES_OK := loop/ComfyUI/custom_nodes/.nodes-installed
 
 all: venv/.installed loop/scorers/venv/.installed $(COMFYUI_NODES_OK) \
-     models $(ARTEMIS_PULL_OK) lint typecheck test build
+     $(ARTEMIS_PULL_OK) lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
@@ -377,46 +377,7 @@ loop/scorers/venv/.installed: loop/scorers/requirements.txt
 # The SDXL checkpoint must be placed manually — no canonical download URL.
 
 models: venv/.installed
-	@VLM_FILE=$$(yq '.models.vlm.filename' $(CFG)); \
-	TACTICAL_FILE=$$(yq '.tactical.model.filename' $(CFG)); \
-	SCORERS_DIR=loop/scorers; \
-	\
-	echo "==> Artifact detector (HuggingFace: umm-maybe/AI-image-detector)"; \
-	mkdir -p "$$SCORERS_DIR/models/artifact-detector"; \
-	venv/bin/python -c "\
-from huggingface_hub import snapshot_download; \
-snapshot_download(repo_id='umm-maybe/AI-image-detector', \
-                  local_dir='$$SCORERS_DIR/models/artifact-detector')"; \
-	\
-	echo "==> VLM scorer: $$VLM_FILE"; \
-	mkdir -p "$$SCORERS_DIR/models/vlm"; \
-	venv/bin/python -c "\
-import os, sys; \
-dest = '$$SCORERS_DIR/models/vlm/' + '$$VLM_FILE'; \
-size = os.path.getsize(dest) if os.path.exists(dest) else 0; \
-print('    Already present — skipping.') if size > 1_000_000 else \
-  __import__('huggingface_hub').hf_hub_download( \
-    repo_id='bartowski/Qwen2.5-VL-7B-Instruct-GGUF', \
-    filename='$$VLM_FILE', \
-    local_dir='$$SCORERS_DIR/models/vlm', \
-    force_download=True if size else False)"; \
-	\
-	echo "==> Tactical LLM: $$TACTICAL_FILE"; \
-	mkdir -p "$$SCORERS_DIR/models/tactical"; \
-	venv/bin/python -c "\
-import os; \
-dest = '$$SCORERS_DIR/models/tactical/' + '$$TACTICAL_FILE'; \
-size = os.path.getsize(dest) if os.path.exists(dest) else 0; \
-print('    Already present — skipping.') if size > 1_000_000 else \
-  __import__('huggingface_hub').hf_hub_download( \
-    repo_id='bartowski/Qwen3-72B-abliterated-GGUF', \
-    filename='$$TACTICAL_FILE', \
-    local_dir='$$SCORERS_DIR/models/tactical', \
-    force_download=True if size else False)"; \
-	\
-	echo ""; \
-	echo "==> Models done."; \
-	echo "    SDXL checkpoint: place manually in loop/ComfyUI/models/checkpoints/"
+	@venv/bin/python scripts/download_models.py
 
 # Interactive HuggingFace model browser.
 # Without HF_TOKEN: prints browse URLs and drop locations.

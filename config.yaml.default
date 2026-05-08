@@ -13,12 +13,48 @@ models:
   vlm:
     dir: auto                                      # auto: {scorers}/models/vlm
     filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+    source: hf:bartowski/Qwen2.5-VL-7B-Instruct-GGUF/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
     context_length: 4096
   artifact_detector:
     dir: auto          # auto: {scorers}/models/artifact-detector
+    source: hf:umm-maybe/AI-image-detector        # public repo, no token required
   clip:
     name: ViT-L-14
     pretrained: openai
+
+  # ── Generative model checkpoints ──────────────────────────────────────────
+  sdxl:
+    # Filename as it appears in ComfyUI's checkpoints directory.
+    # Used by comfyui_worker to patch workflows when model_type == "sdxl".
+    checkpoint: ""   # e.g. realisticVisionV60B1_v51VAE.safetensors
+
+  flux:
+    # Flux weights are split across four separate files.
+    # Filenames as they appear in ComfyUI's model subdirectories.
+    unet:   ""       # ComfyUI/models/unet/   e.g. flux1-dev.safetensors
+    vae:    ""       # ComfyUI/models/vae/    e.g. ae.safetensors
+    clip_l: ""       # ComfyUI/models/clip/   e.g. clip_l.safetensors
+    t5xxl:  ""       # ComfyUI/models/clip/   e.g. t5xxl_fp16.safetensors
+
+  # ── LoRA registry ─────────────────────────────────────────────────────────
+  # Each entry is available to the tactical LLM as a named choice.
+  # source: hf:<repo_id>/<filename> | civitai:<model_version_id> | local:<filename>
+  loras:
+    sdxl: []
+    # Example SDXL LoRA entry:
+    # - name: DetailTweaker
+    #   filename: detail_tweaker_xl.safetensors
+    #   description: Enhances fine detail and texture sharpness
+    #   source: civitai:135867
+    #   default_strength: 0.7
+
+    flux: []
+    # Example Flux LoRA entry:
+    # - name: FluxRealism
+    #   filename: flux_realism_lora.safetensors
+    #   description: Improves photorealism and skin texture for Flux
+    #   source: hf:XLabs-AI/flux-RealismLora/flux_realism_lora.safetensors
+    #   default_strength: 0.8
 
 compute:
   # Per-component compute target configuration.
@@ -78,6 +114,7 @@ tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
     filename: Qwen3-72B-abliterated-Q4_K_M.gguf
+    source: hf:bartowski/Qwen3-72B-abliterated-GGUF/Qwen3-72B-abliterated-Q4_K_M.gguf
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # token limit for non-thinking responses

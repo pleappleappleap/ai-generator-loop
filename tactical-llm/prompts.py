@@ -36,8 +36,8 @@ from __future__ import annotations
 
 import json
 
-SYSTEM_PROMPT = """\
-You are the tactical decision engine for an autonomous SDXL image generation pipeline.
+_SYSTEM_PROMPT_BASE = """\
+You are the tactical decision engine for an autonomous AI image generation pipeline.
 
 Your role is to evaluate scorer output for a generated image and decide one of three actions:
   accept   — the image meets quality standards; mark it as accepted
@@ -104,28 +104,125 @@ give_up when:
   - The systematic failure mode cannot be corrected by prompt revision alone
 
 ────────────────────────────────────────────────────────
+MODEL AND LORA SELECTION
+────────────────────────────────────────────────────────
+
+When deciding retry or inpaint, you may optionally switch the generative model
+or add / change LoRAs to address the identified failure mode.
+
+{model_section}
+
+retry_model / inpaint_model:
+  Omit (or use "") to keep the current model.
+  Use "sdxl" for the SDXL checkpoint, "flux" for the Flux pipeline.
+  Switch models when the current checkpoint's style is fundamentally mismatched
+  to the prompt (e.g. a photorealism prompt on a stylised SDXL checkpoint).
+
+retry_loras / inpaint_loras:
+  A list of LoRA objects to inject, each with:
+    "name"           — must match a name listed above exactly
+    "strength_model" — float 0.0–1.5 (defaults to the LoRA's configured strength)
+    "strength_clip"  — float 0.0–1.5 (defaults to the LoRA's configured strength)
+  Omit or pass [] to use no LoRAs.
+  Add LoRAs when the VLM recommends specific style or detail improvements that
+  match a known LoRA's described effect.
+
+────────────────────────────────────────────────────────
 OUTPUT FORMAT
 ────────────────────────────────────────────────────────
 
 Respond with a single JSON object and absolutely nothing else — no markdown
 fences, no preamble, no trailing commentary.
 
-{
-  "decision":      "accept" | "retry" | "inpaint" | "give_up",
-  "reasoning":     "<one or two sentences>",
-  "confidence":    <0.0–1.0>,
-  "retry_prompt":  "<revised full prompt>",           // required if decision == retry
-  "retry_params":  {},                                 // optional workflow param overrides
-  "inpaint_regions": [                                 // required if decision == inpaint
-    {
+{{
+  "decision":        "accept" | "retry" | "inpaint" | "give_up",
+  "reasoning":       "<one or two sentences>",
+  "confidence":      <0.0–1.0>,
+  "retry_prompt":    "<revised full prompt>",           // required if decision == retry
+  "retry_params":    {{}},                               // optional workflow param overrides
+  "retry_model":     "sdxl" | "flux" | "",             // optional model switch on retry
+  "retry_loras":     [],                                // optional LoRA list on retry
+  "inpaint_regions": [                                  // required if decision == inpaint
+    {{
       "description":  "<region, e.g. 'left hand'>",
       "issue":        "<specific defect observed>",
       "correction":   "<what the inpaint should achieve>"
-    }
+    }}
   ],
-  "inpaint_prompt": "<inpaint-specific prompt>"        // required if decision == inpaint
-}
+  "inpaint_prompt":  "<inpaint-specific prompt>",       // required if decision == inpaint
+  "inpaint_model":   "sdxl" | "flux" | "",             // optional model for inpaint pass
+  "inpaint_loras":   []                                 // optional LoRA list for inpaint pass
+}}
 """
+
+
+def _build_model_section(cfg) -> str:  # type: ignore[no-untyped-def]
+    """Build the model/LoRA availability section for the system prompt."""
+    lines: list[str] = []
+
+    models = cfg.models if hasattr(cfg, "models") else {}
+    sdxl_ckpt = (models.get("sdxl") or {}).get("checkpoint", "")
+    flux = models.get("flux") or {}
+    flux_unet = flux.get("unet", "")
+
+    available: list[str] = []
+    if sdxl_ckpt:
+        available.append(f'  sdxl  — SDXL checkpoint: {sdxl_ckpt}')
+    if flux_unet:
+        available.append(f'  flux  — Flux UNet: {flux_unet}')
+
+    if available:
+        lines.append("Available generative models:")
+        lines.extend(available)
+    else:
+        lines.append("Available generative models: (none configured — model_type field will be ignored)")
+
+    loras_cfg = models.get("loras") or {}
+    for model_type in ("sdxl", "flux"):
+        entries = loras_cfg.get(model_type) or []
+        if not entries:
+            continue
+        lines.append(f"\nAvailable LoRAs for {model_type}:")
+        for entry in entries:
+            name = entry.get("name", "")
+            desc = entry.get("description", "")
+            strength = entry.get("default_strength", 1.0)
+            lines.append(f'  "{name}" — {desc} (default strength: {strength})')
+
+    if not any("LoRA" in ln for ln in lines):
+        lines.append("\nAvailable LoRAs: (none configured)")
+
+    return "\n".join(lines)
+
+
+def build_system_prompt(cfg=None) -> str:  # type: ignore[no-untyped-def]
+    """Build the tactical LLM system prompt, injecting model/LoRA availability from config.
+
+    Args:
+        cfg: Config instance from config.load(). If None, uses a placeholder
+             indicating no models are configured.
+
+    Returns:
+        Formatted system prompt string.
+    """
+    if cfg is None:
+        model_section = "Available generative models: (config not provided)"
+    else:
+        model_section = _build_model_section(cfg)
+    return _SYSTEM_PROMPT_BASE.format(model_section=model_section)
+
+
+# Backward-compatible static export populated at import time from config.
+# tactical_llm.py imports this name; it can also call build_system_prompt(cfg)
+# directly for a freshly-built prompt.
+try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from config import load as _load_config
+    SYSTEM_PROMPT = build_system_prompt(_load_config())
+except Exception:
+    SYSTEM_PROMPT = build_system_prompt(None)
 
 
 def _format_vlm(scores: dict) -> str:

@@ -39,10 +39,8 @@ print(cfg.compute.get('tactical_llm',{}).get('n_gpu_layers',-1))
 # All three are slow to initialise; overlapping them saves the most wall-clock time.
 "$AI_IMAGE_ROOT/loop/start_broker.sh" &
 "$COMFYUI/launch.sh" &
-cd "$SCORERS"
-. venv/bin/activate
 if [ -n "$LLM_MODEL_DIR" ] && [ -f "$LLM_MODEL_DIR" ]; then
-    python -m llama_cpp.server \
+    "$SCORERS/venv/bin/python" -m llama_cpp.server \
         --model "$LLM_MODEL_DIR" \
         --n_gpu_layers "$LLM_GPU_LAYERS" \
         --host 0.0.0.0 \
@@ -62,35 +60,28 @@ sleep 10
 sleep 1   # coordinator must bind its Unix socket before other processes start
 
 # Start ComfyUI MQ worker (uses root venv; config.py is at AI_IMAGE_ROOT)
-cd "$AI_IMAGE_ROOT"
-. venv/bin/activate
-python loop/comfyui_worker.py &
+"$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/comfyui_worker.py" &
 "$SCORERS/target/release/router" &
 "$SCORERS/target/release/aggregator" &
 "$SCORERS/target/release/lancedb_manager" &
 
 # Start Python scorers
-cd "$SCORERS"
-. venv/bin/activate
-python clip_scorer.py &
-python artifact_scorer.py &
-python vlm_scorer.py &
+PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/clip_scorer.py" &
+PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/artifact_scorer.py" &
+PYTHONPATH="$AI_IMAGE_ROOT" "$SCORERS/venv/bin/python" "$SCORERS/vlm_scorer.py" &
 
-cd "$AI_IMAGE_ROOT/tactical-llm"
-PYTHONPATH="$AI_IMAGE_ROOT" python tactical_llm.py &
+PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/tactical-llm/tactical_llm.py" &
 
 # Start UI server
-cd "$AI_IMAGE_ROOT/loop/ui"
 UI_PORT=$("$AI_IMAGE_ROOT/venv/bin/python" -c "
 import sys; sys.path.insert(0,'$AI_IMAGE_ROOT')
 from config import load; cfg=load()
 print(cfg.get('ui', default={}).get('port', 7860) if cfg.get('ui') else 7860)
 " 2>/dev/null || echo "7860")
-PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" server.py &
+PYTHONPATH="$AI_IMAGE_ROOT" "$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/ui/server.py" &
 
 # Start dead-letter monitor (root venv; watches pipeline.dead for unrecoverable failures)
-cd "$AI_IMAGE_ROOT"
-"$AI_IMAGE_ROOT/venv/bin/python" loop/monitor.py &
+"$AI_IMAGE_ROOT/venv/bin/python" "$AI_IMAGE_ROOT/loop/monitor.py" &
 
 echo "Loop infrastructure ready"
 echo ""

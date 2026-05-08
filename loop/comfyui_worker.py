@@ -23,6 +23,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
+import copy
+
 import requests
 import stomp
 import websocket
@@ -65,6 +67,216 @@ def _coordinator_call(req: dict) -> dict:
         return json.loads(buf.split(b"\n")[0])
     finally:
         sock.close()
+
+
+def detect_model_type(workflow: dict) -> str:
+    """Infer model type from workflow node classes.
+
+    Returns ``"flux"`` if the workflow contains Flux-specific loader nodes,
+    ``"sdxl"`` if it contains a CheckpointLoaderSimple, or ``"unknown"``
+    if neither is present.
+    """
+    class_types = {node.get("class_type", "") for node in workflow.values()}
+    if "UNETLoader" in class_types or "FluxGuidance" in class_types:
+        return "flux"
+    if "CheckpointLoaderSimple" in class_types:
+        return "sdxl"
+    return "unknown"
+
+
+def _find_node_by_class(workflow: dict, class_type: str) -> str | None:
+    """Return the node ID of the first node matching *class_type*, or None."""
+    for node_id, node in workflow.items():
+        if node.get("class_type") == class_type:
+            return node_id
+    return None
+
+
+def patch_checkpoint(workflow: dict, model_type: str) -> dict:
+    """Substitute checkpoint / UNet / VAE / CLIP filenames from config.
+
+    Reads ``models.sdxl.checkpoint`` or ``models.flux.*`` from config and
+    updates the matching loader nodes in the workflow.  Nodes whose
+    corresponding config value is empty are left unchanged.
+
+    Args:
+        workflow: ComfyUI API-format workflow dict.
+        model_type: ``"sdxl"`` or ``"flux"``.
+
+    Returns:
+        A deep copy of the workflow with loader inputs patched.
+    """
+    workflow = copy.deepcopy(workflow)
+    models = _cfg.models
+
+    if model_type == "sdxl":
+        checkpoint = (models.get("sdxl") or {}).get("checkpoint", "")
+        if checkpoint:
+            for node in workflow.values():
+                if node.get("class_type") == "CheckpointLoaderSimple":
+                    node["inputs"]["ckpt_name"] = checkpoint
+
+    elif model_type == "flux":
+        flux = models.get("flux") or {}
+        for node in workflow.values():
+            ct = node.get("class_type", "")
+            if ct == "UNETLoader" and flux.get("unet"):
+                node["inputs"]["unet_name"] = flux["unet"]
+            elif ct == "VAELoader" and flux.get("vae"):
+                node["inputs"]["vae_name"] = flux["vae"]
+            elif ct == "DualCLIPLoader":
+                if flux.get("clip_l"):
+                    node["inputs"]["clip_name1"] = flux["clip_l"]
+                if flux.get("t5xxl"):
+                    node["inputs"]["clip_name2"] = flux["t5xxl"]
+
+    return workflow
+
+
+def inject_loras(workflow: dict, loras: list[dict], model_type: str) -> dict:
+    """Insert LoraLoader nodes into the workflow graph.
+
+    Finds the model and CLIP source nodes for the given *model_type*, then
+    chains the requested LoRAs between those nodes and all downstream
+    consumers.  Existing nodes that consumed model/CLIP outputs are updated
+    to consume the final LoRA's outputs instead.
+
+    Args:
+        workflow: ComfyUI API-format workflow dict.
+        loras: List of dicts with keys:
+            ``filename``        — LoRA file as it appears in ComfyUI's loras dir
+            ``strength_model``  — float weight applied to the UNet (default 1.0)
+            ``strength_clip``   — float weight applied to CLIP (default 1.0)
+            ``name``            — human label used in node title (optional)
+        model_type: ``"sdxl"`` or ``"flux"``.
+
+    Returns:
+        A deep copy of the workflow with LoRA nodes inserted and upstream
+        references updated.
+    """
+    if not loras:
+        return workflow
+
+    workflow = copy.deepcopy(workflow)
+
+    # Locate the source nodes that provide model and clip outputs.
+    if model_type == "sdxl":
+        model_node_id = _find_node_by_class(workflow, "CheckpointLoaderSimple")
+        if not model_node_id:
+            return workflow
+        clip_node_id = model_node_id
+        model_output_idx = 0
+        clip_output_idx = 1
+    elif model_type == "flux":
+        model_node_id = _find_node_by_class(workflow, "UNETLoader")
+        clip_node_id = _find_node_by_class(workflow, "DualCLIPLoader")
+        if not model_node_id or not clip_node_id:
+            return workflow
+        model_output_idx = 0
+        clip_output_idx = 0
+    else:
+        return workflow
+
+    model_source = (model_node_id, model_output_idx)
+    clip_source = (clip_node_id, clip_output_idx)
+
+    # Compute a starting node ID beyond all existing IDs.
+    max_id = max(
+        (int(k) for k in workflow if k.isdigit()),
+        default=0,
+    )
+
+    new_lora_ids: set[str] = set()
+    current_model = list(model_source)
+    current_clip = list(clip_source)
+
+    for lora in loras:
+        max_id += 1
+        lora_id = str(max_id)
+        new_lora_ids.add(lora_id)
+        strength = lora.get("default_strength", 1.0)
+        workflow[lora_id] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model":          list(current_model),
+                "clip":           list(current_clip),
+                "lora_name":      lora["filename"],
+                "strength_model": lora.get("strength_model", strength),
+                "strength_clip":  lora.get("strength_clip",  strength),
+            },
+            "_meta": {"title": f"LoRA: {lora.get('name', lora['filename'])}"},
+        }
+        current_model = [lora_id, 0]
+        current_clip  = [lora_id, 1]
+
+    # Redirect all pre-existing nodes that consumed the original source outputs.
+    for node_id, node in workflow.items():
+        if node_id in new_lora_ids:
+            continue  # don't touch the LoRA nodes we just added
+        for key, val in node.get("inputs", {}).items():
+            if isinstance(val, list) and len(val) == 2:
+                ref = (val[0], val[1])
+                if ref == model_source:
+                    node["inputs"][key] = list(current_model)
+                elif ref == clip_source:
+                    node["inputs"][key] = list(current_clip)
+
+    return workflow
+
+
+def _resolve_loras(requested: list[dict], model_type: str) -> list[dict]:
+    """Map LLM-chosen LoRA names to their config entries.
+
+    The LLM decision contains ``{"name": "...", "strength_model": 0.8, ...}``.
+    This function looks up the corresponding ``filename`` from config so the
+    workflow patcher has what it needs.
+
+    Unrecognised names are skipped with a warning.
+    """
+    registry = {
+        entry["name"]: entry
+        for entry in (_cfg.models.get("loras") or {}).get(model_type, [])
+        if "name" in entry and "filename" in entry
+    }
+    resolved = []
+    for req in requested:
+        name = req.get("name", "")
+        entry = registry.get(name)
+        if not entry:
+            print(f"[comfyui_worker] WARNING: unknown LoRA '{name}' for {model_type} — skipping")
+            continue
+        resolved.append({
+            **entry,
+            "strength_model": req.get("strength_model", entry.get("default_strength", 1.0)),
+            "strength_clip":  req.get("strength_clip",  entry.get("default_strength", 1.0)),
+        })
+    return resolved
+
+
+def patch_workflow(
+    workflow: dict,
+    model_type: str | None,
+    loras: list[dict] | None,
+) -> dict:
+    """Apply all runtime patches to a ComfyUI workflow.
+
+    Detects model type when *model_type* is ``None`` or ``"auto"``, patches
+    checkpoint / loader node filenames from config, then injects any
+    requested LoRA nodes.
+
+    Args:
+        workflow: ComfyUI API-format workflow dict.
+        model_type: ``"sdxl"``, ``"flux"``, ``"auto"``/``None`` (auto-detect).
+        loras: List of LoRA dicts from the LLM decision (name + strengths).
+
+    Returns:
+        Patched workflow dict (deep copy; original is not modified).
+    """
+    effective_type = model_type or detect_model_type(workflow)
+    workflow = patch_checkpoint(workflow, effective_type)
+    resolved = _resolve_loras(loras or [], effective_type)
+    workflow = inject_loras(workflow, resolved, effective_type)
+    return workflow
 
 
 def submit_workflow(
@@ -187,6 +399,11 @@ class _Listener(stomp.ConnectionListener):
             request = json.loads(frame.body)
             with open(request["workflow_path"]) as f:
                 workflow = json.load(f)
+            workflow = patch_workflow(
+                workflow,
+                request.get("model_type"),
+                request.get("loras"),
+            )
             prompt_id = submit_workflow(workflow, request.get("prompt"))
             wait_for_completion(prompt_id)
             output_path = get_output_path(prompt_id)

@@ -284,6 +284,8 @@ def _publish_retry(
             **(decision.get("retry_params") or {}),
         },
         "prompt":           decision.get("retry_prompt", ""),
+        "model_type":       decision.get("retry_model") or scores.get("model_type", ""),
+        "loras":            decision.get("retry_loras") or [],
     }
     conn.send(
         destination="/queue/loop.request",
@@ -317,6 +319,8 @@ def _publish_inpaint(
         "image_path":      scores.get("image_path"),
         "inpaint_regions": decision.get("inpaint_regions", []),
         "inpaint_prompt":  decision.get("inpaint_prompt", ""),
+        "inpaint_model":   decision.get("inpaint_model", ""),
+        "inpaint_loras":   decision.get("inpaint_loras", []),
         "original_scores": scores,
     }
     conn.send(

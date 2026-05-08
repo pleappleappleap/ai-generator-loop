@@ -7,3 +7,8 @@ rich
 huggingface_hub
 requests
 yq
+openai
+fastapi
+uvicorn[standard]
+httpx
+websocket-client
