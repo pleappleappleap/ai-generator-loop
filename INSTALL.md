@@ -469,18 +469,11 @@ $AI_IMAGE_ROOT/loop/scorers/venv/bin/python $AI_IMAGE_ROOT/loop/monitor.py
 Any message appearing in the monitor output indicates a processing error; the
 log will include the original queue name and message body.
 
-### Rust tests
+### Tests
 
 ```bash
-cd $AI_IMAGE_ROOT/loop/scorers
-~/.cargo/bin/cargo test -p coordinator
-```
-
-### Python tests
-
-```bash
-cd $AI_IMAGE_ROOT/loop/scorers
-venv/bin/pytest tests/ -v
+cd $AI_IMAGE_ROOT
+make test      # all Rust + Python tests
 ```
 
 ---

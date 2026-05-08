@@ -105,8 +105,7 @@ The gallery updates in real time as images are generated and scored.
 ├── INSTALL.md              Full installation guide
 ├── ARCHITECTURE.tex        LaTeX source → ARCHITECTURE.pdf (make doc)
 ├── MESSAGES.md             Message schema contracts for all addresses
-├── config.yaml             Runtime configuration (gitignored)
-├── config.yaml.default     Configuration template
+├── config.yaml.default     Configuration template (cp to config.yaml, then edit)
 ├── config.py               Python config loader
 ├── lancedb_schema.py       LanceDB table definitions (Pydantic)
 ├── menuconfig.py           Interactive TUI configuration editor
@@ -151,15 +150,6 @@ The gallery updates in real time as images are generated and scored.
 ## Tests
 
 ```bash
-# All lints, type checks, Rust tests, and Python tests
-make all
-
-# Rust only (coordinator XA state machine, budget ops, crash recovery)
-cd loop/scorers && cargo test -p coordinator
-
-# Python only (scorers + UI server)
-cd loop/scorers && venv/bin/pytest tests/ -v
-
-# Tactical LLM decisions, retrieval, prompt construction
-cd tactical-llm && ../loop/scorers/venv/bin/pytest tests/ -v
+make test     # all Rust + Python tests
+make all      # tests + lint + typecheck + build
 ```
