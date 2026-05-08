@@ -115,10 +115,15 @@ artemis-broker: $(ARTEMIS_PULL_OK)
 artemis-pull:   $(ARTEMIS_PULL_OK)
 
 $(ARTEMIS_PULL_OK):
-	@command -v docker >/dev/null 2>&1 || { \
-	  echo "ERROR: docker not found. Install Docker Desktop (https://docs.docker.com/get-docker/) first." >&2; \
-	  exit 1; \
-	}
+	@if ! command -v docker >/dev/null 2>&1; then \
+	  if command -v brew >/dev/null 2>&1; then \
+	    echo "==> Installing Docker Desktop via Homebrew..."; \
+	    brew install --cask docker; \
+	  else \
+	    echo "ERROR: docker not found. Install Docker Engine: https://docs.docker.com/get-docker/" >&2; \
+	    exit 1; \
+	  fi; \
+	fi
 	docker pull $(ARTEMIS_IMAGE)
 	@mkdir -p loop
 	@touch $(ARTEMIS_PULL_OK)
