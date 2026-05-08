@@ -141,7 +141,7 @@ $(DOCKER_OK):
 	  _docker_wait; \
 	elif [ "$$(uname -s)" = "Linux" ]; then \
 	  echo "==> Installing Docker Engine via get.docker.com..."; \
-	  curl -fsSL https://get.docker.com | sh; \
+	  wget -qO- https://get.docker.com | sh; \
 	  sudo systemctl enable --now docker; \
 	  sudo usermod -aG docker "$$(id -un)"; \
 	  DOCKER_CMD="sudo docker" _docker_wait; \
@@ -182,7 +182,7 @@ setup: prereqs-system prereqs-python config models build
 prereqs: prereqs-system prereqs-python
 
 # Install system-level packages using the detected package manager.
-# Installs: Python 3.11, yq, Docker (for Artemis), Rust (via rustup).
+# Installs: wget (Linux), Python 3.11, yq, Docker, Rust (via rustup), protoc.
 # LaTeX is optional and only needed for `make doc`.
 prereqs-system: docker-install
 	@PKG=""; \
@@ -207,6 +207,16 @@ prereqs-system: docker-install
 	  esac; \
 	fi; \
 	\
+	echo "==> wget (Linux download tool)"; \
+	if [ "$$PKG" != "homebrew" ] && ! command -v wget >/dev/null 2>&1; then \
+	  case "$$PKG" in \
+	    apt)    sudo apt-get install -y wget ;; \
+	    dnf)    sudo dnf install -y wget ;; \
+	    pacman) sudo pacman -S --noconfirm wget ;; \
+	    zypper) sudo zypper install -y wget ;; \
+	  esac; \
+	fi; \
+	\
 	echo "==> yq"; \
 	if command -v yq >/dev/null 2>&1; then \
 	  echo "    already installed: $$(yq --version)"; \
@@ -216,11 +226,12 @@ prereqs-system: docker-install
 	    apt) \
 	      if command -v snap >/dev/null 2>&1; then sudo snap install yq; \
 	      else \
-	        YQV=$$(curl -s https://api.github.com/repos/mikefarah/yq/releases/latest \
+	        YQV=$$(wget -qO- https://api.github.com/repos/mikefarah/yq/releases/latest \
 	          | grep '"tag_name"' | sed 's/.*"v\([^"]*\)".*/\1/'); \
 	        ARCH=$$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/'); \
-	        sudo curl -L "https://github.com/mikefarah/yq/releases/download/v$${YQV}/yq_linux_$${ARCH}" \
-	          -o /usr/local/bin/yq && sudo chmod +x /usr/local/bin/yq; \
+	        sudo wget -qO /usr/local/bin/yq \
+	          "https://github.com/mikefarah/yq/releases/download/v$${YQV}/yq_linux_$${ARCH}" \
+	          && sudo chmod +x /usr/local/bin/yq; \
 	      fi ;; \
 	    dnf)    sudo dnf install -y yq ;; \
 	    pacman) sudo pacman -S --noconfirm go-yq ;; \
@@ -232,7 +243,10 @@ prereqs-system: docker-install
 	if command -v cargo >/dev/null 2>&1; then \
 	  echo "    already installed: $$(cargo --version)"; \
 	else \
-	  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path; \
+	  case "$$PKG" in \
+	    homebrew) curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path ;; \
+	    *)        wget -qO- https://sh.rustup.rs | sh -s -- -y --no-modify-path ;; \
+	  esac; \
 	  . "$$HOME/.cargo/env"; \
 	fi; \
 	. "$$HOME/.cargo/env" 2>/dev/null || true; \
