@@ -7,6 +7,8 @@ stomp.py
 fastapi
 uvicorn[standard]
 sse-starlette
+starlette-context
+pydantic-settings
 httpx
 open_clip_torch
 torch

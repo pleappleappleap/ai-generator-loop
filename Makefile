@@ -368,18 +368,18 @@ loop/scorers/venv/.installed: loop/scorers/requirements.txt
 	if [ "$$(uname)" = "Darwin" ]; then \
 	  echo "    macOS detected — building with Metal support."; \
 	  CMAKE_ARGS="-DGGML_METAL=on" \
-	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
+	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
 	elif command -v nvcc >/dev/null 2>&1; then \
 	  echo "    NVIDIA CUDA detected — building with CUDA support."; \
 	  CMAKE_ARGS="-DGGML_CUDA=on" \
-	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
+	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
 	elif command -v rocm-smi >/dev/null 2>&1; then \
 	  echo "    AMD ROCm detected — building with HIP support."; \
 	  CMAKE_ARGS="-DGGML_HIPBLAS=on" \
-	    loop/scorers/venv/bin/pip install llama-cpp-python --no-binary llama-cpp-python; \
+	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
 	else \
 	  echo "    No GPU detected — installing CPU-only llama-cpp-python."; \
-	  loop/scorers/venv/bin/pip install llama-cpp-python; \
+	  loop/scorers/venv/bin/pip install "llama-cpp-python[server]"; \
 	fi
 	@touch loop/scorers/venv/.installed
 	@echo "==> Scorers venv ready."
