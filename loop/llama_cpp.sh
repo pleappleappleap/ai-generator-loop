@@ -16,6 +16,8 @@ _resolve() {
     LLM_MODEL="$LLM_DIR/$LLM_FILENAME"
     LLM_GPU_LAYERS=$(yq '.compute.tactical_llm.n_gpu_layers // -1' "$CFG" 2>/dev/null)
     : "${LLM_GPU_LAYERS:=-1}"
+    LLM_CTX=$(yq '.tactical.model.context_length // 8192' "$CFG" 2>/dev/null)
+    : "${LLM_CTX:=8192}"
 }
 
 _start() {
@@ -28,6 +30,7 @@ _start() {
         "$SVENV/bin/python" -m llama_cpp.server \
         --model "$LLM_MODEL" \
         --n_gpu_layers "$LLM_GPU_LAYERS" \
+        --n_ctx "$LLM_CTX" \
         --host 0.0.0.0 \
         --port "$LLM_PORT"
 }
