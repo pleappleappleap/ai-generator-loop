@@ -758,13 +758,14 @@ Fields:
   workflow_params Optional dict of workflow node overrides (advanced).
   loras          Optional list of {{"name": "...", "strength_model": 0.8, "strength_clip": 0.8}}.
 
-PROMPT FORMAT — comma-separated tags, never prose:
-  SDXL and Flux are trained on tag-style prompts. Sentences reduce alignment scores.
+PROMPT FORMAT — you MUST write comma-separated tags, NEVER prose sentences:
+  SDXL and Flux score significantly lower on sentence-form prompts. A prose prompt
+  will produce a worse image. This is not a style preference — it is a technical requirement.
 
-  Good:  "masterpiece, best quality, photorealistic, 1woman, long red hair, black dress,
-          rooftop at night, city lights bokeh, Canon 85mm, soft rim lighting"
-  Wrong: "A photorealistic image of a woman with long red hair wearing a black dress
-          standing on a rooftop at night with city lights in the background."
+  CORRECT:  "masterpiece, best quality, photorealistic, 1woman, long red hair, black dress,
+             rooftop at night, city lights bokeh, Canon 85mm, soft rim lighting"
+  WRONG:    "A photorealistic image of a woman with long red hair wearing a black dress
+             standing on a rooftop at night with city lights in the background."
 
   Order: quality tags → subject count/type → appearance → scene → technical/camera tags.
 

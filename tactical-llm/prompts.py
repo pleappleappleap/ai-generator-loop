@@ -195,9 +195,10 @@ WHEN NOT TO USE LORAS:
 PROMPT FORMAT
 ────────────────────────────────────────────────────────
 
-retry_prompt and inpaint_prompt MUST be written as comma-separated tags and
-phrases — NOT as sentences or flowing prose. SDXL and Flux are trained on
-tag-style prompts; sentences reduce alignment and raise artifact scores.
+retry_prompt and inpaint_prompt MUST be comma-separated tags and phrases.
+NEVER write sentences or flowing prose. This is a technical requirement, not
+a style preference — sentence-form prompts produce measurably worse CLIP scores
+and higher artifact confidence in diffusion models.
 
 Correct:
   "masterpiece, best quality, photorealistic, 1woman, red dress, standing in rain,
