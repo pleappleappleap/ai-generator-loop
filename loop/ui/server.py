@@ -236,14 +236,28 @@ _stomp_conn: stomp.Connection | None = None
 
 
 def _start_stomp(loop: asyncio.AbstractEventLoop) -> None:
+    """Connect to the broker, retrying up to 5 times with a short delay.
+
+    Fast restarts leave a stale client-id registered on the broker; a brief
+    pause between attempts lets the broker clean it up.
+    """
+    import time
     global _stomp_conn
-    _stomp_conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
-    _stomp_conn.set_listener("", _PipelineListener(loop))
-    _stomp_conn.connect(_STOMP_USER, _STOMP_PASS, wait=True,
-                        headers={"client-id": "ui-server"})
-    # Topics — broadcast, no competing consumption.
-    _stomp_conn.subscribe(destination="/topic/loop.events",        id="ui-events",    ack="auto")
-    _stomp_conn.subscribe(destination="/topic/tactical.decisions", id="ui-decisions", ack="auto")
+    for attempt in range(5):
+        try:
+            conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+            conn.set_listener("", _PipelineListener(loop))
+            conn.connect(_STOMP_USER, _STOMP_PASS, wait=True,
+                         headers={"client-id": "ui-server"})
+            conn.subscribe(destination="/topic/loop.events",        id="ui-events",    ack="auto")
+            conn.subscribe(destination="/topic/tactical.decisions", id="ui-decisions", ack="auto")
+            _stomp_conn = conn
+            return
+        except Exception as exc:
+            print(f"[ui/stomp] connect attempt {attempt + 1}/5 failed: {exc}", file=sys.stderr)
+            time.sleep(2)
+    print("[ui/stomp] all connection attempts failed — gallery and STOMP submission unavailable",
+          file=sys.stderr)
 
 
 @app.on_event("startup")
@@ -615,7 +629,11 @@ async def ws_chat(ws: WebSocket) -> None:
             messages.append({"role": "user", "content": user_text})
 
             # Stream from llama.cpp server.
+            # We track how much of assistant_text has been sent to the client.
+            # Once a <GENERATE> block starts, we stop streaming to the client —
+            # the block is processed server-side and the user never sees the raw JSON.
             assistant_text = ""
+            sent_up_to = 0  # byte index into assistant_text of what's been forwarded
             try:
                 async with httpx.AsyncClient(
                     timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
@@ -641,10 +659,17 @@ async def ws_chat(ws: WebSocket) -> None:
                             try:
                                 chunk = json.loads(data_str)
                                 delta = chunk["choices"][0]["delta"].get("content", "")
-                                if delta:
-                                    assistant_text += delta
+                                if not delta:
+                                    continue
+                                assistant_text += delta
+                                # Stream only up to the start of any <GENERATE> block.
+                                gen_pos = assistant_text.find("<GENERATE>")
+                                safe_end = gen_pos if gen_pos != -1 else len(assistant_text)
+                                if safe_end > sent_up_to:
+                                    to_send = assistant_text[sent_up_to:safe_end]
+                                    sent_up_to = safe_end
                                     await ws.send_text(
-                                        json.dumps({"type": "chunk", "text": delta})
+                                        json.dumps({"type": "chunk", "text": to_send})
                                     )
                             except Exception:
                                 continue

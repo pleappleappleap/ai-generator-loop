@@ -7,6 +7,8 @@
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  html, body { height: 100%; width: 100%; }
+
   :root {
     --bg:        #0d0d0d;
     --surface:   #1a1a1a;
@@ -18,8 +20,8 @@
     --up:        #4caf50;
     --down:      #f44336;
     --radius:    6px;
-    --sidebar-w: 260px;
-    --chat-w:    360px;
+    --sidebar-w: 280px;
+    --chat-w:    400px;
   }
 
   body {
@@ -27,6 +29,7 @@
     background: var(--bg);
     color: var(--text);
     height: 100vh;
+    width: 100vw;
     display: flex;
     overflow: hidden;
   }
