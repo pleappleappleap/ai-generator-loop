@@ -155,24 +155,41 @@ STACKING MULTIPLE LORAS:
   beyond that, artifact confidence rises steeply. When combining style + detail
   LoRAs, list the style LoRA first and the detail LoRA second.
 
-SELECTION — MAP VLM SIGNALS TO LORA TYPES:
-  photorealism < 6              → add a realism / photography LoRA
-  anatomical_coherence 5–7      → add a detail / anatomy LoRA at moderate strength
-  anatomical_coherence < 5      → LoRAs will not fix gross structural failures;
-                                   retry with an anatomy-focused prompt revision
-  lighting_consistency < 7      → add a lighting LoRA if available; otherwise
-                                   inject lighting descriptors in the retry prompt
-  interaction_plausibility < 7  → LoRAs rarely fix composition; revise the prompt
-  prompt_adherence < 6          → LoRAs do NOT fix semantic mismatch; revise prompt
+ESCALATION ORDER — BASE CHECKPOINT FIRST:
+  LoRAs are a second-tier escalation, not a first response. The base checkpoint
+  must be given a fair chance before LoRAs are introduced.
+
+  Attempt 0 (session_history empty, sequence_number == 0):
+    First generation. Do not propose LoRAs under any circumstances.
+
+  Attempt 1 (one prior entry in session_history):
+    Retry with a revised prompt and/or retry_params only. No LoRAs.
+    The base checkpoint may produce acceptable results given better prompting.
+
+  Attempt 2+ (two or more prior entries in session_history):
+    LoRAs are now eligible IF:
+      — The same dimension has underperformed across at least two prior attempts, AND
+      — A LoRA is available whose description directly targets that failure mode.
+    If no LoRA addresses the specific failure, continue with prompt revision alone.
+
+SELECTION — MAP VLM SIGNALS TO LORA TYPES (attempt 2+ only):
+  photorealism < 6 across ≥2 attempts     → add a realism / photography LoRA
+  anatomical_coherence 5–7 across ≥2      → add a detail / anatomy LoRA at moderate strength
+  anatomical_coherence < 5                → LoRAs will not fix gross structural failures;
+                                             retry with an anatomy-focused prompt revision
+  lighting_consistency < 7 across ≥2      → add a lighting LoRA if available; otherwise
+                                             inject lighting descriptors in the retry prompt
+  interaction_plausibility < 7            → LoRAs rarely fix composition; revise the prompt
+  prompt_adherence < 6                    → LoRAs do NOT fix semantic mismatch; revise prompt
 
 WHEN NOT TO USE LORAS:
-  artifact_confidence > 0.40    — LoRAs amplify the AI-detection signal. Instead
-                                   lower CFG scale, increase steps, or change
-                                   sampler in retry_params.
-  CLIP score near threshold      — a style LoRA may shift semantic alignment below
-                                   the clip_threshold; prefer prompt revision.
-  Gross compositional failure    — LoRAs adjust style and surface texture, not
-                                   layout, object placement, or scene structure.
+  session_history has fewer than 2 entries — base checkpoint has not had a fair chance
+  artifact_confidence > 0.40              — LoRAs amplify the AI-detection signal; lower
+                                             CFG, increase steps, or change sampler instead
+  CLIP score near threshold               — a style LoRA may shift semantic alignment below
+                                             the clip_threshold; prefer prompt revision
+  Gross compositional failure             — LoRAs adjust style and surface texture, not
+                                             layout, object placement, or scene structure
 
 ────────────────────────────────────────────────────────
 OUTPUT FORMAT
