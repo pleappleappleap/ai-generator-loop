@@ -752,11 +752,21 @@ Format:
 </GENERATE>
 
 Fields:
-  prompt         REQUIRED. The full positive prompt for the image.
+  prompt         REQUIRED. Comma-separated tags — NOT prose sentences (see below).
   workflow       Filename from the available workflows list below. Default: first available.
   model_type     "sdxl", "flux", or "auto" (auto-detects from workflow). Default: "auto".
   workflow_params Optional dict of workflow node overrides (advanced).
   loras          Optional list of {{"name": "...", "strength_model": 0.8, "strength_clip": 0.8}}.
+
+PROMPT FORMAT — comma-separated tags, never prose:
+  SDXL and Flux are trained on tag-style prompts. Sentences reduce alignment scores.
+
+  Good:  "masterpiece, best quality, photorealistic, 1woman, long red hair, black dress,
+          rooftop at night, city lights bokeh, Canon 85mm, soft rim lighting"
+  Wrong: "A photorealistic image of a woman with long red hair wearing a black dress
+          standing on a rooftop at night with city lights in the background."
+
+  Order: quality tags → subject count/type → appearance → scene → technical/camera tags.
 
 Available workflows:
 {workflow_list}

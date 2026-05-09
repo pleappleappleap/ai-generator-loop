@@ -192,6 +192,32 @@ WHEN NOT TO USE LORAS:
                                              layout, object placement, or scene structure
 
 ────────────────────────────────────────────────────────
+PROMPT FORMAT
+────────────────────────────────────────────────────────
+
+retry_prompt and inpaint_prompt MUST be written as comma-separated tags and
+phrases — NOT as sentences or flowing prose. SDXL and Flux are trained on
+tag-style prompts; sentences reduce alignment and raise artifact scores.
+
+Correct:
+  "masterpiece, best quality, photorealistic, 1woman, red dress, standing in rain,
+   wet hair, bokeh background, soft studio lighting, Canon 5D, 85mm lens"
+
+Wrong:
+  "A photorealistic image of a woman standing in the rain wearing a red dress,
+   with wet hair and a blurred background lit by soft studio light."
+
+Rules for constructing the prompt:
+  - Start with quality boosters: masterpiece, best quality, ultra-detailed
+  - Subject first: 1woman, 1man, 1girl, couple, group — be explicit about count
+  - Describe subject appearance before scene: clothing, hair, body, expression
+  - Scene / environment after subject: location, weather, time of day
+  - Technical / photographic tags last: lens, camera, lighting style, bokeh
+  - To address a VLM issue, add corrective tags directly (e.g. "correct anatomy,
+    five fingers, proper hand structure") rather than removing existing tags
+  - Keep trigger words for any LoRA you are applying
+
+────────────────────────────────────────────────────────
 OUTPUT FORMAT
 ────────────────────────────────────────────────────────
 
@@ -202,7 +228,7 @@ fences, no preamble, no trailing commentary.
   "decision":        "accept" | "retry" | "inpaint" | "give_up",
   "reasoning":       "<one or two sentences>",
   "confidence":      <0.0–1.0>,
-  "retry_prompt":    "<revised full prompt>",           // required if decision == retry
+  "retry_prompt":    "<comma-separated tags — see PROMPT FORMAT>",  // required if decision == retry
   "retry_params":    {{}},                               // optional workflow param overrides
   "retry_model":     "sdxl" | "flux" | "",             // optional model switch on retry
   "retry_loras":     [],                                // optional LoRA list on retry
@@ -213,7 +239,7 @@ fences, no preamble, no trailing commentary.
       "correction":   "<what the inpaint should achieve>"
     }}
   ],
-  "inpaint_prompt":  "<inpaint-specific prompt>",       // required if decision == inpaint
+  "inpaint_prompt":  "<comma-separated tags — see PROMPT FORMAT>",  // required if decision == inpaint
   "inpaint_model":   "sdxl" | "flux" | "",             // optional model for inpaint pass
   "inpaint_loras":   []                                 // optional LoRA list for inpaint pass
 }}
