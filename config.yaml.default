@@ -41,14 +41,28 @@ models:
   # ── LoRA registry ─────────────────────────────────────────────────────────
   # Each entry is available to the tactical LLM as a named choice.
   # source: hf:<repo_id>/<filename> | civitai:<model_version_id> | local:<filename>
+  #
+  # trigger_word (optional): if the LoRA requires a trigger word in the prompt,
+  #   set it here. The tactical LLM will include it in retry/inpaint prompts and
+  #   set strength_clip > 0 so the text encoder recognises the concept.
+  #   Omit (or leave blank) for style/detail LoRAs that need no trigger.
   loras:
     sdxl: []
     # Example SDXL LoRA entry:
     # - name: DetailTweaker
     #   filename: detail_tweaker_xl.safetensors
-    #   description: Enhances fine detail and texture sharpness
+    #   description: Enhances fine detail and texture sharpness in skin, fabric, and surfaces
     #   source: civitai:135867
     #   default_strength: 0.7
+    #   # trigger_word: ""   # omit — no trigger needed
+
+    # Example SDXL LoRA with trigger word:
+    # - name: PerfectHands
+    #   filename: perfect_hands_v2.safetensors
+    #   description: Corrects common anatomical hand errors (extra fingers, fused joints)
+    #   source: civitai:198540
+    #   default_strength: 0.8
+    #   trigger_word: "perfect hands"
 
     flux: []
     # Example Flux LoRA entry:
@@ -57,6 +71,7 @@ models:
     #   description: Improves photorealism and skin texture for Flux
     #   source: hf:XLabs-AI/flux-RealismLora/flux_realism_lora.safetensors
     #   default_strength: 0.8
+    #   # trigger_word: ""   # omit — no trigger needed
 
 compute:
   # Per-component compute target configuration.

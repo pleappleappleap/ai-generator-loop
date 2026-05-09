@@ -26,7 +26,7 @@ before parsing. The thinking budget is separate from ``max_tokens``; see
 ``tactical.model.max_tokens_thinking`` in ``config.yaml``.
 
 Typical token budget:
-    System prompt:         ~550 tokens
+    System prompt:         ~900 tokens
     Decision prompt:       ~300–600 tokens (scales with history depth)
     Thinking block:        0–2000 tokens (thinking mode only)
     Response:              ≤512 tokens (configured via tactical.model.max_tokens)
@@ -115,17 +115,64 @@ or add / change LoRAs to address the identified failure mode.
 retry_model / inpaint_model:
   Omit (or use "") to keep the current model.
   Use "sdxl" for the SDXL checkpoint, "flux" for the Flux pipeline.
-  Switch models when the current checkpoint's style is fundamentally mismatched
-  to the prompt (e.g. a photorealism prompt on a stylised SDXL checkpoint).
+  Switch models only when the checkpoint's style is fundamentally mismatched to
+  the prompt (e.g. a photorealistic portrait prompt on a stylised anime checkpoint).
 
 retry_loras / inpaint_loras:
   A list of LoRA objects to inject, each with:
-    "name"           — must match a name listed above exactly
-    "strength_model" — float 0.0–1.5 (defaults to the LoRA's configured strength)
-    "strength_clip"  — float 0.0–1.5 (defaults to the LoRA's configured strength)
+    "name"           — must exactly match a name from the available LoRA list above
+    "strength_model" — float 0.0–1.5; UNet (visual) influence
+    "strength_clip"  — float 0.0–1.5; CLIP text-encoder (semantic) influence
   Omit or pass [] to use no LoRAs.
-  Add LoRAs when the VLM recommends specific style or detail improvements that
-  match a known LoRA's described effect.
+
+WHAT strength_model AND strength_clip DO:
+  strength_model shifts the UNet's latent representation — visual style, texture,
+  fine detail. This is the primary lever for most LoRAs.
+
+  strength_clip shifts the CLIP text encoder — how strongly the LoRA's style
+  concept or trigger word is associated with the prompt tokens.
+
+  Style / enhancement LoRAs (detail, realism, texture): use strength_model > 0,
+  and strength_clip = 0.0 unless the LoRA has a required trigger word in the prompt.
+
+  Concept / character LoRAs with trigger words: set strength_clip > 0 so the
+  encoder recognises the trigger; typically strength_clip ≈ strength_model.
+
+STRENGTH CALIBRATION:
+  0.0          — no effect; do not include the LoRA at all
+  0.3–0.6      — subtle nudge; use when the image is mostly acceptable and you want
+                 a minor style adjustment without risking artifact degradation
+  0.7–0.9      — moderate; typical working range for most style LoRAs
+  1.0          — full designed effect; use as the starting point when the LoRA
+                 description directly matches the required correction
+  > 1.0        — amplified; risks colour overexposure, style bleeding, and raised
+                 artifact confidence. Cap at 1.3. Only use when the base image
+                 dramatically underperforms on the targeted dimension.
+
+STACKING MULTIPLE LORAS:
+  LoRAs are applied as a chain in the order listed; each modifies the model/CLIP
+  outputs of the previous. Keep the SUM of all strength_model values ≤ 1.5 —
+  beyond that, artifact confidence rises steeply. When combining style + detail
+  LoRAs, list the style LoRA first and the detail LoRA second.
+
+SELECTION — MAP VLM SIGNALS TO LORA TYPES:
+  photorealism < 6              → add a realism / photography LoRA
+  anatomical_coherence 5–7      → add a detail / anatomy LoRA at moderate strength
+  anatomical_coherence < 5      → LoRAs will not fix gross structural failures;
+                                   retry with an anatomy-focused prompt revision
+  lighting_consistency < 7      → add a lighting LoRA if available; otherwise
+                                   inject lighting descriptors in the retry prompt
+  interaction_plausibility < 7  → LoRAs rarely fix composition; revise the prompt
+  prompt_adherence < 6          → LoRAs do NOT fix semantic mismatch; revise prompt
+
+WHEN NOT TO USE LORAS:
+  artifact_confidence > 0.40    — LoRAs amplify the AI-detection signal. Instead
+                                   lower CFG scale, increase steps, or change
+                                   sampler in retry_params.
+  CLIP score near threshold      — a style LoRA may shift semantic alignment below
+                                   the clip_threshold; prefer prompt revision.
+  Gross compositional failure    — LoRAs adjust style and surface texture, not
+                                   layout, object placement, or scene structure.
 
 ────────────────────────────────────────────────────────
 OUTPUT FORMAT
@@ -178,18 +225,25 @@ def _build_model_section(cfg) -> str:  # type: ignore[no-untyped-def]
         lines.append("Available generative models: (none configured — model_type field will be ignored)")
 
     loras_cfg = models.get("loras") or {}
+    has_loras = False
     for model_type in ("sdxl", "flux"):
         entries = loras_cfg.get(model_type) or []
         if not entries:
             continue
+        has_loras = True
         lines.append(f"\nAvailable LoRAs for {model_type}:")
         for entry in entries:
-            name = entry.get("name", "")
-            desc = entry.get("description", "")
+            name     = entry.get("name", "")
+            desc     = entry.get("description", "")
             strength = entry.get("default_strength", 1.0)
-            lines.append(f'  "{name}" — {desc} (default strength: {strength})')
+            trigger  = entry.get("trigger_word", "")
+            trigger_str = f'  trigger_word: "{trigger}"' if trigger else "  no trigger word required"
+            lines.append(f'  "{name}"')
+            lines.append(f'    description:     {desc}')
+            lines.append(f'    default_strength: {strength}')
+            lines.append(f'    {trigger_str}')
 
-    if not any("LoRA" in ln for ln in lines):
+    if not has_loras:
         lines.append("\nAvailable LoRAs: (none configured)")
 
     return "\n".join(lines)
