@@ -6,6 +6,7 @@ openai
 stomp.py
 fastapi
 uvicorn[standard]
+sse-starlette
 httpx
 open_clip_torch
 torch

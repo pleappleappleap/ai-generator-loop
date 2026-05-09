@@ -33,7 +33,7 @@ from urllib.parse import urlparse
 
 import stomp
 from llama_cpp import Llama
-from llama_cpp.llama_chat_format import Qwen2VLChatHandler
+from llama_cpp.llama_chat_format import Qwen25VLChatHandler
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from config import load as _load_config  # noqa: E402
@@ -206,7 +206,7 @@ def main() -> None:
     """
     global llm
     model_dir = Path(_vlm_cfg["dir"])
-    chat_handler = Qwen2VLChatHandler(
+    chat_handler = Qwen25VLChatHandler(
         clip_model_path=str(model_dir / _vlm_cfg["mmproj_filename"])
     )
     llm = Llama(
