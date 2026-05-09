@@ -102,11 +102,25 @@ _image_paths: dict[str, str] = {}
 
 _session_credentials: dict[str, dict[str, str]] = {}
 
+# Per-conversation workflow state (workflow_id + run_id + workflow_path).
+# Lets the LLM submit multiple generations in one conversation without
+# creating a new workflow object each time.
+_conversation_workflows: dict[str, dict] = {}
+
 # Regex to detect the structured download-trigger block the LLM emits.
 _DOWNLOAD_RE = re.compile(
     r"<DOWNLOAD_MODELS>(.*?)</DOWNLOAD_MODELS>",
     re.DOTALL,
 )
+
+# Regex to detect the autonomous generation trigger block the LLM emits.
+_GENERATE_RE = re.compile(
+    r"<GENERATE>(.*?)</GENERATE>",
+    re.DOTALL,
+)
+
+# Workflows directory — JSON files here are the selectable pipeline workflows.
+_WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
 
 
 # ── Coordinator socket ────────────────────────────────────────────────────────
@@ -448,6 +462,89 @@ async def _run_download(conversation_id: str) -> str:
         return f"Download failed (exit {proc.returncode}):\n```\n{err}\n```"
 
 
+# ── Generation helper ─────────────────────────────────────────────────────────
+
+
+def _list_workflows() -> list[str]:
+    """Return sorted list of workflow filenames in the workflows directory."""
+    if not _WORKFLOWS_DIR.exists():
+        return []
+    return sorted(p.name for p in _WORKFLOWS_DIR.glob("*.json"))
+
+
+async def _handle_generate(payload: dict, conversation_id: str) -> str:
+    """Create/reuse a workflow for this conversation and submit a generation request.
+
+    Called from ws_chat after the LLM emits a <GENERATE> block.
+    Returns a short status message to append to the chat.
+    """
+    prompt = payload.get("prompt", "").strip()
+    if not prompt:
+        return "⚠️ GENERATE block missing required `prompt` field."
+
+    workflow_name = payload.get("workflow", "")
+    if not workflow_name:
+        available = _list_workflows()
+        if not available:
+            return "⚠️ No workflows found in loop/workflows/. Add a workflow JSON first."
+        workflow_name = available[0]
+
+    workflow_path = str(_WORKFLOWS_DIR / workflow_name)
+    if not Path(workflow_path).exists():
+        return f"⚠️ Workflow `{workflow_name}` not found in loop/workflows/."
+
+    # Reuse an existing workflow for this conversation if the workflow file matches.
+    state = _conversation_workflows.get(conversation_id)
+    if not state or state.get("workflow_path") != workflow_path:
+        create_resp = _coordinator_call({
+            "op":              "WorkflowCreate",
+            "conversation_id": conversation_id,
+            "name":            payload.get("name") or "Chat generation",
+            "workflow_path":   workflow_path,
+            "description":     payload.get("description") or "",
+            "budget_policy":   "fresh",
+            "max_retries":     3,
+            "max_inpaints":    2,
+        })
+        if not create_resp.get("ok"):
+            return f"⚠️ Coordinator error: {create_resp.get('error', 'unknown')}"
+
+        workflow_id = create_resp["workflow_id"]
+        resume_resp = _coordinator_call({"op": "WorkflowResume", "workflow_id": workflow_id})
+        if not resume_resp.get("ok"):
+            return f"⚠️ Coordinator error creating run: {resume_resp.get('error', 'unknown')}"
+
+        state = {
+            "workflow_id":   workflow_id,
+            "run_id":        resume_resp["run_id"],
+            "workflow_path": workflow_path,
+        }
+        _conversation_workflows[conversation_id] = state
+
+    image_uuid = str(_uuid_mod.uuid4())
+    request_msg = {
+        "image_uuid":      image_uuid,
+        "session_uuid":    state["run_id"],
+        "sequence_number": 0,
+        "workflow_path":   workflow_path,
+        "workflow_id":     state["workflow_id"],
+        "conversation_id": conversation_id,
+        "prompt":          prompt,
+        "model_type":      payload.get("model_type", "auto"),
+        "workflow_params": payload.get("workflow_params") or {},
+        "loras":           payload.get("loras") or [],
+    }
+
+    if _stomp_conn and _stomp_conn.is_connected():
+        _stomp_conn.send(
+            destination="/queue/loop.request",
+            body=json.dumps(request_msg),
+            headers={"persistent": "true"},
+        )
+        return f"🎨 Generation submitted — watching for results in the gallery."
+    return "⚠️ STOMP not connected — cannot submit generation request."
+
+
 # ── Gallery WebSocket ──────────────────────────────────────────────────────────
 
 
@@ -561,17 +658,30 @@ async def ws_chat(ws: WebSocket) -> None:
             except Exception as exc:
                 await ws.send_text(json.dumps({"type": "error", "text": str(exc)}))
 
+            # Intercept <GENERATE> block — strip before persisting, submit async.
+            generate_task: asyncio.Task | None = None
+            gen_match = _GENERATE_RE.search(assistant_text)
+            if gen_match:
+                try:
+                    gen_payload = json.loads(gen_match.group(1))
+                except Exception:
+                    gen_payload = {}
+                assistant_text = _GENERATE_RE.sub("", assistant_text).strip()
+                generate_task = asyncio.create_task(
+                    _handle_generate(gen_payload, conversation_id)
+                )
+
             # Intercept credential / download trigger block before persisting.
             download_task: asyncio.Task | None = None
-            match = _DOWNLOAD_RE.search(assistant_text)
-            if match:
+            dl_match = _DOWNLOAD_RE.search(assistant_text)
+            if dl_match:
                 try:
-                    payload = json.loads(match.group(1))
+                    dl_payload = json.loads(dl_match.group(1))
                     creds: dict[str, str] = {}
-                    if payload.get("hf_token"):
-                        creds["hf_token"] = payload["hf_token"]
-                    if payload.get("civitai_token"):
-                        creds["civitai_token"] = payload["civitai_token"]
+                    if dl_payload.get("hf_token"):
+                        creds["hf_token"] = dl_payload["hf_token"]
+                    if dl_payload.get("civitai_token"):
+                        creds["civitai_token"] = dl_payload["civitai_token"]
                     if creds:
                         _session_credentials[conversation_id] = creds
                 except Exception:
@@ -591,6 +701,12 @@ async def ws_chat(ws: WebSocket) -> None:
                     "content":         assistant_text,
                 })
 
+            # Await generate task and push result as a follow-up message.
+            if generate_task is not None:
+                gen_result = await generate_task
+                await ws.send_text(json.dumps({"type": "chunk", "text": gen_result}))
+                await ws.send_text(json.dumps({"type": "done"}))
+
             # After the LLM response is sent, await the download and push result.
             if download_task is not None:
                 await ws.send_text(json.dumps({
@@ -605,23 +721,61 @@ async def ws_chat(ws: WebSocket) -> None:
         pass
 
 
-_CHAT_SYSTEM_PROMPT = """\
-You are the creative director assistant for an autonomous AI image generation pipeline
-supporting both SDXL and Flux generative models with optional LoRA augmentation.
+def _build_system_prompt() -> str:
+    available_workflows = _list_workflows()
+    workflow_list = (
+        "\n".join(f"  - {w}" for w in available_workflows)
+        if available_workflows
+        else "  (none yet — add JSON files to loop/workflows/)"
+    )
+    return f"""\
+You are the creative director for an autonomous AI image generation pipeline running SDXL
+and Flux generative models with optional LoRA augmentation on a Mac Studio M3 Ultra.
 
-You help the user refine their creative vision: discussing subjects, aesthetics, lighting,
-composition, workflow parameters, LoRA selection, model choice, and how to guide the
-pipeline toward the desired output.
+You DIRECTLY CONTROL the pipeline. When the user wants an image generated — or when you
+have gathered enough creative detail to proceed — emit a <GENERATE> block to submit the job.
+Do NOT tell the user to run commands. Do NOT ask them to click buttons. Just generate.
 
-The pipeline runs scorers (CLIP, artifact detection, VLM) and a tactical LLM that makes
-accept/retry/inpaint decisions based on scorer results. You can advise on prompts, settings,
-model selection, LoRA choices, and workflows likely to perform well.
+═══ HOW TO GENERATE ════════════════════════════════════════════════════════════════════
+Emit exactly one <GENERATE> block anywhere in your response. The server intercepts it,
+strips it from the visible text, submits the job, and appends a status line.
 
-The model is Soar-qwen-72b-abliterated — uncensored with no content restrictions. Assist with
-any creative direction the user describes, including mature or explicit themes.
+Format:
+<GENERATE>
+{{
+  "prompt": "full positive prompt — detailed, specific, high quality descriptors",
+  "workflow": "sdxl_base.json",
+  "model_type": "sdxl",
+  "workflow_params": {{}},
+  "loras": []
+}}
+</GENERATE>
 
-Keep responses focused and actionable.
+Fields:
+  prompt         REQUIRED. The full positive prompt for the image.
+  workflow       Filename from the available workflows list below. Default: first available.
+  model_type     "sdxl", "flux", or "auto" (auto-detects from workflow). Default: "auto".
+  workflow_params Optional dict of workflow node overrides (advanced).
+  loras          Optional list of {{"name": "...", "strength_model": 0.8, "strength_clip": 0.8}}.
+
+Available workflows:
+{workflow_list}
+
+═══ PIPELINE OVERVIEW ══════════════════════════════════════════════════════════════════
+The pipeline scores each generated image with CLIP, an artifact detector, and a VLM
+(Qwen3-VL-8B-abliterated), then a tactical LLM (Soar-qwen-72b-abliterated) decides
+accept / retry / inpaint. Results appear in the gallery in real time.
+
+═══ CONTENT POLICY ═════════════════════════════════════════════════════════════════════
+All models are abliterated — no content restrictions. Assist with any creative direction
+including mature and explicit themes. Be direct and collaborative.
+
+When you have enough to work with, generate immediately. Ask only if a critical detail
+is genuinely missing. Keep responses concise.
 """
+
+
+_CHAT_SYSTEM_PROMPT = _build_system_prompt()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
