@@ -520,7 +520,9 @@ async def ws_chat(ws: WebSocket) -> None:
             # Stream from llama.cpp server.
             assistant_text = ""
             try:
-                async with httpx.AsyncClient(timeout=120.0) as client:
+                async with httpx.AsyncClient(
+                    timeout=httpx.Timeout(connect=10.0, read=None, write=10.0, pool=10.0)
+                ) as client:
                     async with client.stream(
                         "POST",
                         f"{_LLM_SERVER_URL}/chat/completions",
@@ -551,11 +553,8 @@ async def ws_chat(ws: WebSocket) -> None:
                                 continue
             except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
                 msg_text = (
-                    f"⚠️ Cannot reach the LLM server at **{_LLM_SERVER_URL}**.\n\n"
-                    "The tactical LLM model is not running. This is usually because "
-                    "the model file hasn't been downloaded yet.\n\n"
-                    "To download models, tell me which models you need and I'll walk "
-                    "you through providing your HuggingFace and/or Civitai credentials."
+                    f"⚠️ Cannot reach the LLM server at **{_LLM_SERVER_URL}**. "
+                    "Run `./loop/llama_cpp.sh start` to start it."
                 )
                 await ws.send_text(json.dumps({"type": "chunk", "text": msg_text}))
                 assistant_text = msg_text
