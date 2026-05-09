@@ -71,8 +71,32 @@
     padding: 8px 0;
   }
 
+  /* Conversation headers */
+  .conv-header {
+    padding: 8px 12px 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    user-select: none;
+    border-top: 1px solid var(--border);
+  }
+  .conv-header:first-child { border-top: none; }
+  .conv-header:hover { color: var(--text); }
+  .conv-header.active-conv { color: var(--accent); }
+  .conv-arrow { font-size: 8px; transition: transform 0.15s; display: inline-block; }
+  .conv-header.collapsed .conv-arrow { transform: rotate(-90deg); }
+  .conv-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .conv-workflows { padding-left: 10px; }
+
   .wf-item {
-    padding: 8px 12px;
+    padding: 6px 12px;
     cursor: pointer;
     border-left: 3px solid transparent;
     font-size: 12px;
@@ -456,19 +480,24 @@
 <script>
 // ── State ──────────────────────────────────────────────────────────────────────
 const state = {
-  conversationId: null,
+  // conversations: [{ conversation_id, name, expanded, workflows: [{workflow_id, name, workflow_path, run_id, conversation_id}] }]
+  conversations:  [],
+  activeConvId:   null,
   activeWorkflow: null,  // { workflow_id, run_id, name, workflow_path, conversation_id }
-  workflows: [],         // [{ workflow_id, name, conversation_id, workflow_path, run_id }]
-  images: {},            // workflow_id → [{ image_uuid, verdict, rating, run_id }]
-  chatWs: null,
-  galleryWs: null,
+  images:         {},    // workflow_id → [{ image_uuid, verdict, rating, run_id }]
+  chatWs:         null,
+  galleryWs:      null,
 };
+
+function activeConv() {
+  return state.conversations.find(c => c.conversation_id === state.activeConvId) || null;
+}
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 function saveState() {
   try {
-    localStorage.setItem('ai_conv_id',    state.conversationId || '');
-    localStorage.setItem('ai_workflows',  JSON.stringify(state.workflows));
+    localStorage.setItem('ai_conversations', JSON.stringify(state.conversations));
+    localStorage.setItem('ai_active_conv',   state.activeConvId || '');
     if (state.activeWorkflow) {
       localStorage.setItem('ai_active_wf', JSON.stringify(state.activeWorkflow));
     } else {
@@ -479,12 +508,12 @@ function saveState() {
 
 function restoreState() {
   try {
-    const cid = localStorage.getItem('ai_conv_id');
-    const wfs = localStorage.getItem('ai_workflows');
-    const awf = localStorage.getItem('ai_active_wf');
-    if (cid) state.conversationId = cid;
-    if (wfs) try { state.workflows = JSON.parse(wfs); } catch {}
-    if (awf) try { state.activeWorkflow = JSON.parse(awf); } catch {}
+    const convs = localStorage.getItem('ai_conversations');
+    const acid  = localStorage.getItem('ai_active_conv');
+    const awf   = localStorage.getItem('ai_active_wf');
+    if (convs) try { state.conversations = JSON.parse(convs); } catch {}
+    if (acid)  state.activeConvId = acid || null;
+    if (awf)   try { state.activeWorkflow = JSON.parse(awf); } catch {}
   } catch {}
 }
 
@@ -511,7 +540,7 @@ function setLoading(btnId, loading, label) {
 }
 
 function updateChatEnabled() {
-  const enabled = Boolean(state.conversationId);
+  const enabled = Boolean(state.activeConvId);
   document.getElementById('btn-send').disabled = !enabled;
   document.getElementById('chat-input').placeholder = enabled
     ? 'Describe your vision…'
@@ -672,31 +701,81 @@ async function submitFeedback(img, rating, card) {
   status('Feedback recorded');
 }
 
-// ── Workflow sidebar ───────────────────────────────────────────────────────────
-function renderWorkflowList() {
+// ── Sidebar (conversations + workflows) ───────────────────────────────────────
+function renderSidebar() {
   const list = document.getElementById('workflow-list');
   list.innerHTML = '';
-  state.workflows.forEach(wf => {
-    const item = document.createElement('div');
-    item.className = 'wf-item' + (state.activeWorkflow?.workflow_id === wf.workflow_id ? ' active' : '');
-    item.innerHTML = `<div class="wf-name">${escHtml(wf.name)}</div><div class="wf-meta">${wf.workflow_id.slice(0, 8)}…</div>`;
-    item.onclick = () => selectWorkflow(wf);
-    list.appendChild(item);
+  state.conversations.forEach(conv => {
+    const isActive = conv.conversation_id === state.activeConvId;
+    const expanded = conv.expanded !== false;
+
+    const header = document.createElement('div');
+    header.className = 'conv-header' + (isActive ? ' active-conv' : '') + (expanded ? '' : ' collapsed');
+    header.innerHTML = `<span class="conv-arrow">▼</span><span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>`;
+    header.onclick = () => {
+      if (isActive) {
+        conv.expanded = !expanded;
+        saveState();
+        renderSidebar();
+      } else {
+        switchConversation(conv.conversation_id);
+      }
+    };
+    list.appendChild(header);
+
+    if (expanded) {
+      const wfContainer = document.createElement('div');
+      wfContainer.className = 'conv-workflows';
+      (conv.workflows || []).forEach(wf => {
+        const item = document.createElement('div');
+        item.className = 'wf-item' + (state.activeWorkflow?.workflow_id === wf.workflow_id ? ' active' : '');
+        item.innerHTML = `<div class="wf-name">${escHtml(wf.name)}</div><div class="wf-meta">${wf.workflow_id.slice(0, 8)}…</div>`;
+        item.onclick = (e) => { e.stopPropagation(); selectWorkflow(wf); };
+        wfContainer.appendChild(item);
+      });
+      list.appendChild(wfContainer);
+    }
   });
 }
 
+function switchConversation(convId) {
+  const conv = state.conversations.find(c => c.conversation_id === convId);
+  if (!conv) return;
+  state.activeConvId = convId;
+  conv.expanded = true;
+  // Clear active workflow if it belongs to a different conversation.
+  if (state.activeWorkflow?.conversation_id !== convId) {
+    state.activeWorkflow = null;
+    document.getElementById('gallery-title').textContent = 'Select a workflow';
+    document.getElementById('btn-start-run').disabled = true;
+    document.getElementById('gallery-grid').innerHTML = '';
+  }
+  document.getElementById('chat-messages').innerHTML =
+    `<div class="chat-msg system">Switched to "${escHtml(conv.name || 'Untitled')}".</div>`;
+  updateChatEnabled();
+  saveState();
+  renderSidebar();
+}
+
 async function selectWorkflow(wf) {
+  // Switch to this workflow's conversation if needed.
+  if (wf.conversation_id && wf.conversation_id !== state.activeConvId) {
+    state.activeConvId = wf.conversation_id;
+    const conv = state.conversations.find(c => c.conversation_id === wf.conversation_id);
+    if (conv) conv.expanded = true;
+  }
+
   state.activeWorkflow = { ...wf };
   document.getElementById('gallery-title').textContent = wf.name;
   document.getElementById('btn-start-run').disabled = true;
-  renderWorkflowList();
+  renderSidebar();
   renderGallery();
 
   // Restore chat history from the server.
-  if (state.conversationId && wf.workflow_id) {
+  if (state.activeConvId && wf.workflow_id) {
     try {
       const hist = await api('GET',
-        `/history?conversation_id=${state.conversationId}&workflow_id=${wf.workflow_id}&limit=30`);
+        `/history?conversation_id=${state.activeConvId}&workflow_id=${wf.workflow_id}&limit=30`);
       if (hist.chat?.length) {
         const msgs = document.getElementById('chat-messages');
         msgs.innerHTML = '';
@@ -705,7 +784,7 @@ async function selectWorkflow(wf) {
     } catch {}
   }
 
-  // Auto-resume if no run_id — gives a fresh session_uuid for this generation run.
+  // Auto-resume if no run_id.
   if (!state.activeWorkflow.run_id) {
     await _resumeActiveWorkflow();
   } else {
@@ -774,7 +853,7 @@ function sendChat(text) {
   document.getElementById('chat-input').disabled = true;
 
   state.chatWs.send(JSON.stringify({
-    conversation_id: state.conversationId || '',
+    conversation_id: state.activeConvId || '',
     workflow_id:     state.activeWorkflow?.workflow_id || null,
     message:         text,
   }));
@@ -792,16 +871,23 @@ document.getElementById('btn-new-session').onclick = () => {
 document.getElementById('modal-session-cancel').onclick = () => hideModal('modal-session');
 document.getElementById('modal-session-ok').onclick = async () => {
   setLoading('modal-session-ok', true, 'Create');
-  const name = document.getElementById('session-name').value.trim() || undefined;
+  const convName = document.getElementById('session-name').value.trim()
+    || `Conversation ${state.conversations.length + 1}`;
   try {
-    const resp = await api('POST', '/session/start', { name });
+    const resp = await api('POST', '/session/start', { name: convName });
     if (resp.ok !== false) {
-      state.conversationId = resp.conversation_id;
-      state.workflows = [];
-      state.images = {};
+      // Collapse all existing conversations, add the new one at the top.
+      state.conversations.forEach(c => { c.expanded = false; });
+      state.conversations.unshift({
+        conversation_id: resp.conversation_id,
+        name:            convName,
+        expanded:        true,
+        workflows:       [],
+      });
+      state.activeConvId  = resp.conversation_id;
       state.activeWorkflow = null;
       saveState();
-      renderWorkflowList();
+      renderSidebar();
       renderGallery();
       document.getElementById('gallery-title').textContent = 'Select a workflow';
       document.getElementById('btn-start-run').disabled = true;
@@ -822,7 +908,7 @@ document.getElementById('modal-session-ok').onclick = async () => {
 
 // Workflow modal
 document.getElementById('btn-new-workflow').onclick = () => {
-  if (!state.conversationId) { status('Create a conversation first'); return; }
+  if (!state.activeConvId) { status('Create a conversation first'); return; }
   document.getElementById('wf-name').value = '';
   document.getElementById('wf-path').value = '';
   document.getElementById('wf-desc').value = '';
@@ -835,7 +921,7 @@ document.getElementById('modal-wf-ok').onclick = async () => {
   setLoading('modal-wf-ok', true, 'Create');
   try {
     const resp = await api('POST', '/workflow/new', {
-      conversation_id: state.conversationId,
+      conversation_id: state.activeConvId,
       name:            wfName,
       workflow_path:   wfPath,
       description:     document.getElementById('wf-desc').value.trim() || undefined,
@@ -847,13 +933,14 @@ document.getElementById('modal-wf-ok').onclick = async () => {
       const wf = {
         workflow_id:     resp.workflow_id,
         name:            wfName,
-        conversation_id: state.conversationId,
+        conversation_id: state.activeConvId,
         workflow_path:   wfPath,
         run_id:          resp.run_id,
       };
-      state.workflows.unshift(wf);
+      const conv = activeConv();
+      if (conv) conv.workflows.unshift(wf);
       saveState();
-      renderWorkflowList();
+      renderSidebar();
       selectWorkflow(wf);
       status('Workflow created');
     } else {
@@ -892,7 +979,7 @@ document.getElementById('modal-gen-ok').onclick = async () => {
     const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
       prompt,
       run_id:          wf.run_id,
-      conversation_id: wf.conversation_id || state.conversationId || '',
+      conversation_id: wf.conversation_id || state.activeConvId || '',
       workflow_path:   wf.workflow_path   || '',
     });
     if (resp.ok) {
@@ -930,11 +1017,10 @@ document.getElementById('chat-input').addEventListener('keydown', (e) => {
 
 // ── Init ───────────────────────────────────────────────────────────────────────
 restoreState();
-renderWorkflowList();
+renderSidebar();
 updateChatEnabled();
 
 if (state.activeWorkflow) {
-  // Re-select the previously active workflow; auto-resumes if run_id is absent.
   document.getElementById('gallery-title').textContent = state.activeWorkflow.name;
   selectWorkflow(state.activeWorkflow);
 }
