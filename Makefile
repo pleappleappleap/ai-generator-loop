@@ -32,9 +32,11 @@ typecheck:
 test:
 	$(MAKE) -C loop test
 	$(MAKE) -C tactical-llm test
+	$(MAKE) -C pipeline test
 
 build:
 	$(MAKE) -C loop build
+	$(MAKE) -C pipeline
 
 format:
 	$(MAKE) -C loop format
@@ -53,6 +55,7 @@ clean:
 	rm -rf __pycache__
 	$(MAKE) -C loop clean
 	$(MAKE) -C tactical-llm clean
+	$(MAKE) -C pipeline clean
 
 # Auto-downloaded scorer model directories are declared in .gitignore.
 # distclean reads that file directly — no git command required — so adding a
