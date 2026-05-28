@@ -1,30 +1,37 @@
-import json
 from unittest.mock import MagicMock, patch
 
 import pytest
-import stomp
+import transformers
 
 # Block heavy model constructors before any scorer module is imported.
-# artifact_scorer and vlm_scorer instantiate models at module level; without
-# these patches the import itself tries to download / load model weights.
+# Modules instantiate models at the top level; without these patches the
+# import itself tries to download / load weights.
 #
-# transformers uses _LazyModule which makes patch("transformers.pipeline")
-# ineffective — eager import + direct assignment is required.
-import transformers  # noqa: E402
-
+# transformers uses _LazyModule so patch("transformers.pipeline") is
+# ineffective — eager import + direct attribute assignment is required.
 transformers.pipeline = MagicMock()
 patch("llama_cpp.Llama", MagicMock()).start()
+patch("llama_cpp.llama_chat_format.Qwen25VLChatHandler", MagicMock()).start()
+patch("open_clip.create_model_and_transforms", return_value=(MagicMock(), None, MagicMock())).start()
+patch("open_clip.get_tokenizer", return_value=MagicMock()).start()
 
 
-@pytest.fixture
-def mock_conn():
-    """Mock STOMP connection."""
-    return MagicMock(spec=stomp.Connection)
+@pytest.fixture(scope="module")
+def clip_client():
+    from fastapi.testclient import TestClient
+    from clip_scorer import app
+    return TestClient(app)
 
 
-def make_frame(sub_id: str, msg_id: str, body: dict) -> MagicMock:
-    """Build a mock stomp.utils.Frame with the given subscription and body."""
-    frame = MagicMock(spec=stomp.utils.Frame)
-    frame.headers = {"subscription": sub_id, "message-id": msg_id}
-    frame.body = json.dumps(body)
-    return frame
+@pytest.fixture(scope="module")
+def artifact_client():
+    from fastapi.testclient import TestClient
+    from artifact_scorer import app
+    return TestClient(app)
+
+
+@pytest.fixture(scope="module")
+def vlm_client():
+    from fastapi.testclient import TestClient
+    from vlm_scorer import app
+    return TestClient(app)

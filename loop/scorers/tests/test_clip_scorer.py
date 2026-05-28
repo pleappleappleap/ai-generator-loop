@@ -1,55 +1,85 @@
-import tempfile
-import threading
-from pathlib import Path
 from unittest.mock import patch
 
 import torch
 
-from tests.conftest import make_frame
 
-_FAKE_IMAGE = str(Path(tempfile.gettempdir()) / "test.png")
+def _unit_feat() -> torch.Tensor:
+    """512-d unit vector — dot product with itself == 1.0."""
+    t = torch.ones(1, 512)
+    return t / t.norm(dim=-1, keepdim=True)
 
 
-def test_score_returns_clip_score_and_embeddings():
+def test_health(clip_client):
+    resp = clip_client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
+
+
+def test_score_returns_expected_fields(clip_client):
+    feat = _unit_feat()
     with (
+        patch("clip_scorer.Image"),
+        patch("clip_scorer.preprocess") as mock_pre,
         patch("clip_scorer.model") as mock_model,
-        patch("clip_scorer.preprocess") as mock_preprocess,
-        patch("clip_scorer.tokenizer") as mock_tokenizer,
+        patch("clip_scorer.tokenizer") as mock_tok,
+    ):
+        mock_pre.return_value.unsqueeze.return_value.to.return_value = feat
+        mock_model.encode_image.return_value = feat
+        mock_model.encode_text.return_value = feat
+        mock_tok.return_value = torch.zeros(1, 77, dtype=torch.long)
+
+        resp = clip_client.post("/score", json={
+            "image_uuid": "uuid-1",
+            "image_path": "/tmp/fake.png",
+            "prompt": "a cat",
+        })
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_uuid"] == "uuid-1"
+    assert isinstance(data["clip_score"], float)
+    assert -1.0 <= data["clip_score"] <= 1.0
+    assert isinstance(data["image_embedding"], list)
+    assert len(data["image_embedding"]) == 512
+    assert isinstance(data["prompt_embedding"], list)
+    assert len(data["prompt_embedding"]) == 512
+
+
+def test_score_unit_vectors_give_similarity_one(clip_client):
+    feat = _unit_feat()
+    with (
+        patch("clip_scorer.Image"),
+        patch("clip_scorer.preprocess") as mock_pre,
+        patch("clip_scorer.model") as mock_model,
+        patch("clip_scorer.tokenizer") as mock_tok,
+    ):
+        mock_pre.return_value.unsqueeze.return_value.to.return_value = feat
+        mock_model.encode_image.return_value = feat.clone()
+        mock_model.encode_text.return_value = feat.clone()
+        mock_tok.return_value = torch.zeros(1, 77, dtype=torch.long)
+
+        resp = clip_client.post("/score", json={
+            "image_uuid": "uuid-2",
+            "image_path": "/tmp/fake.png",
+            "prompt": "a cat",
+        })
+
+    assert resp.status_code == 200
+    import pytest
+    assert resp.json()["clip_score"] == pytest.approx(1.0, abs=1e-5)
+
+
+def test_score_unreadable_image_returns_422(clip_client):
+    with (
+        patch("clip_scorer.preprocess") as mock_pre,
         patch("clip_scorer.Image"),
     ):
-        mock_model.encode_image.return_value = torch.ones(1, 512)
-        mock_model.encode_text.return_value = torch.ones(1, 512)
-        mock_preprocess.return_value.unsqueeze.return_value = torch.ones(1, 3, 224, 224)
-        mock_tokenizer.return_value = torch.ones(1, 77, dtype=torch.long)
-        from clip_scorer import score
+        mock_pre.side_effect = OSError("no such file")
 
-        result = score(_FAKE_IMAGE, "test prompt")
-        assert "clip_score" in result
-        assert "image_embedding" in result
-        assert "prompt_embedding" in result
-        assert isinstance(result["clip_score"], float)
-        assert isinstance(result["image_embedding"], list)
-        assert len(result["image_embedding"]) == 512
-        assert isinstance(result["prompt_embedding"], list)
-        assert len(result["prompt_embedding"]) == 512
+        resp = clip_client.post("/score", json={
+            "image_uuid": "uuid-3",
+            "image_path": "/nonexistent/img.png",
+            "prompt": "a cat",
+        })
 
-
-def test_cancel_event_set_on_events_message(mock_conn):
-    from clip_scorer import _SUB_EVENTS, _Listener, active_jobs, jobs_lock
-
-    image_uuid = "test-cancel-uuid"
-    cancel_event = threading.Event()
-    with jobs_lock:
-        active_jobs[image_uuid] = cancel_event
-    frame = make_frame(_SUB_EVENTS, "msg-1", {"image_uuid": image_uuid})
-    _Listener(mock_conn).on_message(frame)
-    assert cancel_event.is_set()
-    mock_conn.ack.assert_called_once_with("msg-1", _SUB_EVENTS)
-
-
-def test_cancel_unknown_uuid_does_not_raise(mock_conn):
-    from clip_scorer import _SUB_EVENTS, _Listener
-
-    frame = make_frame(_SUB_EVENTS, "msg-2", {"image_uuid": "unknown-uuid"})
-    _Listener(mock_conn).on_message(frame)
-    mock_conn.ack.assert_called_once_with("msg-2", _SUB_EVENTS)
+    assert resp.status_code == 422

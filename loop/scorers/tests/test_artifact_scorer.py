@@ -1,45 +1,49 @@
-import tempfile
-import threading
-from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
-from tests.conftest import make_frame
+def test_health(artifact_client):
+    resp = artifact_client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "ok"}
 
-_FAKE_IMAGE = str(Path(tempfile.gettempdir()) / "test.png")
 
-
-def test_score_returns_ai_confidence():
-    with patch("artifact_scorer.detector") as mock_detector:
-        mock_detector.return_value = [
+def test_score_returns_ai_confidence(artifact_client):
+    with patch("artifact_scorer.detector") as mock_det:
+        mock_det.return_value = [
             {"label": "artificial", "score": 0.85},
             {"label": "real", "score": 0.15},
         ]
-        from artifact_scorer import score
+        resp = artifact_client.post("/score", json={
+            "image_uuid": "uuid-1",
+            "image_path": "/tmp/fake.png",
+        })
 
-        result = score(_FAKE_IMAGE)
-        assert "ai_confidence" in result
-        assert result["ai_confidence"] == pytest.approx(0.85)
-
-
-def test_score_missing_artificial_label_returns_zero():
-    with patch("artifact_scorer.detector") as mock_detector:
-        mock_detector.return_value = [{"label": "real", "score": 1.0}]
-        from artifact_scorer import score
-
-        result = score(_FAKE_IMAGE)
-        assert result["ai_confidence"] == 0.0
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["image_uuid"] == "uuid-1"
+    import pytest
+    assert data["ai_confidence"] == pytest.approx(0.85)
 
 
-def test_cancel_event_set_on_events_message(mock_conn):
-    from artifact_scorer import _SUB_EVENTS, _Listener, active_jobs, jobs_lock
+def test_score_missing_artificial_label_returns_zero(artifact_client):
+    with patch("artifact_scorer.detector") as mock_det:
+        mock_det.return_value = [{"label": "real", "score": 1.0}]
+        resp = artifact_client.post("/score", json={
+            "image_uuid": "uuid-2",
+            "image_path": "/tmp/fake.png",
+        })
 
-    image_uuid = "test-cancel-uuid"
-    cancel_event = threading.Event()
-    with jobs_lock:
-        active_jobs[image_uuid] = cancel_event
-    frame = make_frame(_SUB_EVENTS, "msg-1", {"image_uuid": image_uuid})
-    _Listener(mock_conn).on_message(frame)
-    assert cancel_event.is_set()
-    mock_conn.ack.assert_called_once_with("msg-1", _SUB_EVENTS)
+    assert resp.status_code == 200
+    assert resp.json()["ai_confidence"] == 0.0
+
+
+def test_score_clamps_above_one(artifact_client):
+    with patch("artifact_scorer.detector") as mock_det:
+        mock_det.return_value = [{"label": "artificial", "score": 1.5}]
+        resp = artifact_client.post("/score", json={
+            "image_uuid": "uuid-3",
+            "image_path": "/tmp/fake.png",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["ai_confidence"] == 1.0
