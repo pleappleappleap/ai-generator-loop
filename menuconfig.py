@@ -163,6 +163,13 @@ def _build_defaults() -> dict:
                 "session_history_limit": 10,
             },
         },
+        "compute": {
+            "comfyui":         {"backend": gpu_backend},
+            "clip_scorer":     {"backend": gpu_backend},
+            "artifact_scorer": {"backend": gpu_backend},
+            "vlm_scorer":      {"backend": gpu_backend, "n_gpu_layers": -1},
+            "tactical_llm":    {"backend": gpu_backend, "n_gpu_layers": -1, "expert_offload": False},
+        },
     }
 
 
@@ -366,6 +373,52 @@ MENU_SCHEMA = [
                 "key": "homebrew_prefix",
                 "type": "string",
                 "help": "/opt/homebrew (Apple Silicon) or /usr/local (Intel Mac). Empty on Linux.",
+            },
+        ],
+    },
+    {
+        "label": "Compute",
+        "key": "compute",
+        "help": "Per-component GPU backend and MoE offload settings",
+        "children": [
+            {
+                "label": "Tactical LLM",
+                "key": "tactical_llm",
+                "help": "Runtime compute options for the llama.cpp tactical model server",
+                "children": [
+                    {
+                        "label": "Backend",
+                        "key": "backend",
+                        "type": "choice",
+                        "choices": ["auto", "mps", "cuda", "rocm", "cpu"],
+                        "help": "GPU backend: auto detects at startup",
+                    },
+                    {"label": "GPU layers", "key": "n_gpu_layers", "type": "int",
+                     "help": "-1 = all layers on GPU; 0 = CPU only"},
+                    {
+                        "label": "Expert offload (MoE)",
+                        "key": "expert_offload",
+                        "type": "choice",
+                        "choices": ["false", "true"],
+                        "help": "Stream inactive MoE expert weights from CPU RAM. Enable on CUDA/small-RAM systems.",
+                    },
+                ],
+            },
+            {
+                "label": "VLM scorer",
+                "key": "vlm_scorer",
+                "help": "Runtime compute options for the VLM scorer",
+                "children": [
+                    {
+                        "label": "Backend",
+                        "key": "backend",
+                        "type": "choice",
+                        "choices": ["auto", "mps", "cuda", "rocm", "cpu"],
+                        "help": "GPU backend: auto detects at startup",
+                    },
+                    {"label": "GPU layers", "key": "n_gpu_layers", "type": "int",
+                     "help": "-1 = all layers on GPU; 0 = CPU only"},
+                ],
             },
         ],
     },

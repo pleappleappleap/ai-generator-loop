@@ -18,6 +18,8 @@ _resolve() {
     : "${LLM_GPU_LAYERS:=-1}"
     LLM_CTX=$(yq '.tactical.model.context_length // 8192' "$CFG" 2>/dev/null)
     : "${LLM_CTX:=8192}"
+    LLM_EXPERT_OFFLOAD=$(yq '.compute.tactical_llm.expert_offload // false' "$CFG" 2>/dev/null)
+    : "${LLM_EXPERT_OFFLOAD:=false}"
 }
 
 _start() {
@@ -26,13 +28,21 @@ _start() {
         echo "==> llama_cpp: model not found at $LLM_MODEL — run 'make models'" >&2
         return 1
     fi
-    component_start llama_cpp \
-        "$SVENV/bin/python" -m llama_cpp.server \
+    set -- "$SVENV/bin/python" -m llama_cpp.server \
         --model "$LLM_MODEL" \
         --n_gpu_layers "$LLM_GPU_LAYERS" \
         --n_ctx "$LLM_CTX" \
         --host 0.0.0.0 \
         --port "$LLM_PORT"
+    if [ "$LLM_EXPERT_OFFLOAD" = "true" ]; then
+        # Keep inactive MoE expert weight tensors in CPU RAM; only active experts load to GPU.
+        # Reduces VRAM/unified-memory pressure on CUDA boxes and smaller Macs.
+        set -- "$@" \
+            --override-tensor "blk\..*\.ffn_gate_exps\..*=CPU" \
+            --override-tensor "blk\..*\.ffn_up_exps\..*=CPU" \
+            --override-tensor "blk\..*\.ffn_down_exps\..*=CPU"
+    fi
+    component_start llama_cpp "$@"
 }
 
 case "${1:-status}" in
