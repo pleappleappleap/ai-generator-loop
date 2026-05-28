@@ -6,7 +6,7 @@ JAVAC  := javac
 IVY_JAR      := tools/ivy.jar
 IVY_URL      := https://repo1.maven.org/maven2/org/apache/ivy/ivy/2.5.2/ivy-2.5.2.jar
 JUNIT_JAR    := tools/junit-platform-console-standalone.jar
-JUNIT_URL    := https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.11.4/junit-platform-console-standalone-1.11.4.jar
+JUNIT_URL    := https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.12.2/junit-platform-console-standalone-1.12.2.jar
 
 SRC      := src/main/java
 RES      := src/main/resources
@@ -58,8 +58,8 @@ test: compile $(TEST_LIB)/.resolved $(JUNIT_JAR)
 	mkdir -p $(TEST_OUT) build
 	find $(TEST_SRC) -name '*.java' > build/test-sources.txt
 	$(JAVAC) --release 21 -cp "$(LIB)/*:$(TEST_LIB)/*:$(OUT)" -d $(TEST_OUT) @build/test-sources.txt
-	$(JAVA) -cp "$(OUT):$(TEST_OUT):$(LIB)/*:$(TEST_LIB)/*" \
-		-jar $(JUNIT_JAR) execute --scan-classpath
+	$(JAVA) -cp "$(OUT):$(TEST_OUT):$(LIB)/*:$(TEST_LIB)/*:$(JUNIT_JAR)" \
+		org.junit.platform.console.ConsoleLauncher execute --scan-classpath=$(TEST_OUT)
 
 # ── Docker image ───────────────────────────────────────────────────────────────
 
