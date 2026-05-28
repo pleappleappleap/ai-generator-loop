@@ -26,6 +26,11 @@ loop/ComfyUI/venv/
 # ── Rust build artifacts ───────────────────────────────────────────────────────
 loop/scorers/target/
 
+# ── Java / Gradle ──────────────────────────────────────────────────────────────
+pipeline/.gradle/
+pipeline/build/
+pipeline/out/
+
 # ── Model files (large binaries — download via make models) ───────────────────
 loop/scorers/models/vlm/
 loop/scorers/models/tactical/

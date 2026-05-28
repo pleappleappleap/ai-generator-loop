@@ -1,0 +1,45 @@
+spring:
+  application:
+    name: pipeline
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/pipeline
+    username: pipeline
+    password: pipeline
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+    open-in-view: false
+
+  artemis:
+    broker-url: tcp://localhost:61616
+    user: admin
+    password: admin
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+narayana:
+  log-dir: ${user.home}/.pipeline/narayana-store
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always
+
+sidecars:
+  clip-scorer:
+    url: http://localhost:8081
+  artifact-scorer:
+    url: http://localhost:8082
+  vlm-scorer:
+    url: http://localhost:8083

@@ -12,3 +12,6 @@ resources:
   - sidecars/clip-scorer.yaml
   - sidecars/artifact-scorer.yaml
   - sidecars/vlm-scorer.yaml
+  - pipeline/configmap.yaml
+  - pipeline/deployment.yaml
+  - pipeline/service.yaml

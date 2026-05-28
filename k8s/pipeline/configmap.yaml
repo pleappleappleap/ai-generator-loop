@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipeline-config
+  namespace: pipeline
+data:
+  SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pipeline
+  SPRING_DATASOURCE_USERNAME: pipeline
+  SPRING_DATASOURCE_PASSWORD: pipeline
+  SPRING_ARTEMIS_BROKER_URL: tcp://artemis:61616
+  SPRING_ARTEMIS_USER: admin
+  SPRING_ARTEMIS_PASSWORD: admin
+  SIDECARS_CLIP_SCORER_URL: http://clip-scorer:8081
+  SIDECARS_ARTIFACT_SCORER_URL: http://artifact-scorer:8082
+  SIDECARS_VLM_SCORER_URL: http://vlm-scorer:8083
+  NARAYANA_LOG_DIR: /var/pipeline/narayana-store
