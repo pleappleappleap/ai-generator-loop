@@ -146,7 +146,7 @@ def _build_defaults() -> dict:
         "tactical": {
             "model": {
                 "dir":            f"{scorers}/models/tactical",
-                "filename":       "Qwen2.5-14B-Instruct-Q5_K_M.gguf",
+                "filename":       "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
                 "n_gpu_layers":   -1,
                 "context_length": 8192,
                 "temperature":    0.1,

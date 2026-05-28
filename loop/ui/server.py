@@ -34,7 +34,10 @@ import re
 import socket
 import subprocess
 import sys
+import threading
+import time
 import uuid as _uuid_mod
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -96,6 +99,10 @@ async def root() -> FileResponse:
 
 _image_paths: dict[str, str] = {}
 
+# Cached tactical decision data indexed by image_uuid.
+# Populated from /topic/tactical.decisions; used to enrich taste log entries.
+_image_verdicts: dict[str, dict] = {}
+
 # ── In-process credential store ────────────────────────────────────────────────
 # Keyed by conversation_id. Never written to disk or the coordinator DB.
 # Cleared when the server process exits or the conversation is explicitly ended.
@@ -121,6 +128,10 @@ _GENERATE_RE = re.compile(
 
 # Workflows directory — JSON files here are the selectable pipeline workflows.
 _WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
+
+# Taste log — one JSON line per user feedback event, written by /feedback.
+# Read by the tactical LLM to calibrate decisions against user preferences.
+_TASTE_LOG = Path(__file__).parent.parent / "taste_log.jsonl"
 
 
 # ── Coordinator socket ────────────────────────────────────────────────────────
@@ -216,11 +227,18 @@ class _PipelineListener(stomp.ConnectionListener):
             )
 
         elif "tactical.decisions" in dest:
+            # Cache verdict data for taste logging on future feedback calls.
+            image_uuid_td = msg.get("image_uuid", "")
+            if image_uuid_td:
+                _image_verdicts[image_uuid_td] = {
+                    "decision": msg.get("decision", {}),
+                    "verdict":  msg.get("verdict",  {}),
+                }
             # Decision from the LLM — updates verdict in the gallery.
             asyncio.run_coroutine_threadsafe(
                 _gallery.broadcast({
                     "type":           "decision",
-                    "image_uuid":     msg.get("image_uuid", ""),
+                    "image_uuid":     image_uuid_td,
                     "decision":       msg.get("decision", {}).get("decision", ""),
                     "reasoning":      msg.get("decision", {}).get("reasoning", ""),
                     "confidence":     msg.get("decision", {}).get("confidence"),
@@ -233,37 +251,55 @@ class _PipelineListener(stomp.ConnectionListener):
 
 
 _stomp_conn: stomp.Connection | None = None
+_stomp_loop: asyncio.AbstractEventLoop | None = None
 
 
-def _start_stomp(loop: asyncio.AbstractEventLoop) -> None:
-    """Connect to the broker, retrying up to 5 times with a short delay.
+def _stomp_connect_once() -> stomp.Connection:
+    """Attempt a single STOMP connection with a 5-second handshake timeout.
 
-    Fast restarts leave a stale client-id registered on the broker; a brief
-    pause between attempts lets the broker clean it up.
+    Uses wait=False + polling so the thread never hangs indefinitely if the
+    broker accepts the TCP connection but is slow to send CONNECTED.
     """
-    import time
-    global _stomp_conn
-    for attempt in range(5):
-        try:
-            conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
-            conn.set_listener("", _PipelineListener(loop))
-            conn.connect(_STOMP_USER, _STOMP_PASS, wait=True,
-                         headers={"client-id": "ui-server"})
+    conn = stomp.Connection(host_and_ports=[(_STOMP_HOST, _STOMP_PORT)])
+    assert _stomp_loop is not None
+    conn.set_listener("", _PipelineListener(_stomp_loop))
+    conn.connect(_STOMP_USER, _STOMP_PASS, wait=False)
+    for _ in range(50):          # 50 × 0.1 s = 5 s timeout
+        time.sleep(0.1)
+        if conn.is_connected():
             conn.subscribe(destination="/topic/loop.events",        id="ui-events",    ack="auto")
             conn.subscribe(destination="/topic/tactical.decisions", id="ui-decisions", ack="auto")
-            _stomp_conn = conn
-            return
-        except Exception as exc:
-            print(f"[ui/stomp] connect attempt {attempt + 1}/5 failed: {exc}", file=sys.stderr)
-            time.sleep(2)
-    print("[ui/stomp] all connection attempts failed — gallery and STOMP submission unavailable",
-          file=sys.stderr)
+            return conn
+    raise ConnectionError("STOMP handshake timed out after 5 s")
+
+
+def _stomp_watchdog() -> None:
+    """Background daemon thread: connect on startup, reconnect after drops."""
+    global _stomp_conn
+    delay = 2
+    attempt = 0
+    while True:
+        connected = _stomp_conn is not None and _stomp_conn.is_connected()
+        if not connected:
+            attempt += 1
+            try:
+                _stomp_conn = _stomp_connect_once()
+                print(f"[ui/stomp] connected (attempt {attempt})", file=sys.stderr)
+                delay = 2      # reset backoff on success
+            except Exception as exc:
+                print(f"[ui/stomp] connect failed (attempt {attempt}): {exc}", file=sys.stderr)
+                time.sleep(delay)
+                delay = min(delay * 2, 30)
+                continue
+        time.sleep(5)          # poll every 5 s to detect drops
 
 
 @app.on_event("startup")
 async def _on_startup() -> None:
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _start_stomp, loop)
+    global _stomp_loop
+    _stomp_loop = asyncio.get_running_loop()
+    t = threading.Thread(target=_stomp_watchdog, daemon=True)
+    t.start()
 
 
 # ── REST models ───────────────────────────────────────────────────────────────
@@ -398,6 +434,39 @@ async def feedback(req: FeedbackRequest) -> dict:
         "rating":      req.rating,
         "comment":     req.comment,
     })
+
+    # Append a taste log entry so the tactical LLM can learn user preferences
+    # across conversations. We enrich the entry with the verdict data cached
+    # from the tactical.decisions topic message.
+    cached = _image_verdicts.get(req.image_uuid)
+    if cached:
+        v = cached.get("verdict", {})
+        scores = v.get("scores", {})
+        vlm = scores.get("vlm", {})
+        clip = scores.get("clip", {})
+        artifact = scores.get("artifact", {})
+        entry = {
+            "ts":       datetime.now(timezone.utc).isoformat(),
+            "rating":   req.rating,
+            "prompt":   scores.get("prompt", ""),
+            "issues":   vlm.get("issues", []),
+            "recs":     vlm.get("recommendations", []),
+            "vlm": {
+                k: vlm.get(k) for k in (
+                    "photorealism", "anatomical_coherence",
+                    "interaction_plausibility", "lighting_consistency",
+                    "prompt_adherence",
+                )
+            },
+            "clip":     clip.get("clip_score"),
+            "artifact": artifact.get("artifact_confidence"),
+        }
+        try:
+            with open(_TASTE_LOG, "a") as f:
+                f.write(json.dumps(entry) + "\n")
+        except OSError:
+            pass
+
     return resp
 
 
@@ -486,26 +555,33 @@ def _list_workflows() -> list[str]:
     return sorted(p.name for p in _WORKFLOWS_DIR.glob("*.json"))
 
 
-async def _handle_generate(payload: dict, conversation_id: str) -> str:
+async def _handle_generate(
+    payload: dict, conversation_id: str
+) -> tuple[str, dict | None]:
     """Create/reuse a workflow for this conversation and submit a generation request.
 
     Called from ws_chat after the LLM emits a <GENERATE> block.
-    Returns a short status message to append to the chat.
+    Returns (status_message, workflow_state) where workflow_state is the active
+    workflow dict (workflow_id, run_id, workflow_path, name, conversation_id) so
+    the caller can send a workflow_activate event to the frontend.
+    Returns (error_message, None) on failure.
     """
     prompt = payload.get("prompt", "").strip()
     if not prompt:
-        return "⚠️ GENERATE block missing required `prompt` field."
+        return "⚠️ GENERATE block missing required `prompt` field.", None
 
     workflow_name = payload.get("workflow", "")
     if not workflow_name:
         available = _list_workflows()
         if not available:
-            return "⚠️ No workflows found in loop/workflows/. Add a workflow JSON first."
+            return "⚠️ No workflows found in loop/workflows/. Add a workflow JSON first.", None
         workflow_name = available[0]
 
     workflow_path = str(_WORKFLOWS_DIR / workflow_name)
     if not Path(workflow_path).exists():
-        return f"⚠️ Workflow `{workflow_name}` not found in loop/workflows/."
+        return f"⚠️ Workflow `{workflow_name}` not found in loop/workflows/.", None
+
+    wf_name = payload.get("name") or workflow_name.replace(".json", "").replace("_", " ").title()
 
     # Reuse an existing workflow for this conversation if the workflow file matches.
     state = _conversation_workflows.get(conversation_id)
@@ -513,7 +589,7 @@ async def _handle_generate(payload: dict, conversation_id: str) -> str:
         create_resp = _coordinator_call({
             "op":              "WorkflowCreate",
             "conversation_id": conversation_id,
-            "name":            payload.get("name") or "Chat generation",
+            "name":            wf_name,
             "workflow_path":   workflow_path,
             "description":     payload.get("description") or "",
             "budget_policy":   "fresh",
@@ -521,17 +597,19 @@ async def _handle_generate(payload: dict, conversation_id: str) -> str:
             "max_inpaints":    2,
         })
         if not create_resp.get("ok"):
-            return f"⚠️ Coordinator error: {create_resp.get('error', 'unknown')}"
+            return f"⚠️ Coordinator error: {create_resp.get('error', 'unknown')}", None
 
         workflow_id = create_resp["workflow_id"]
         resume_resp = _coordinator_call({"op": "WorkflowResume", "workflow_id": workflow_id})
         if not resume_resp.get("ok"):
-            return f"⚠️ Coordinator error creating run: {resume_resp.get('error', 'unknown')}"
+            return f"⚠️ Coordinator error creating run: {resume_resp.get('error', 'unknown')}", None
 
         state = {
-            "workflow_id":   workflow_id,
-            "run_id":        resume_resp["run_id"],
-            "workflow_path": workflow_path,
+            "workflow_id":     workflow_id,
+            "run_id":          resume_resp["run_id"],
+            "workflow_path":   workflow_path,
+            "name":            wf_name,
+            "conversation_id": conversation_id,
         }
         _conversation_workflows[conversation_id] = state
 
@@ -555,8 +633,8 @@ async def _handle_generate(payload: dict, conversation_id: str) -> str:
             body=json.dumps(request_msg),
             headers={"persistent": "true"},
         )
-        return f"🎨 Generation submitted — watching for results in the gallery."
-    return "⚠️ STOMP not connected — cannot submit generation request."
+        return "🎨 Generation submitted — watching for results in the gallery.", state
+    return "⚠️ STOMP not connected — cannot submit generation request.", None
 
 
 # ── Gallery WebSocket ──────────────────────────────────────────────────────────
@@ -662,9 +740,18 @@ async def ws_chat(ws: WebSocket) -> None:
                                 if not delta:
                                     continue
                                 assistant_text += delta
-                                # Stream only up to the start of any <GENERATE> block.
+                                # Stream up to the start of any <GENERATE> block.
+                                # Hold back trailing text that is a partial prefix of
+                                # "<GENERATE>" so chunk boundaries never leak the raw marker.
                                 gen_pos = assistant_text.find("<GENERATE>")
-                                safe_end = gen_pos if gen_pos != -1 else len(assistant_text)
+                                if gen_pos != -1:
+                                    safe_end = gen_pos
+                                else:
+                                    safe_end = len(assistant_text)
+                                    for prefix_len in range(len("<GENERATE>"), 0, -1):
+                                        if assistant_text.endswith("<GENERATE>"[:prefix_len]):
+                                            safe_end = len(assistant_text) - prefix_len
+                                            break
                                 if safe_end > sent_up_to:
                                     to_send = assistant_text[sent_up_to:safe_end]
                                     sent_up_to = safe_end
@@ -691,7 +778,13 @@ async def ws_chat(ws: WebSocket) -> None:
                     gen_payload = json.loads(gen_match.group(1))
                 except Exception:
                     gen_payload = {}
-                assistant_text = _GENERATE_RE.sub("", assistant_text).strip()
+                assistant_text = _GENERATE_RE.sub("", assistant_text)
+                # Collapse runs of 3+ newlines left behind by the stripped block.
+                assistant_text = re.sub(r'\n{3,}', '\n\n', assistant_text).strip()
+                # Flush any text after the GENERATE block that holdback prevented streaming.
+                tail = assistant_text[sent_up_to:]
+                if tail:
+                    await ws.send_text(json.dumps({"type": "chunk", "text": tail}))
                 generate_task = asyncio.create_task(
                     _handle_generate(gen_payload, conversation_id)
                 )
@@ -728,7 +821,17 @@ async def ws_chat(ws: WebSocket) -> None:
 
             # Await generate task and push result as a follow-up message.
             if generate_task is not None:
-                gen_result = await generate_task
+                gen_result, gen_wf_state = await generate_task
+                # Tell the frontend which workflow to watch in the gallery.
+                if gen_wf_state:
+                    await ws.send_text(json.dumps({
+                        "type":          "workflow_activate",
+                        "workflow_id":   gen_wf_state["workflow_id"],
+                        "run_id":        gen_wf_state["run_id"],
+                        "workflow_path": gen_wf_state["workflow_path"],
+                        "name":          gen_wf_state["name"],
+                        "conversation_id": gen_wf_state["conversation_id"],
+                    }))
                 await ws.send_text(json.dumps({"type": "chunk", "text": gen_result}))
                 await ws.send_text(json.dumps({"type": "done"}))
 

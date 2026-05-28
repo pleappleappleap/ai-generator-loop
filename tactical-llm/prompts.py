@@ -251,9 +251,27 @@ fences, no preamble, no trailing commentary.
   "reasoning":       "<one or two sentences>",
   "confidence":      <0.0–1.0>,
   "retry_prompt":    "<comma-separated tags — see PROMPT FORMAT>",  // required if decision == retry
-  "retry_params":    {{}},                               // optional workflow param overrides
+  "retry_params":    {{                                  // optional ComfyUI graph overrides
+    "KSampler":         {{"steps": 30, "cfg": 8.0,       // steps 15–40; cfg 4–12
+                          "sampler_name": "dpmpp_2m",    // euler|dpmpp_2m|dpmpp_sde|dpm_adaptive
+                          "scheduler": "karras",         // normal|karras|exponential|sgm_uniform
+                          "seed": -1}},                  // -1 = random; set integer for reproducibility
+    "EmptyLatentImage": {{"width": 1024, "height": 1024}} // SDXL works best at 1024×1024, 832×1152, 1152×832
+  }},
   "retry_model":     "sdxl" | "flux" | "",             // optional model switch on retry
   "retry_loras":     [],                                // optional LoRA list on retry
+  "retry_graph_ops": [                                  // optional graph modifications on retry
+    // add_node — insert a new node:
+    {{"op":"add_node","id":"new_1","class_type":"UpscaleModelLoader",
+      "inputs":{{"model_name":"RealESRGAN_x4plus.pth"}},"_meta":{{"title":"Upscaler"}}}},
+    {{"op":"add_node","id":"new_2","class_type":"ImageUpscaleWithModel",
+      "inputs":{{"upscale_model":["new_1",0],"image":["8",0]}}}},
+    {{"op":"rewire","id":"9","input":"images","to":["new_2",0]}},
+    // remove_node — delete and rewire consumers:
+    {{"op":"remove_node","id":"10","rewire":{{"0":["4",0],"1":["4",1]}}}},
+    // rewire — redirect a single input:
+    {{"op":"rewire","id":"3","input":"model","to":["4",0]}}
+  ],
   "inpaint_regions": [                                  // required if decision == inpaint
     {{
       "description":  "<region, e.g. 'left hand'>",
@@ -410,6 +428,29 @@ def _format_context(context: dict) -> str:
     return "\n".join(lines)
 
 
+def _format_workflow(workflow: dict) -> str:
+    """Format a ComfyUI workflow as a compact node list for the decision prompt.
+
+    Shows node IDs, class types, wire connections, and scalar parameters so
+    the LLM can reason about graph topology when constructing graph_ops.
+    """
+    lines: list[str] = []
+    for node_id, node in sorted(workflow.items(), key=lambda x: (len(x[0]), x[0])):
+        ct    = node.get("class_type", "?")
+        title = node.get("_meta", {}).get("title", "")
+        label = f'  "{node_id}"  {ct}' + (f'  [{title}]' if title else "")
+        inputs = node.get("inputs", {})
+        wires  = {k: v for k, v in inputs.items() if isinstance(v, list)}
+        params = {k: v for k, v in inputs.items() if not isinstance(v, list)}
+        parts: list[str] = []
+        if wires:
+            parts.append("wires: " + ", ".join(f"{k}←{v}" for k, v in wires.items()))
+        if params:
+            parts.append("params: " + ", ".join(f"{k}={v!r}" for k, v in params.items()))
+        lines.append(label + ("  (" + "; ".join(parts) + ")" if parts else ""))
+    return "\n".join(lines)
+
+
 def _format_similar(similar: list[dict]) -> str:
     """Format similar past sessions for the prompt."""
     if not similar:
@@ -487,6 +528,8 @@ def build_decision_prompt(
     budget: dict,
     context: dict | None = None,
     enable_thinking: bool | None = None,
+    taste_context: str | None = None,
+    workflow: dict | None = None,
 ) -> str:
     """Construct the single-turn user message sent to the tactical LLM.
 
@@ -601,6 +644,25 @@ def build_decision_prompt(
         lines += [
             "── USER CONTEXT (ratings and chat for this workflow) ────────",
             _format_context(context),
+            "",
+        ]
+
+    if taste_context:
+        lines += [
+            "── USER TASTE PROFILE (cross-session learned preferences) ───",
+            taste_context,
+            "",
+        ]
+
+    if workflow:
+        lines += [
+            "── WORKFLOW GRAPH (current node topology) ───────────────────",
+            _format_workflow(workflow),
+            "",
+            "  To modify this graph on retry, emit retry_graph_ops — a list of",
+            "  add_node / remove_node / rewire operations using the IDs above.",
+            "  New nodes use placeholder IDs (e.g. \"new_1\") in their inputs;",
+            "  placeholders are resolved to real IDs before submission.",
             "",
         ]
 

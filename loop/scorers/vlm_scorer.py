@@ -78,13 +78,15 @@ def score_worker(
     prompt: str,
     cancel_event: threading.Event,
     conn: stomp.Connection,
+    msg_id: str,
+    sub_id: str,
 ) -> None:
     """Score an image using the VLM on a worker thread.
 
-    Loads the image from disk, encodes it as base64, and runs streaming
-    chat completion with image + text content. Checks cancel_event
-    between tokens. If cancelled, exits without publishing. If the
-    accumulated output is not valid JSON, discards silently.
+    Wraps processing in a STOMP transaction so the ACK and result SEND
+    are committed atomically. Soft failures (unreadable image, malformed
+    VLM output, cancellation) commit the ACK without a result to avoid
+    redelivery loops. Unexpected errors abort for redelivery.
 
     Args:
         image_uuid: UUID of the image being scored.
@@ -92,22 +94,29 @@ def score_worker(
         prompt: The generation prompt used to create the image.
         cancel_event: threading.Event set by the cancel handler.
         conn: STOMP connection for publishing the result (thread-safe).
+        msg_id: STOMP message-id header of the request being processed.
+        sub_id: STOMP subscription header of the request being processed.
     """
-    try:
-        with open(image_path, "rb") as f:
-            image_b64 = base64.b64encode(f.read()).decode()
-        # Detect image format from file extension for the data URI.
-        ext = Path(image_path).suffix.lower().lstrip(".")
-        mime = "jpeg" if ext in ("jpg", "jpeg") else ext or "png"
-        image_url = f"data:image/{mime};base64,{image_b64}"
-    except OSError as exc:
-        print(f"[vlm_scorer] cannot read image {image_path}: {exc}", file=sys.stderr)
-        with jobs_lock:
-            active_jobs.pop(image_uuid, None)
-        return
-
+    tx_id = conn.begin()
     accumulated = ""
     try:
+        if cancel_event.is_set():
+            conn.ack(msg_id, sub_id, transaction=tx_id)
+            conn.commit(tx_id)
+            return
+
+        try:
+            with open(image_path, "rb") as f:
+                image_b64 = base64.b64encode(f.read()).decode()
+            ext = Path(image_path).suffix.lower().lstrip(".")
+            mime = "jpeg" if ext in ("jpg", "jpeg") else ext or "png"
+            image_url = f"data:image/{mime};base64,{image_b64}"
+        except OSError as exc:
+            print(f"[vlm_scorer] cannot read image {image_path}: {exc}", file=sys.stderr)
+            conn.ack(msg_id, sub_id, transaction=tx_id)
+            conn.commit(tx_id)
+            return
+
         stream = llm.create_chat_completion(
             messages=[
                 {
@@ -123,11 +132,24 @@ def score_worker(
         )
         for chunk in stream:
             if cancel_event.is_set():
+                conn.ack(msg_id, sub_id, transaction=tx_id)
+                conn.commit(tx_id)
                 return
             delta = chunk["choices"][0].get("delta", {}).get("content") or ""
             accumulated += delta
 
-        result: dict[str, Any] = json.loads(accumulated)
+        try:
+            result: dict[str, Any] = json.loads(accumulated)
+        except json.JSONDecodeError as exc:
+            print(
+                f"[vlm_scorer] JSON parse failed for {image_uuid}: {exc}  "
+                f"raw output: {accumulated[:200]!r}",
+                file=sys.stderr,
+            )
+            conn.ack(msg_id, sub_id, transaction=tx_id)
+            conn.commit(tx_id)
+            return
+
         score_fields = (
             "photorealism", "anatomical_coherence", "interaction_plausibility",
             "lighting_consistency", "prompt_adherence",
@@ -140,13 +162,16 @@ def score_worker(
             destination="/queue/aggregator.vlm.queue",
             body=json.dumps(result),
             headers={"persistent": "true"},
+            transaction=tx_id,
         )
-    except json.JSONDecodeError as exc:
-        print(
-            f"[vlm_scorer] JSON parse failed for {image_uuid}: {exc}  "
-            f"raw output: {accumulated[:200]!r}",
-            file=sys.stderr,
-        )
+        conn.ack(msg_id, sub_id, transaction=tx_id)
+        conn.commit(tx_id)
+    except Exception as exc:
+        print(f"[vlm_scorer] ERROR scoring {image_uuid}: {exc}", file=sys.stderr)
+        try:
+            conn.abort(tx_id)
+        except Exception:
+            pass
     finally:
         with jobs_lock:
             active_jobs.pop(image_uuid, None)
@@ -168,8 +193,9 @@ class _Listener(stomp.ConnectionListener):
     def on_message(self, frame: stomp.utils.Frame) -> None:
         sub_id = frame.headers.get("subscription", "")
         msg_id = frame.headers.get("message-id", "")
-        try:
-            if sub_id == _SUB_REQUESTS:
+        if sub_id == _SUB_REQUESTS:
+            # score_worker owns the transaction and acks within it.
+            try:
                 request = json.loads(frame.body)
                 image_uuid = request["image_uuid"]
                 cancel_event = threading.Event()
@@ -183,18 +209,24 @@ class _Listener(stomp.ConnectionListener):
                         request["prompt"],
                         cancel_event,
                         self._conn,
+                        msg_id,
+                        sub_id,
                     ),
                     daemon=True,
                 )
                 t.start()
-            elif sub_id == _SUB_EVENTS:
+            except Exception as exc:
+                print(f"[vlm_scorer] failed to dispatch {msg_id}: {exc}", file=sys.stderr)
+                self._conn.ack(msg_id, sub_id)
+        elif sub_id == _SUB_EVENTS:
+            try:
                 msg = json.loads(frame.body)
                 image_uuid = msg["image_uuid"]
                 with jobs_lock:
                     if image_uuid in active_jobs:
                         active_jobs[image_uuid].set()
-        finally:
-            self._conn.ack(msg_id, sub_id)
+            finally:
+                self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:

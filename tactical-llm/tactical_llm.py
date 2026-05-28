@@ -70,6 +70,50 @@ _STOMP_PASS: str = _u.password or ""
 
 _disconnected = threading.Event()
 
+# ── Taste profile ─────────────────────────────────────────────────────────────
+# Written by the UI server whenever the user gives feedback (thumbs up/down).
+# Each line is a JSON object with rating, prompt, VLM issues, and scores.
+
+_TASTE_LOG = Path(__file__).parent.parent / "loop" / "taste_log.jsonl"
+
+
+def _taste_context(n: int = 5) -> str | None:
+    """Return a short taste-profile string from the last N approved/rejected entries.
+
+    Returns None when the log is absent, empty, or unreadable.
+    """
+    if not _TASTE_LOG.exists():
+        return None
+    try:
+        with open(_TASTE_LOG) as f:
+            entries = [json.loads(ln) for ln in f if ln.strip()]
+    except Exception:
+        return None
+    if not entries:
+        return None
+
+    approved = [e for e in entries if e.get("rating") == "up"][-n:]
+    rejected = [e for e in entries if e.get("rating") == "down"][-n:]
+    if not approved and not rejected:
+        return None
+
+    def _fmt(e: dict) -> str:
+        prompt = (e.get("prompt") or "")[:80]
+        issues = ", ".join(e.get("issues") or []) or "none"
+        vlm_vals = [v for v in (e.get("vlm") or {}).values() if isinstance(v, (int, float))]
+        mean_v = sum(vlm_vals) / len(vlm_vals) if vlm_vals else 0.0
+        return f'  prompt: "{prompt}" | VLM mean {mean_v:.1f} | issues: {issues[:100]}'
+
+    lines: list[str] = []
+    if approved:
+        lines.append("User-approved (liked):")
+        lines.extend(_fmt(e) for e in approved)
+    if rejected:
+        lines.append("User-rejected (disliked):")
+        lines.extend(_fmt(e) for e in rejected)
+    return "\n".join(lines)
+
+
 # ── LLM client (OpenAI-compatible llama.cpp server) ──────────────────────────
 
 _LLM_SERVER_URL: str = _model_cfg.get("server_url", "http://localhost:8080/v1")
@@ -226,6 +270,7 @@ def _publish_accepted(
     image_uuid: str,
     image_path: str | None,
     scores: dict,
+    tx_id: str,
 ) -> None:
     """Publish an accepted verdict to the loop.accepted topic address.
 
@@ -237,6 +282,7 @@ def _publish_accepted(
         image_uuid: UUID of the accepted image.
         image_path: Filesystem path to the accepted image file, or None.
         scores: Full scorer results dict from the verdict message.
+        tx_id: Active STOMP transaction ID to include this send in.
     """
     payload = {
         "image_uuid": image_uuid,
@@ -247,6 +293,7 @@ def _publish_accepted(
         destination="/topic/loop.accepted",
         body=json.dumps(payload),
         headers={"persistent": "true"},
+        transaction=tx_id,
     )
 
 
@@ -254,6 +301,7 @@ def _publish_retry(
     conn: stomp.Connection,
     original_verdict: dict,
     decision: dict,
+    tx_id: str,
 ) -> str:
     """Publish a retry generation request to the loop.request queue.
 
@@ -265,6 +313,7 @@ def _publish_retry(
         conn: Open STOMP connection.
         original_verdict: The full verdict dict from scorer.result.
         decision: The parsed LLM decision dict.
+        tx_id: Active STOMP transaction ID to include this send in.
 
     Returns:
         The new image_uuid string for the retry request.
@@ -283,6 +332,7 @@ def _publish_retry(
             **(scores.get("workflow_params") or {}),
             **(decision.get("retry_params") or {}),
         },
+        "graph_ops":        decision.get("retry_graph_ops") or [],
         "prompt":           decision.get("retry_prompt", ""),
         "model_type":       decision.get("retry_model") or scores.get("model_type", ""),
         "loras":            decision.get("retry_loras") or [],
@@ -291,6 +341,7 @@ def _publish_retry(
         destination="/queue/loop.request",
         body=json.dumps(request),
         headers={"persistent": "true"},
+        transaction=tx_id,
     )
     return new_image_uuid
 
@@ -299,6 +350,7 @@ def _publish_inpaint(
     conn: stomp.Connection,
     original_verdict: dict,
     decision: dict,
+    tx_id: str,
 ) -> None:
     """Publish an inpaint request to the loop.inpaint.request queue.
 
@@ -311,6 +363,7 @@ def _publish_inpaint(
         conn: Open STOMP connection.
         original_verdict: The full verdict dict from scorer.result.
         decision: The parsed LLM decision dict.
+        tx_id: Active STOMP transaction ID to include this send in.
     """
     scores = original_verdict.get("scores", {})
     payload = {
@@ -327,6 +380,7 @@ def _publish_inpaint(
         destination="/queue/loop.inpaint.request",
         body=json.dumps(payload),
         headers={"persistent": "true"},
+        transaction=tx_id,
     )
 
 
@@ -336,6 +390,7 @@ def _publish_decision_log(
     session_uuid: str,
     decision: dict,
     raw_verdict: dict,
+    tx_id: str,
 ) -> None:
     """Publish the full decision to the tactical.decisions audit topic.
 
@@ -348,6 +403,7 @@ def _publish_decision_log(
         session_uuid: Session UUID.
         decision: Parsed LLM decision dict.
         raw_verdict: Original verdict message from scorer.result.
+        tx_id: Active STOMP transaction ID to include this send in.
     """
     payload = {
         "image_uuid":   image_uuid,
@@ -359,6 +415,7 @@ def _publish_decision_log(
         destination="/topic/tactical.decisions",
         body=json.dumps(payload),
         headers={"persistent": "true"},
+        transaction=tx_id,
     )
 
 
@@ -419,7 +476,7 @@ def _heuristic_decision(verdict: dict, budget: dict) -> dict:
 # ── Main consumer ─────────────────────────────────────────────────────────────
 
 
-def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
+def _handle_verdict(conn: stomp.Connection, body: str | bytes, tx_id: str) -> None:
     """Handle a verdict from the scorer.result queue.
 
     Retrieves LanceDB context, constructs the decision prompt, runs LLM
@@ -430,6 +487,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
     Args:
         conn: Open STOMP connection for publishing.
         body: JSON-encoded verdict string or bytes from scorer.result.
+        tx_id: Active STOMP transaction ID; all sends are included in it.
     """
     verdict          = json.loads(body)
     image_uuid       = verdict.get("image_uuid", "")
@@ -463,8 +521,21 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
         except Exception:
             pass
 
+    workflow_graph: dict | None = None
+    workflow_path = scores.get("workflow_path", "")
+    if workflow_path:
+        try:
+            with open(workflow_path) as _wf_f:
+                workflow_graph = json.load(_wf_f)
+        except Exception:
+            pass
+
     try:
-        decision_prompt = build_decision_prompt(verdict, history, past, budget, context)
+        decision_prompt = build_decision_prompt(
+            verdict, history, past, budget, context,
+            taste_context=_taste_context(),
+            workflow=workflow_graph,
+        )
         decision = _run_inference(decision_prompt)
     except Exception:
         decision = {}
@@ -475,7 +546,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
     action = decision.get("decision", "give_up")
 
     if action == "accept":
-        _publish_accepted(conn, image_uuid, image_path, scores)
+        _publish_accepted(conn, image_uuid, image_path, scores, tx_id)
         print(f"[tactical] accept  {image_uuid}  confidence={decision.get('confidence'):.2f}")
 
     elif action == "retry":
@@ -489,7 +560,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
             # in-flight message with a stale (under-counted) budget.
             _increment_budget(session_uuid, "retries_used")
             retry_n = budget["retries_used"] + 1  # post-increment count
-            new_uuid = _publish_retry(conn, verdict, decision)
+            new_uuid = _publish_retry(conn, verdict, decision, tx_id)
             print(
                 f"[tactical] retry   {image_uuid} → {new_uuid}  "
                 f"({retry_n}/{budget['max_retries']})"
@@ -505,7 +576,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
                     decision["retry_prompt"] = prompt_text
                 # C3: increment before publish.
                 _increment_budget(session_uuid, "retries_used")
-                new_uuid = _publish_retry(conn, verdict, decision)
+                new_uuid = _publish_retry(conn, verdict, decision, tx_id)
                 print(f"[tactical] retry   {image_uuid} → {new_uuid}  (inpaint budget exhausted)")
             else:
                 action = "give_up"
@@ -524,7 +595,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
                     decision["retry_prompt"] = prompt_text
                 # C3: increment before publish.
                 _increment_budget(session_uuid, "retries_used")
-                new_uuid = _publish_retry(conn, verdict, decision)
+                new_uuid = _publish_retry(conn, verdict, decision, tx_id)
                 print(f"[tactical] retry   {image_uuid} → {new_uuid}  (inpaint stub)")
             else:
                 action = "give_up"
@@ -535,7 +606,7 @@ def _handle_verdict(conn: stomp.Connection, body: str | bytes) -> None:
     else:  # give_up
         print(f"[tactical] give_up {image_uuid}  reasoning: {decision.get('reasoning', '')}")
 
-    _publish_decision_log(conn, image_uuid, session_uuid, decision, verdict)
+    _publish_decision_log(conn, image_uuid, session_uuid, decision, verdict, tx_id)
 
 
 class _Listener(stomp.ConnectionListener):
@@ -554,10 +625,17 @@ class _Listener(stomp.ConnectionListener):
     def on_message(self, frame: stomp.utils.Frame) -> None:
         msg_id = frame.headers.get("message-id", "")
         sub_id = frame.headers.get("subscription", "")
+        tx_id = self._conn.begin()
         try:
-            _handle_verdict(self._conn, frame.body)
-        finally:
-            self._conn.ack(msg_id, sub_id)
+            _handle_verdict(self._conn, frame.body, tx_id)
+            self._conn.ack(msg_id, sub_id, transaction=tx_id)
+            self._conn.commit(tx_id)
+        except Exception as exc:
+            print(f"[tactical_llm] ERROR handling verdict: {exc}", file=sys.stderr)
+            try:
+                self._conn.abort(tx_id)
+            except Exception:
+                pass
 
 
 def main() -> None:

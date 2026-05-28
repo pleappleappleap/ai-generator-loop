@@ -2,11 +2,12 @@
   "4": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "placeholder.safetensors"
+      "ckpt_name": "zavychromaxl_v100.safetensors"
     }
   },
   "6": {
     "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Positive Prompt"},
     "inputs": {
       "text": "beautiful photograph",
       "clip": ["4", 1]
@@ -14,6 +15,7 @@
   },
   "7": {
     "class_type": "CLIPTextEncode",
+    "_meta": {"title": "Negative Prompt"},
     "inputs": {
       "text": "blurry, worst quality, low quality, artifacts, watermark, text, signature",
       "clip": ["4", 1]

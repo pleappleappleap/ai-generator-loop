@@ -69,9 +69,10 @@ component_start() {
         rm -f "$pid_file"
     fi
     mkdir -p "$PIDDIR"
-    "$@" &
+    local logfile="$PIDDIR/$name.log"
+    "$@" >> "$logfile" 2>&1 &
     echo $! > "$pid_file"
-    echo "==> $name: started (PID $(cat "$pid_file"))"
+    echo "==> $name: started (PID $(cat "$pid_file")) log=$logfile"
 }
 
 component_restart() {

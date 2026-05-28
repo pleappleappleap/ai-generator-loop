@@ -82,24 +82,33 @@ def score_worker(
     image_path: str,
     cancel_event: threading.Event,
     conn: stomp.Connection,
+    msg_id: str,
+    sub_id: str,
 ) -> None:
     """Score an image on a worker thread with cancellation support.
 
-    Checks the cancel_event before and after inference. If cancelled,
-    exits without publishing a result. Removes the job from active_jobs
-    on exit regardless of outcome.
+    Wraps processing in a STOMP transaction so the ACK and result SEND
+    are committed atomically. On cancellation, commits the ACK without
+    sending a result. On unexpected failure, aborts for redelivery.
 
     Args:
         image_uuid: UUID of the image being scored.
         image_path: Filesystem path or URL to the image file.
         cancel_event: threading.Event set by the cancel handler.
         conn: STOMP connection for publishing the result (thread-safe).
+        msg_id: STOMP message-id header of the request being processed.
+        sub_id: STOMP subscription header of the request being processed.
     """
+    tx_id = conn.begin()
     try:
         if cancel_event.is_set():
+            conn.ack(msg_id, sub_id, transaction=tx_id)
+            conn.commit(tx_id)
             return
         results = detector(image_path)
         if cancel_event.is_set():
+            conn.ack(msg_id, sub_id, transaction=tx_id)
+            conn.commit(tx_id)
             return
         ai_confidence = next((r["score"] for r in results if r["label"] == "artificial"), 0.0)
         ai_confidence = max(0.0, min(1.0, ai_confidence))
@@ -111,7 +120,16 @@ def score_worker(
             destination="/queue/aggregator.artifact.queue",
             body=json.dumps(result),
             headers={"persistent": "true"},
+            transaction=tx_id,
         )
+        conn.ack(msg_id, sub_id, transaction=tx_id)
+        conn.commit(tx_id)
+    except Exception as exc:
+        print(f"[artifact_scorer] ERROR scoring {image_uuid}: {exc}", file=sys.stderr)
+        try:
+            conn.abort(tx_id)
+        except Exception:
+            pass
     finally:
         with jobs_lock:
             active_jobs.pop(image_uuid, None)
@@ -133,8 +151,9 @@ class _Listener(stomp.ConnectionListener):
     def on_message(self, frame: stomp.utils.Frame) -> None:
         sub_id = frame.headers.get("subscription", "")
         msg_id = frame.headers.get("message-id", "")
-        try:
-            if sub_id == _SUB_REQUESTS:
+        if sub_id == _SUB_REQUESTS:
+            # score_worker owns the transaction and acks within it.
+            try:
                 request = json.loads(frame.body)
                 image_uuid = request["image_uuid"]
                 cancel_event = threading.Event()
@@ -142,18 +161,22 @@ class _Listener(stomp.ConnectionListener):
                     active_jobs[image_uuid] = cancel_event
                 t = threading.Thread(
                     target=score_worker,
-                    args=(image_uuid, request["image_path"], cancel_event, self._conn),
+                    args=(image_uuid, request["image_path"], cancel_event, self._conn, msg_id, sub_id),
                     daemon=True,
                 )
                 t.start()
-            elif sub_id == _SUB_EVENTS:
+            except Exception as exc:
+                print(f"[artifact_scorer] failed to dispatch {msg_id}: {exc}", file=sys.stderr)
+                self._conn.ack(msg_id, sub_id)
+        elif sub_id == _SUB_EVENTS:
+            try:
                 msg = json.loads(frame.body)
                 image_uuid = msg["image_uuid"]
                 with jobs_lock:
                     if image_uuid in active_jobs:
                         active_jobs[image_uuid].set()
-        finally:
-            self._conn.ack(msg_id, sub_id)
+            finally:
+                self._conn.ack(msg_id, sub_id)
 
 
 def main() -> None:

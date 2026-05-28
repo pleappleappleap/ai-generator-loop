@@ -348,6 +348,9 @@ struct ApiResponse {
     chat: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     feedback: Option<serde_json::Value>,
+    /// Images generated for the requested conversation, newest-first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    images: Option<serde_json::Value>,
 }
 
 impl ApiResponse {
@@ -366,6 +369,7 @@ impl ApiResponse {
             context: None,
             chat: None,
             feedback: None,
+            images: None,
         }
     }
     fn err(msg: impl Into<String>) -> Self {
@@ -383,6 +387,7 @@ impl ApiResponse {
             context: None,
             chat: None,
             feedback: None,
+            images: None,
         }
     }
 
@@ -473,6 +478,7 @@ async fn handle_api_request(
                     context: None,
                     chat: None,
                     feedback: None,
+                    images: None,
                 },
                 Ok(None) => ApiResponse::err("session not found"),
                 Err(e) => ApiResponse::err(e.to_string()),
@@ -771,6 +777,7 @@ async fn handle_api_request(
         } => {
             let msg_limit = limit.unwrap_or(20);
             let fb_limit  = limit.unwrap_or(10);
+            let img_limit = limit.unwrap_or(100);
 
             let messages = sqlx::query!(
                 "SELECT role, content, created_at FROM chat_messages
@@ -790,8 +797,17 @@ async fn handle_api_request(
             .fetch_all(pool)
             .await;
 
-            match (messages, feedback) {
-                (Ok(msgs), Ok(fbs)) => {
+            let images = sqlx::query!(
+                "SELECT image_uuid, workflow_id, created_at FROM scorer_session
+                 WHERE conversation_id = ?1
+                 ORDER BY created_at DESC LIMIT ?2",
+                conversation_id, img_limit
+            )
+            .fetch_all(pool)
+            .await;
+
+            match (messages, feedback, images) {
+                (Ok(msgs), Ok(fbs), Ok(imgs)) => {
                     let mut chat: Vec<serde_json::Value> = msgs
                         .into_iter()
                         .map(|m| serde_json::json!({
@@ -814,18 +830,31 @@ async fn handle_api_request(
                         }))
                         .collect();
 
+                    // images: newest-first so the frontend can prepend efficiently
+                    let image_items: Vec<serde_json::Value> = imgs
+                        .into_iter()
+                        .map(|i| serde_json::json!({
+                            "image_uuid":  i.image_uuid,
+                            "workflow_id": i.workflow_id,
+                            "created_at":  i.created_at,
+                        }))
+                        .collect();
+
                     let chat_val     = serde_json::Value::Array(chat);
                     let feedback_val = serde_json::Value::Array(feedback_items);
+                    let images_val   = serde_json::Value::Array(image_items);
                     let mut resp = ApiResponse::ok();
                     resp.context  = Some(serde_json::json!({
                         "chat":     chat_val.clone(),
                         "feedback": feedback_val.clone(),
+                        "images":   images_val.clone(),
                     }));
                     resp.chat     = Some(chat_val);
                     resp.feedback = Some(feedback_val);
+                    resp.images   = Some(images_val);
                     resp
                 }
-                (Err(e), _) | (_, Err(e)) => ApiResponse::err(e.to_string()),
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => ApiResponse::err(e.to_string()),
             }
         }
     }

@@ -253,37 +253,159 @@ def _resolve_loras(requested: list[dict], model_type: str) -> list[dict]:
     return resolved
 
 
+def apply_graph_ops(workflow: dict, ops: list[dict]) -> dict:
+    """Apply add/remove/rewire node operations to a ComfyUI workflow.
+
+    Operations are processed in order. Each op is a dict with an ``"op"``
+    key and operation-specific fields:
+
+    **add_node** — insert a new node::
+
+        {
+          "op": "add_node",
+          "id": "new_1",         # placeholder; resolved to max_id+N automatically
+          "class_type": "UpscaleModelLoader",
+          "inputs": {"model_name": "RealESRGAN_x4plus.pth"},
+          "_meta": {"title": "Upscale Model"}  # optional
+        }
+
+    Placeholder IDs (strings like "new_1") used in connection arrays within
+    the same ops list are resolved to their real assigned IDs.
+
+    **remove_node** — delete a node and optionally rewire its consumers::
+
+        {
+          "op": "remove_node",
+          "id": "10",
+          "rewire": {"0": ["4", 0], "1": ["4", 1]}
+          # port → replacement wire; consumers of removed node's port N
+          # are redirected to the specified [node_id, port]
+        }
+
+    **rewire** — change a single input connection on an existing node::
+
+        {
+          "op": "rewire",
+          "id": "9",
+          "input": "images",
+          "to": ["101", 0]
+        }
+
+    Returns a new dict; the original is not modified.
+    """
+    import copy
+    workflow = copy.deepcopy(workflow)
+
+    # Allocate new IDs above the current maximum so they never collide.
+    try:
+        max_id = max(int(k) for k in workflow if k.isdigit())
+    except ValueError:
+        max_id = 100
+    id_map: dict[str, str] = {}
+
+    def _resolve(val: object) -> object:
+        """Replace placeholder node refs inside connection arrays."""
+        if isinstance(val, list) and len(val) == 2:
+            ref = str(val[0])
+            return [id_map.get(ref, ref), val[1]]
+        return val
+
+    for op in ops:
+        op_type = op.get("op")
+
+        if op_type == "add_node":
+            placeholder = str(op.get("id", ""))
+            max_id += 1
+            real_id = str(max_id)
+            if placeholder:
+                id_map[placeholder] = real_id
+            node: dict = {
+                "class_type": op["class_type"],
+                "inputs": {k: _resolve(v) for k, v in op.get("inputs", {}).items()},
+            }
+            if "_meta" in op:
+                node["_meta"] = op["_meta"]
+            workflow[real_id] = node
+
+        elif op_type == "remove_node":
+            node_id = str(op["id"])
+            rewire = {str(k): v for k, v in (op.get("rewire") or {}).items()}
+            for node in workflow.values():
+                for key, val in list(node.get("inputs", {}).items()):
+                    if isinstance(val, list) and len(val) == 2 and str(val[0]) == node_id:
+                        port = str(val[1])
+                        if port in rewire:
+                            node["inputs"][key] = rewire[port]
+            workflow.pop(node_id, None)
+
+        elif op_type == "rewire":
+            node_id = str(op["id"])
+            if node_id in workflow:
+                workflow[node_id].setdefault("inputs", {})[op["input"]] = _resolve(op["to"])
+
+    return workflow
+
+
+def apply_workflow_params(workflow: dict, params: dict) -> dict:
+    """Override individual node inputs via a class-type-keyed params dict.
+
+    Keys are ComfyUI class_type strings (e.g. ``"KSampler"``).
+    Values are dicts of input field overrides applied to every matching node.
+
+    Example params::
+
+        {
+          "KSampler":        {"steps": 30, "cfg": 8.0, "sampler_name": "dpmpp_2m",
+                              "scheduler": "karras", "seed": 42},
+          "EmptyLatentImage": {"width": 832, "height": 1152},
+        }
+
+    Returns a new dict; the original is not modified.
+    """
+    import copy
+    workflow = copy.deepcopy(workflow)
+    for class_type, overrides in params.items():
+        for node in workflow.values():
+            if node.get("class_type") == class_type:
+                node.setdefault("inputs", {}).update(overrides)
+    return workflow
+
+
 def patch_workflow(
     workflow: dict,
     model_type: str | None,
     loras: list[dict] | None,
+    params: dict | None = None,
+    graph_ops: list[dict] | None = None,
 ) -> dict:
     """Apply all runtime patches to a ComfyUI workflow.
 
-    Detects model type when *model_type* is ``None`` or ``"auto"``, patches
-    checkpoint / loader node filenames from config, then injects any
-    requested LoRA nodes.
+    Order of operations:
+    1. Detect model type (sdxl / flux).
+    2. Patch checkpoint / loader filenames from config.
+    3. Inject LoRA nodes.
+    4. Apply ``params`` node-input overrides (class-type keyed).
+    5. Apply ``graph_ops`` structural operations (add/remove/rewire nodes).
 
-    Args:
-        workflow: ComfyUI API-format workflow dict.
-        model_type: ``"sdxl"``, ``"flux"``, ``"auto"``/``None`` (auto-detect).
-        loras: List of LoRA dicts from the LLM decision (name + strengths).
-
-    Returns:
-        Patched workflow dict (deep copy; original is not modified).
+    ``graph_ops`` runs last so it can reference or undo anything the earlier
+    steps added, including injected LoRA nodes.
     """
     effective_type = model_type or detect_model_type(workflow)
     workflow = patch_checkpoint(workflow, effective_type)
     resolved = _resolve_loras(loras or [], effective_type)
     workflow = inject_loras(workflow, resolved, effective_type)
+    if params:
+        workflow = apply_workflow_params(workflow, params)
+    if graph_ops:
+        workflow = apply_graph_ops(workflow, graph_ops)
     return workflow
 
 
 def submit_workflow(
     workflow: dict,
     prompt_override: str | None = None,
-) -> str:
-    """Submit a workflow to the ComfyUI API and return the prompt ID.
+) -> tuple[str, str]:
+    """Submit a workflow to the ComfyUI API and return (prompt_id, client_id).
 
     Optionally overrides the positive prompt text in any CLIPTextEncode
     node whose title contains the word "positive". This allows the
@@ -298,8 +420,8 @@ def submit_workflow(
             the workflow is submitted unchanged.
 
     Returns:
-        The ComfyUI prompt ID string for the submitted job. Used to
-        poll job status and retrieve output images.
+        A tuple of (prompt_id, client_id). The client_id must be passed
+        to wait_for_completion so the WebSocket receives the right events.
 
     Raises:
         requests.HTTPError: If the ComfyUI API returns an error response.
@@ -310,34 +432,62 @@ def submit_workflow(
             if node.get("class_type") == "CLIPTextEncode":
                 if "positive" in node.get("_meta", {}).get("title", "").lower():
                     node["inputs"]["text"] = prompt_override
-    payload = {"prompt": workflow, "client_id": str(uuid.uuid4())}
+    client_id = str(uuid.uuid4())
+    payload = {"prompt": workflow, "client_id": client_id}
     response = requests.post(f"{COMFYUI_URL}/prompt", json=payload)
-    return response.json()["prompt_id"]
+    return response.json()["prompt_id"], client_id
 
 
-def wait_for_completion(prompt_id: str) -> dict:
+def _history_output(prompt_id: str) -> dict | None:
+    """Return the output dict from ComfyUI history if the job is done, else None."""
+    try:
+        history = requests.get(f"{COMFYUI_URL}/history/{prompt_id}", timeout=5).json()
+        outputs = history.get(prompt_id, {}).get("outputs")
+        if outputs:
+            return outputs
+    except Exception:
+        pass
+    return None
+
+
+def wait_for_completion(prompt_id: str, client_id: str) -> dict:
     """Block until a ComfyUI job completes and return its output.
 
-    Connects to the ComfyUI WebSocket and listens for execution events.
-    Returns when an "executed" event is received for the given prompt ID.
+    Connects to the ComfyUI WebSocket using the same client_id that was
+    used to submit the prompt. Also polls history on each tick to handle
+    the race where the job completes before the WebSocket is connected.
 
     Args:
         prompt_id: The ComfyUI prompt ID returned by submit_workflow.
+        client_id: The client_id used when submitting the prompt.
 
     Returns:
-        The output dict from the executed event, containing node outputs
-        including image filenames and subfolders.
+        The node outputs dict, keyed by node ID.
     """
+    # Fast path: job may already be done (e.g. ComfyUI cache hit).
+    out = _history_output(prompt_id)
+    if out is not None:
+        return out
+
     ws = websocket.WebSocket()
-    ws.connect(COMFYUI_WS)
-    while True:
-        msg = json.loads(ws.recv())
-        if (
-            msg.get("type") == "executed"
-            and msg.get("data", {}).get("prompt_id") == prompt_id
-        ):
-            ws.close()
-            return msg["data"]["output"]
+    ws.connect(f"{COMFYUI_WS}?clientId={client_id}")
+    ws.settimeout(10.0)  # poll interval — fall back to history check on timeout
+    try:
+        while True:
+            try:
+                msg = json.loads(ws.recv())
+                if (
+                    msg.get("type") == "executed"
+                    and msg.get("data", {}).get("prompt_id") == prompt_id
+                ):
+                    return msg["data"]["output"]
+            except websocket.WebSocketTimeoutException:
+                # Timeout: check history in case the event was missed.
+                out = _history_output(prompt_id)
+                if out is not None:
+                    return out
+    finally:
+        ws.close()
 
 
 def get_output_path(prompt_id: str) -> str:
@@ -386,27 +536,41 @@ class _Listener(stomp.ConnectionListener):
     def on_message(self, frame: stomp.utils.Frame) -> None:
         """Handle a generation request from the loop.request queue.
 
-        Loads the specified workflow JSON, submits it to ComfyUI with
-        optional prompt override, waits for completion, retrieves the
-        output image URL, registers the image with the coordinator, and
-        publishes a completion event to /topic/loop.events.
-
-        Acks the message only after successful publish.
+        Dispatches to a background thread immediately so the STOMP transport
+        thread is not blocked (blocking it prevents heartbeat processing and
+        causes the connection to drop mid-generation).
         """
         msg_id = frame.headers.get("message-id", "")
         sub_id = frame.headers.get("subscription", "")
+        t = threading.Thread(
+            target=self._process,
+            args=(frame.body, msg_id, sub_id),
+            daemon=True,
+        )
+        t.start()
+
+    def _process(self, body: str, msg_id: str, sub_id: str) -> None:
+        """Process a generation request in a background thread."""
+        tx_id = self._conn.begin()
         try:
-            request = json.loads(frame.body)
+            request = json.loads(body)
+            print(f"[comfyui_worker] processing image_uuid={request.get('image_uuid')} "
+                  f"prompt={request.get('prompt','')[:60]!r}", file=sys.stderr, flush=True)
             with open(request["workflow_path"]) as f:
                 workflow = json.load(f)
             workflow = patch_workflow(
                 workflow,
                 request.get("model_type"),
                 request.get("loras"),
+                request.get("workflow_params") or {},
+                request.get("graph_ops") or [],
             )
-            prompt_id = submit_workflow(workflow, request.get("prompt"))
-            wait_for_completion(prompt_id)
+            prompt_id, client_id = submit_workflow(workflow, request.get("prompt"))
+            print(f"[comfyui_worker] submitted prompt_id={prompt_id}", file=sys.stderr, flush=True)
+            wait_for_completion(prompt_id, client_id)
+            print(f"[comfyui_worker] completed prompt_id={prompt_id}", file=sys.stderr, flush=True)
             output_path = get_output_path(prompt_id)
+            print(f"[comfyui_worker] output_path={output_path}", file=sys.stderr, flush=True)
             result = {
                 "image_uuid":      request["image_uuid"],
                 "session_uuid":    request["session_uuid"],
@@ -420,7 +584,7 @@ class _Listener(stomp.ConnectionListener):
                 "conversation_id": request.get("conversation_id", ""),
             }
             score_timeout_secs = int(_cfg.thresholds["score_timeout_secs"])
-            _coordinator_call({
+            coord_resp = _coordinator_call({
                 "op":                "SessionInit",
                 "image_uuid":        request["image_uuid"],
                 "session_uuid":      request["session_uuid"],
@@ -432,13 +596,25 @@ class _Listener(stomp.ConnectionListener):
                 "workflow_id":       request.get("workflow_id", ""),
                 "conversation_id":   request.get("conversation_id", ""),
             })
+            print(f"[comfyui_worker] SessionInit → {coord_resp}", file=sys.stderr, flush=True)
             self._conn.send(
                 destination="/topic/loop.events",
                 body=json.dumps(result),
                 headers={"persistent": "true"},
+                transaction=tx_id,
             )
-        finally:
-            self._conn.ack(msg_id, sub_id)
+            self._conn.ack(msg_id, sub_id, transaction=tx_id)
+            self._conn.commit(tx_id)
+            print(f"[comfyui_worker] published loop.events for {request.get('image_uuid')}",
+                  file=sys.stderr, flush=True)
+        except Exception as exc:
+            print(f"[comfyui_worker] ERROR processing message: {exc}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            try:
+                self._conn.abort(tx_id)
+            except Exception:
+                pass
 
 
 def main() -> None:
