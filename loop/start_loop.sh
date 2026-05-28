@@ -4,9 +4,6 @@ AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
 export AI_IMAGE_ROOT
 CFG="$AI_IMAGE_ROOT/config.yaml"
 
-LANCEDB=$(yq '.paths.lancedb' "$CFG")
-[ "$LANCEDB" = "auto" ] && LANCEDB="$AI_IMAGE_ROOT/lancedb"
-
 LLM_SERVER_URL=$(yq '.tactical.model.server_url // "http://localhost:8080/v1"' "$CFG" 2>/dev/null)
 : "${LLM_SERVER_URL:=http://localhost:8080/v1}"
 UI_PORT=$(yq '.ui.port // 7860' "$CFG" 2>/dev/null)
@@ -16,8 +13,10 @@ UI_PORT=$(yq '.ui.port // 7860' "$CFG" 2>/dev/null)
 rm -rf /tmp/ai-loop
 mkdir -p /tmp/ai-loop
 
-# Artemis, ComfyUI, and llama.cpp start in parallel — all are slow to initialise.
-"$LOOP_DIR/broker.sh" start &
+# K3s-managed services (Artemis + PostgreSQL) come up first.
+"$LOOP_DIR/broker.sh" start
+
+# ComfyUI and llama.cpp start in parallel — both are slow to initialise.
 "$LOOP_DIR/comfyui.sh" start &
 "$LOOP_DIR/llama_cpp.sh" start &
 sleep 10
@@ -37,10 +36,17 @@ sleep 1
 "$LOOP_DIR/ui_server.sh" start
 "$LOOP_DIR/monitor.sh" start
 
+_HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || hostname 2>/dev/null || echo "localhost")
+
 echo ""
 echo "Loop infrastructure ready"
 echo ""
-echo "Queue and exchange topology:"
+echo "K3s-managed services:"
+echo "  PostgreSQL:  ${_HOST}:5432  (pipeline / pipeline)"
+echo "  Artemis:     AMQP ${_HOST}:30672  STOMP ${_HOST}:30613"
+echo "  Artemis UI:  http://${_HOST}:30161  (admin / admin)"
+echo ""
+echo "Queue topology (current — pre-Java migration):"
 echo "  loop.request                [queue]  → comfyui_worker"
 echo "  loop.events                 [topic]  → router"
 echo "  scorer.requests             [topic]  → all scorers (parallel)"
@@ -49,13 +55,8 @@ echo "  aggregator.clip.queue       [queue]  ← clip_scorer"
 echo "  aggregator.artifact.queue   [queue]  ← artifact_scorer"
 echo "  aggregator.vlm.queue        [queue]  ← vlm_scorer"
 echo "  scorer.result               [queue]  → tactical LLM"
-echo "  lancedb.accepted.queue      [queue]  ← loop.accepted topic"
 echo "  pipeline.dead               [queue]  ← pipeline.dlx (dead letters) → monitor"
 echo ""
-echo "  LanceDB: $LANCEDB"
-echo "    tables: sessions, loop"
-echo ""
-_HOST=$(hostname 2>/dev/null || echo "localhost")
-echo "Management UI:  http://${_HOST}:8161 (Hawtio, admin/admin)"
-echo "Pipeline UI:    http://${_HOST}:${UI_PORT}"
-echo "LLM server:     ${LLM_SERVER_URL}"
+echo "Native services:"
+echo "  Pipeline UI:  http://localhost:${UI_PORT}"
+echo "  LLM server:   ${LLM_SERVER_URL}"

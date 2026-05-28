@@ -1,5 +1,8 @@
 #!/bin/sh
-# Stops all loop processes. Does not stop the broker — use broker.sh stop for that.
+# Stops all native loop processes. K3s-managed services (Artemis, PostgreSQL)
+# are left running — they are infrastructure, not process-lifecycle components.
+# To stop Artemis: broker.sh stop
+# To tear down everything: kubectl delete -k k8s/
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
 AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
 export AI_IMAGE_ROOT
@@ -9,4 +12,4 @@ for comp in monitor ui_server tactical_llm vlm_scorer artifact_scorer clip_score
     "$LOOP_DIR/${comp}.sh" stop
 done
 
-echo "==> Loop stopped"
+echo "==> Loop stopped (K3s services still running)"

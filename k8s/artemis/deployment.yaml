@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: artemis
+  namespace: pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: artemis
+  template:
+    metadata:
+      labels:
+        app: artemis
+    spec:
+      containers:
+        - name: artemis
+          image: apache/activemq-artemis:latest
+          env:
+            - name: ARTEMIS_USER
+              value: admin
+            - name: ARTEMIS_PASSWORD
+              value: admin
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: stomp
+              containerPort: 61613
+            - name: console
+              containerPort: 8161
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+              cpu: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/artemis-instance
+          readinessProbe:
+            tcpSocket:
+              port: 61613
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: artemis-data

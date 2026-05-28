@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: pipeline
+spec:
+  selector:
+    app: postgres
+  # NodePort exposes PostgreSQL on the K3s node IP for native tools (psql, Flyway, dev).
+  # Java app running in-cluster connects via postgres:5432 (cluster DNS, no NodePort needed).
+  # Find the node IP: colima list | awk 'NR>1 {print $6}'
+  type: NodePort
+  ports:
+    - port: 5432
+      targetPort: 5432
+      nodePort: 30432

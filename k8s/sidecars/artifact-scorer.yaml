@@ -1,0 +1,13 @@
+# ExternalName service for the native artifact scorer FastAPI sidecar (Phase 2).
+# Port 8082 assigned in Phase 2 when artifact_scorer.py is refactored to FastAPI.
+apiVersion: v1
+kind: Service
+metadata:
+  name: artifact-scorer
+  namespace: pipeline
+spec:
+  type: ExternalName
+  externalName: host.lima.internal
+  ports:
+    - port: 8082
+      targetPort: 8082

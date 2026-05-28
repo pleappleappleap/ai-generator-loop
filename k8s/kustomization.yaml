@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - postgres/statefulset.yaml
+  - postgres/service.yaml
+  - artemis/pvc.yaml
+  - artemis/deployment.yaml
+  - artemis/service.yaml
+  - sidecars/tactical-llm.yaml
+  - sidecars/clip-scorer.yaml
+  - sidecars/artifact-scorer.yaml
+  - sidecars/vlm-scorer.yaml
