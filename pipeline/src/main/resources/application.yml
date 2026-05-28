@@ -43,3 +43,7 @@ sidecars:
     url: http://localhost:8082
   vlm-scorer:
     url: http://localhost:8083
+
+scoring:
+  clip-threshold: 0.25
+  artifact-threshold: 0.50
