@@ -170,6 +170,11 @@ def _build_defaults() -> dict:
             "vlm_scorer":      {"backend": gpu_backend, "n_gpu_layers": -1},
             "tactical_llm":    {"backend": gpu_backend, "n_gpu_layers": -1, "expert_offload": False},
         },
+        "sidecars": {
+            "clip_scorer":     {"url": "http://localhost:8081", "port": 8081},
+            "artifact_scorer": {"url": "http://localhost:8082", "port": 8082},
+            "vlm_scorer":      {"url": "http://localhost:8083", "port": 8083},
+        },
     }
 
 
