@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ai.image.pipeline.config.ModelsConfig;
+import ai.image.pipeline.service.GalleryBroadcastService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -52,6 +53,7 @@ public class ComfyUiWorker {
     private final ObjectMapper mapper;
     private final ModelsConfig modelsConfig;
     private final RestClient comfyClient;
+    private final GalleryBroadcastService galleryBroadcast;
 
     public ComfyUiWorker(
             PlatformTransactionManager txManager,
@@ -59,6 +61,7 @@ public class ComfyUiWorker {
             JmsTemplate jmsTemplate,
             ObjectMapper mapper,
             ModelsConfig modelsConfig,
+            GalleryBroadcastService galleryBroadcast,
             @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam) {
         this.requiresNew = new TransactionTemplate(txManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -66,6 +69,7 @@ public class ComfyUiWorker {
         this.jmsTemplate = jmsTemplate;
         this.mapper = mapper;
         this.modelsConfig = modelsConfig;
+        this.galleryBroadcast = galleryBroadcast;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
     }
 
@@ -256,6 +260,9 @@ public class ComfyUiWorker {
             }
             return null;
         });
+
+        // Broadcast image_ready to gallery WebSocket clients (after Tx2 commits)
+        galleryBroadcast.imageReady(imageUuid, workflowId, conversationId, sequenceNumber);
     }
 
     private void ensureBudget(String sessionUuid, String workflowId, String conversationId) {

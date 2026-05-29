@@ -75,6 +75,11 @@ models:
 taste:
   synthesis-threshold: 5
 
+ui:
+  llm-url: http://localhost:8080/v1
+  llm-model: default
+  workflows-dir: loop/workflows
+
 scoring:
   clip-threshold: 0.25
   artifact-threshold: 0.50

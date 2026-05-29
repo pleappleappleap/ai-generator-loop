@@ -2,6 +2,7 @@ package ai.image.pipeline.worker;
 
 import ai.image.pipeline.config.TacticalLlmConfig;
 import ai.image.pipeline.service.ContextService;
+import ai.image.pipeline.service.GalleryBroadcastService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -40,6 +41,7 @@ public class TacticalLlmCaller {
     private final TacticalLlmConfig cfg;
     private final ContextService contextService;
     private final RestClient llmClient;
+    private final GalleryBroadcastService galleryBroadcast;
     private final String systemPrompt;
 
     public TacticalLlmCaller(
@@ -49,6 +51,7 @@ public class TacticalLlmCaller {
             ObjectMapper mapper,
             TacticalLlmConfig cfg,
             ContextService contextService,
+            GalleryBroadcastService galleryBroadcast,
             @Qualifier("tacticalLlmClient") RestClient llmClient) {
         this.requiresNew = new TransactionTemplate(txManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -57,6 +60,7 @@ public class TacticalLlmCaller {
         this.mapper = mapper;
         this.cfg = cfg;
         this.contextService = contextService;
+        this.galleryBroadcast = galleryBroadcast;
         this.llmClient = llmClient;
         this.systemPrompt = loadSystemPrompt();
     }
@@ -160,6 +164,11 @@ public class TacticalLlmCaller {
         });
 
         completeTx2(imageUuid, msg, action, decision);
+
+        // Broadcast decision to gallery WebSocket clients (after Tx2 commits)
+        String reasoning = decision != null ? decision.path("reasoning").asText("") : "";
+        double confidence = decision != null ? decision.path("confidence").asDouble(0.0) : 0.0;
+        galleryBroadcast.decision(imageUuid, action, reasoning, confidence, workflowId, conversationId);
     }
 
     private void completeTx2(String imageUuid, JsonNode msg, String action, JsonNode decision) {

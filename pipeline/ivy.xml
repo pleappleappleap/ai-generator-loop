@@ -8,8 +8,9 @@
     </configurations>
 
     <dependencies>
-        <dependency org="org.springframework.boot" name="spring-boot-starter-web"      rev="3.5.0" conf="compile->default"/>
-        <dependency org="org.springframework.boot" name="spring-boot-starter-actuator" rev="3.5.0" conf="compile->default"/>
+        <dependency org="org.springframework.boot" name="spring-boot-starter-web"            rev="3.5.0" conf="compile->default"/>
+        <dependency org="org.springframework.boot" name="spring-boot-starter-websocket"     rev="3.5.0" conf="compile->default"/>
+        <dependency org="org.springframework.boot" name="spring-boot-starter-actuator"      rev="3.5.0" conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-data-jpa" rev="3.5.0" conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-artemis"  rev="3.5.0" conf="compile->default"/>
         <dependency org="dev.snowdrop"             name="narayana-spring-boot-starter" rev="3.5.0" conf="compile->default"/>
