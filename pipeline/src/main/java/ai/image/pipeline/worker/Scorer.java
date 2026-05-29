@@ -192,7 +192,7 @@ public class Scorer {
             ObjectNode verdictMsg = buildVerdictMessage(
                     imageUuid, sessionUuid, sequenceNumber, prompt,
                     workflowPath, workflowId, conversationId,
-                    clipScore, aiConfidence, vlmScores);
+                    clipScore, aiConfidence, vlmScores, issues, recs);
             jmsTemplate.convertAndSend("loop.verdicts", mapper.writeValueAsString(verdictMsg));
             log.info("Published verdict for " + imageUuid);
         }
@@ -202,7 +202,8 @@ public class Scorer {
             String imageUuid, String sessionUuid, int sequenceNumber,
             String prompt, String workflowPath,
             String workflowId, String conversationId,
-            double clipScore, double artifactScore, ObjectNode vlmScores) {
+            double clipScore, double artifactScore, ObjectNode vlmScores,
+            String[] issues, String[] recs) {
         ObjectNode scores = mapper.createObjectNode()
                 .put("clip_score", clipScore)
                 .put("artifact_score", artifactScore);
@@ -218,6 +219,12 @@ public class Scorer {
         msg.put("workflow_id", workflowId != null ? workflowId : "");
         msg.put("conversation_id", conversationId != null ? conversationId : "");
         msg.set("scores", scores);
+        ArrayNode issuesNode = mapper.createArrayNode();
+        for (String i : issues) issuesNode.add(i);
+        msg.set("vlm_issues", issuesNode);
+        ArrayNode recsNode = mapper.createArrayNode();
+        for (String r : recs) recsNode.add(r);
+        msg.set("vlm_recs", recsNode);
         return msg;
     }
 

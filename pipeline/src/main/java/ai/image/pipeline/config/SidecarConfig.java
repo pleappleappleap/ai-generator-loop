@@ -25,4 +25,10 @@ public class SidecarConfig {
             @Value("${sidecars.vlm-scorer.url}") String url) {
         return RestClient.builder().baseUrl(url).build();
     }
+
+    @Bean("tacticalLlmClient")
+    public RestClient tacticalLlmClient(
+            @Value("${tactical-llm.url}") String url) {
+        return RestClient.builder().baseUrl(url).build();
+    }
 }
