@@ -1,9 +1,6 @@
-# Scorers + tactical-llm venv
+# Scorers venv
 # llama-cpp-python is intentionally excluded — it requires platform-specific
 # CMAKE_ARGS for GPU support and is installed separately by `make prereqs-python`.
-lancedb
-openai
-stomp.py
 fastapi
 uvicorn[standard]
 sse-starlette

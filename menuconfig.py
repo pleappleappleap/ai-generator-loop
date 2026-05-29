@@ -99,7 +99,6 @@ def _build_defaults() -> dict:
     return {
         "paths": {
             "root": root,
-            "lancedb": f"{root}/lancedb",
             "comfyui": f"{root}/loop/ComfyUI",
             "output": f"{root}/loop/output",
             "scorers": scorers,
@@ -125,19 +124,16 @@ def _build_defaults() -> dict:
         "thresholds": {
             "clip": 0.25,
             "artifact": 0.50,
-            "score_timeout_secs": 60,
         },
         "broker": {
-            "amqp_url":        "amqp://admin:admin@localhost:5672",
-            "stomp_url":       "stomp://admin:admin@localhost:61613",
             "artemis_console": "http://localhost:8161",
             "comfyui_url":     "http://127.0.0.1:8188",
             "comfyui_ws":      "ws://127.0.0.1:8188/ws",
         },
         "database": {
-            "path":                  f"{root}/pipeline.db",
-            "busy_timeout_ms":       5000,
-            "cleanup_interval_secs": 300,
+            "postgres_url":      "jdbc:postgresql://localhost:5432/pipeline",
+            "postgres_user":     "pipeline",
+            "postgres_password": "pipeline",
         },
         "system": {
             "package_manager": pkg_mgr,
@@ -157,10 +153,6 @@ def _build_defaults() -> dict:
                 "max_inpaints":        2,
                 "accept_vlm_mean_min": 7.0,
                 "accept_clip_min":     0.30,
-            },
-            "retrieval": {
-                "similar_sessions_k":    5,
-                "session_history_limit": 10,
             },
         },
         "compute": {
@@ -196,14 +188,12 @@ MENU_SCHEMA = [
         "children": [
             {"label": "Repository root",  "key": "root",    "type": "string",
              "help": "Absolute path to the ai-image repository root"},
-            {"label": "LanceDB store",    "key": "lancedb", "type": "string",
-             "help": "Path to the LanceDB vector store directory"},
             {"label": "ComfyUI root",     "key": "comfyui", "type": "string",
              "help": "Path to the ComfyUI installation directory"},
             {"label": "Output directory", "key": "output",  "type": "string",
              "help": "Path where ComfyUI saves generated images"},
             {"label": "Scorers root",     "key": "scorers", "type": "string",
-             "help": "Path to loop/scorers (Python scorers + Rust binaries)"},
+             "help": "Path to loop/scorers (Python ML sidecar sources and models)"},
         ],
     },
     {
@@ -271,12 +261,10 @@ MENU_SCHEMA = [
         "key": "thresholds",
         "help": "Scorer acceptance thresholds (see ARCHITECTURE.tex §Threshold Calibration)",
         "children": [
-            {"label": "CLIP minimum",        "key": "clip",               "type": "float",
+            {"label": "CLIP minimum",     "key": "clip",      "type": "float",
              "help": "Minimum CLIP cosine similarity (0–1). Below this: reject immediately."},
-            {"label": "Artifact maximum",    "key": "artifact",           "type": "float",
+            {"label": "Artifact maximum", "key": "artifact",  "type": "float",
              "help": "Maximum AI-artifact confidence (0–1). Above this: reject after CLIP passes."},
-            {"label": "Score timeout (sec)", "key": "score_timeout_secs", "type": "int",
-             "help": "SQLite TTL for in-flight scorer sessions (scorer_session.expires_at)."},
         ],
     },
     {
@@ -284,13 +272,9 @@ MENU_SCHEMA = [
         "key": "broker",
         "help": "Artemis and ComfyUI connection parameters",
         "children": [
-            {"label": "Artemis AMQP URL",      "key": "amqp_url",        "type": "string",
-             "help": "Artemis AMQP 1.0 URL for Rust components (router, aggregator, lancedb_manager)"},
-            {"label": "Artemis STOMP URL",     "key": "stomp_url",       "type": "string",
-             "help": "Artemis STOMP URL for Python components"},
-            {"label": "Artemis console",       "key": "artemis_console", "type": "string",
+            {"label": "Artemis console",  "key": "artemis_console", "type": "string",
              "help": "Hawtio management console URL"},
-{"label": "ComfyUI URL",           "key": "comfyui_url",     "type": "string",
+            {"label": "ComfyUI URL",      "key": "comfyui_url",     "type": "string",
              "help": "ComfyUI HTTP API base URL"},
             {"label": "ComfyUI WS",            "key": "comfyui_ws",      "type": "string",
              "help": "ComfyUI WebSocket URL for completion events"},
@@ -335,30 +319,19 @@ MENU_SCHEMA = [
                      "help": "Minimum CLIP score (0–1) to accept a candidate image"},
                 ],
             },
-            {
-                "label": "Retrieval",
-                "key": "retrieval",
-                "help": "LanceDB context window for LLM prompts",
-                "children": [
-                    {"label": "Similar sessions K",    "key": "similar_sessions_k",    "type": "int",
-                     "help": "Top-K similar past Loop records from other sessions"},
-                    {"label": "Session history limit", "key": "session_history_limit", "type": "int",
-                     "help": "Max prior images from current session to include"},
-                ],
-            },
         ],
     },
     {
         "label": "Database",
         "key": "database",
-        "help": "SQLite WAL operational state store (replaces Redis)",
+        "help": "PostgreSQL connection parameters (consumed by Spring Boot application.yml)",
         "children": [
-            {"label": "DB path",              "key": "path",                   "type": "string",
-             "help": "Absolute path to pipeline.db (auto: {paths.root}/pipeline.db)"},
-            {"label": "Busy timeout (ms)",    "key": "busy_timeout_ms",        "type": "int",
-             "help": "SQLite busy_timeout — how long a blocked write waits before failing"},
-            {"label": "Cleanup interval (s)", "key": "cleanup_interval_secs",  "type": "int",
-             "help": "How often to delete expired scorer_session and tactical_budget rows"},
+            {"label": "PostgreSQL URL",      "key": "postgres_url",      "type": "string",
+             "help": "JDBC URL, e.g. jdbc:postgresql://localhost:5432/pipeline"},
+            {"label": "PostgreSQL user",     "key": "postgres_user",     "type": "string",
+             "help": "PostgreSQL username"},
+            {"label": "PostgreSQL password", "key": "postgres_password", "type": "string",
+             "help": "PostgreSQL password"},
         ],
     },
     {

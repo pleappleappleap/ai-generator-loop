@@ -1,7 +1,11 @@
-.PHONY: all lint typecheck test docs clean
+.PHONY: all lint typecheck test docs clean venv
 
-VENV ?= ../loop/scorers/venv
+VENV ?= venv
 PYTHON = $(VENV)/bin/python3
+
+venv:
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install ruff pyright pytest pytest-mock
 
 all: lint typecheck
 
@@ -16,12 +20,9 @@ test:
 
 docs:
 	PYTHONPATH=. $(VENV)/bin/pdoc \
-		tactical_llm \
 		prompts \
-		retrieval \
-		session \
 		-o docs/
 
 clean:
-	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache docs
+	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache docs venv
 	rm -f *.pyc tests/*.pyc
