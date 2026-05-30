@@ -24,3 +24,4 @@ docs:
 clean:
 	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache docs
 	rm -f *.pyc tests/*.pyc
+	rm -rf target

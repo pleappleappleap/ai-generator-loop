@@ -71,4 +71,4 @@ docker: compile
 # ── Clean ──────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -rf build target
+	rm -rf build target tools
