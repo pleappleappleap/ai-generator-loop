@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.logging.Logger;
 import java.util.stream.StreamSupport;
 
@@ -584,7 +585,9 @@ public class ComfyUiWorker {
 
         // Poll history every 10 s as fallback (WS event may be missed on connection race)
         for (int tick = 0; tick < 120 && !done.isDone(); tick++) {
-            done.get(10, TimeUnit.SECONDS);
+            try {
+                done.get(10, TimeUnit.SECONDS);
+            } catch (TimeoutException ignored) {}
             if (!done.isDone() && historyComplete(promptId)) done.complete(null);
         }
         if (!done.isDone()) throw new RuntimeException("Timed out waiting for ComfyUI prompt " + promptId);
