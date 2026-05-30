@@ -1,6 +1,6 @@
-.PHONY: all lint typecheck test build format docs clean sqlx-prepare
+.PHONY: all lint typecheck test format docs clean
 
-all: lint typecheck test build
+all: lint typecheck test
 
 lint:
 	$(MAKE) -C scorers lint
@@ -13,18 +13,12 @@ typecheck:
 test:
 	$(MAKE) -C scorers test
 
-build:
-	$(MAKE) -C scorers build
-
 format:
 	$(MAKE) -C scorers format
 	scorers/venv/bin/ruff format ui/
 
 docs:
 	$(MAKE) -C scorers docs
-
-sqlx-prepare:
-	$(MAKE) -C scorers sqlx-prepare
 
 clean:
 	$(MAKE) -C scorers clean

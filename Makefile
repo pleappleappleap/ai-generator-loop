@@ -7,7 +7,7 @@ ifeq ($(OS),Windows_NT)
 endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
-        prereqs prereqs-system prereqs-python models models-pick sqlx-prepare setup \
+        prereqs prereqs-system prereqs-python models models-pick setup \
         artemis-broker artemis-pull docker-install comfyui-nodes
 
 # Use generated config.yaml if present, otherwise fall back to the template.
@@ -18,8 +18,8 @@ ARTEMIS_PULL_OK  := loop/.artemis-image-pulled
 DOCKER_OK        := loop/.docker-installed
 COMFYUI_NODES_OK := loop/ComfyUI/custom_nodes/.nodes-installed
 
-all: venv/.installed loop/scorers/venv/.installed $(COMFYUI_NODES_OK) \
-     $(ARTEMIS_PULL_OK) lint typecheck test build
+all: venv/.installed loop/scorers/venv/.installed tactical-llm/venv/.installed \
+     $(COMFYUI_NODES_OK) $(ARTEMIS_PULL_OK) lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
@@ -35,8 +35,7 @@ test:
 	$(MAKE) -C pipeline test
 
 build:
-	$(MAKE) -C loop build
-	$(MAKE) -C pipeline
+	$(MAKE) -C pipeline compile
 
 format:
 	$(MAKE) -C loop format
@@ -45,9 +44,6 @@ docs:
 	latexmk -pdf -interaction=nonstopmode ARCHITECTURE.tex
 	$(MAKE) -C loop docs
 	$(MAKE) -C tactical-llm docs
-
-sqlx-prepare:
-	$(MAKE) -C loop sqlx-prepare
 
 clean:
 	latexmk -C ARCHITECTURE.tex
@@ -72,7 +68,7 @@ SCORER_MODEL_DIRS := $(shell grep -E '^loop/scorers/models/' .gitignore | sed 's
 # After distclean, restore with: make setup
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
-	rm -rf venv loop/scorers/venv
+	rm -rf venv loop/scorers/venv tactical-llm/venv
 	@echo "==> Removing auto-downloaded scorer models (preserving .gitkeep sentinels)..."
 	@for d in $(SCORER_MODEL_DIRS); do \
 	  if [ -d "$$d" ]; then \
@@ -243,37 +239,16 @@ prereqs-system: docker-install
 	  esac; \
 	fi; \
 	\
-	echo "==> Rust"; \
-	if command -v cargo >/dev/null 2>&1; then \
-	  echo "    already installed: $$(cargo --version)"; \
+	echo "==> Java 21 (required for the pipeline application)"; \
+	if java -version 2>&1 | grep -q 'version "2[1-9]\|version "[3-9][0-9]'; then \
+	  echo "    already installed: $$(java -version 2>&1 | head -1)"; \
 	else \
 	  case "$$PKG" in \
-	    homebrew) curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path ;; \
-	    *)        wget -qO- https://sh.rustup.rs | sh -s -- -y --no-modify-path ;; \
-	  esac; \
-	  . "$$HOME/.cargo/env"; \
-	fi; \
-	. "$$HOME/.cargo/env" 2>/dev/null || true; \
-	\
-	echo "==> sqlx-cli (required for Rust SQLite compile-time query verification)"; \
-	if "$$HOME/.cargo/bin/cargo-sqlx" --version >/dev/null 2>&1 || \
-	   command -v cargo-sqlx >/dev/null 2>&1; then \
-	  echo "    already installed."; \
-	else \
-	  . "$$HOME/.cargo/env" 2>/dev/null || true; \
-	  cargo install sqlx-cli --no-default-features --features sqlite; \
-	fi; \
-	\
-	echo "==> protoc (required by LanceDB Rust crate)"; \
-	if command -v protoc >/dev/null 2>&1; then \
-	  echo "    already installed: $$(protoc --version)"; \
-	else \
-	  case "$$PKG" in \
-	    homebrew) brew install protobuf ;; \
-	    apt)      sudo apt-get install -y protobuf-compiler ;; \
-	    dnf)      sudo dnf install -y protobuf-compiler ;; \
-	    pacman)   sudo pacman -S --noconfirm protobuf ;; \
-	    zypper)   sudo zypper install -y protobuf ;; \
+	    homebrew) brew install openjdk@21 ;; \
+	    apt)      sudo apt-get install -y openjdk-21-jdk ;; \
+	    dnf)      sudo dnf install -y java-21-openjdk-devel ;; \
+	    pacman)   sudo pacman -S --noconfirm jdk21-openjdk ;; \
+	    zypper)   sudo zypper install -y java-21-openjdk-devel ;; \
 	  esac; \
 	fi; \
 	\
@@ -307,7 +282,8 @@ prereqs-system: docker-install
 # Create both Python venvs and install all packages into each.
 # Sentinel files (venv/.installed, loop/scorers/venv/.installed) let Make
 # skip reinstallation when nothing has changed.
-prereqs-python: venv/.installed loop/scorers/venv/.installed loop/ComfyUI/venv/.installed
+prereqs-python: venv/.installed loop/scorers/venv/.installed loop/ComfyUI/venv/.installed \
+                tactical-llm/venv/.installed
 
 venv/.installed: requirements.txt
 	python3.11 -m venv venv
@@ -360,7 +336,11 @@ $(COMFYUI_NODES_OK): loop/ComfyUI/venv/.installed
 	@touch $(COMFYUI_NODES_OK)
 	@echo "==> ComfyUI custom nodes installed."
 
-# Scorers venv also serves tactical-llm (see tactical-llm/Makefile).
+tactical-llm/venv/.installed:
+	$(MAKE) -C tactical-llm venv
+	@touch tactical-llm/venv/.installed
+	@echo "==> tactical-llm venv ready."
+
 # llama-cpp-python requires platform-specific CMAKE_ARGS for GPU support
 # and is installed separately after the rest of the requirements.
 loop/scorers/venv/.installed: loop/scorers/requirements.txt

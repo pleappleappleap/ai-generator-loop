@@ -7,7 +7,7 @@ export AI_IMAGE_ROOT
 printf "%-22s %s\n" "PROCESS" "STATUS"
 printf "%-22s %s\n" "-------" "------"
 
-for comp in comfyui llama_cpp clip_scorer artifact_scorer vlm_scorer pipeline monitor; do
+for comp in comfyui llama_cpp clip_scorer artifact_scorer vlm_scorer pipeline; do
     component_status "$comp"
 done
 

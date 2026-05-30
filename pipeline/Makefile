@@ -1,4 +1,4 @@
-.PHONY: all resolve compile test docker clean
+.PHONY: all resolve compile package test docker clean
 
 JAVA   := java
 JAVAC  := javac
@@ -52,6 +52,8 @@ compile: $(LIB)/.resolved
 	$(JAVAC) --release 21 -cp "$(LIB)/*" -d $(OUT) @build/sources.txt
 	cp -r $(RES)/. $(OUT)/
 
+package: compile
+
 # ── Test (compile + run) ───────────────────────────────────────────────────────
 
 test: compile $(TEST_LIB)/.resolved $(JUNIT_JAR)
@@ -69,4 +71,4 @@ docker: compile
 # ── Clean ──────────────────────────────────────────────────────────────────────
 
 clean:
-	rm -rf build
+	rm -rf build target

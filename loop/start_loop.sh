@@ -27,8 +27,6 @@ sleep 10
 # Java pipeline application (JMS workers + REST API + WebSocket).
 "$LOOP_DIR/pipeline.sh" start
 
-"$LOOP_DIR/monitor.sh" start
-
 _HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || hostname 2>/dev/null || echo "localhost")
 
 echo ""
@@ -45,7 +43,7 @@ echo "  loop.generated  [queue]  → Scorer (Java)"
 echo "  loop.verdicts   [queue]  → Tactical LLM caller (Java)"
 echo "  loop.retry      [queue]  → ComfyUI worker (Java)"
 echo "  loop.inpaint    [queue]  → ComfyUI worker (Java)"
-echo "  pipeline.dlx    [queue]  ← dead letters → monitor"
+echo "  pipeline.dlx    [queue]  ← dead letters (Artemis console)"
 echo ""
 echo "Native services:"
 echo "  Pipeline UI:   http://localhost:8090"

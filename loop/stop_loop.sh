@@ -7,7 +7,7 @@ LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
 AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
 export AI_IMAGE_ROOT
 
-for comp in monitor pipeline vlm_scorer artifact_scorer clip_scorer llama_cpp comfyui; do
+for comp in pipeline vlm_scorer artifact_scorer clip_scorer llama_cpp comfyui; do
     "$LOOP_DIR/${comp}.sh" stop
 done
 
