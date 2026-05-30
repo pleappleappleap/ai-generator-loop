@@ -1,6 +1,8 @@
 package ai.image.pipeline.config;
 
 import jakarta.jms.ConnectionFactory;
+import jakarta.jms.XAConnectionFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.jms.config.DefaultJmsListenerContainerFactory;
@@ -12,10 +14,10 @@ public class JmsConfig {
 
     @Bean
     public DefaultJmsListenerContainerFactory jmsListenerContainerFactory(
-            ConnectionFactory connectionFactory,
+            @Qualifier("xaConnectionFactory") XAConnectionFactory xaConnectionFactory,
             PlatformTransactionManager transactionManager) {
         DefaultJmsListenerContainerFactory factory = new DefaultJmsListenerContainerFactory();
-        factory.setConnectionFactory(connectionFactory);
+        factory.setConnectionFactory((ConnectionFactory) xaConnectionFactory);
         factory.setTransactionManager(transactionManager);
         factory.setSessionTransacted(false);
         factory.setConcurrency("1-1");
@@ -23,8 +25,9 @@ public class JmsConfig {
     }
 
     @Bean
-    public JmsTemplate jmsTemplate(ConnectionFactory connectionFactory) {
-        JmsTemplate template = new JmsTemplate(connectionFactory);
+    public JmsTemplate jmsTemplate(
+            @Qualifier("xaConnectionFactory") XAConnectionFactory xaConnectionFactory) {
+        JmsTemplate template = new JmsTemplate((ConnectionFactory) xaConnectionFactory);
         template.setSessionTransacted(false);
         return template;
     }
