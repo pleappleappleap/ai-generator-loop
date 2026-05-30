@@ -21,8 +21,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.WebSocket;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -55,6 +57,7 @@ public class ComfyUiWorker {
     private final ModelsConfig modelsConfig;
     private final RestClient comfyClient;
     private final GalleryBroadcastService galleryBroadcast;
+    private final Path workflowsDir;
 
     public ComfyUiWorker(
             PlatformTransactionManager txManager,
@@ -63,7 +66,8 @@ public class ComfyUiWorker {
             ObjectMapper mapper,
             ModelsConfig modelsConfig,
             GalleryBroadcastService galleryBroadcast,
-            @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam) {
+            @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam,
+            @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirParam) {
         this.requiresNew = new TransactionTemplate(txManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.jdbc = jdbc;
@@ -72,6 +76,7 @@ public class ComfyUiWorker {
         this.modelsConfig = modelsConfig;
         this.galleryBroadcast = galleryBroadcast;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
+        this.workflowsDir = Path.of(workflowsDirParam).toAbsolutePath().normalize();
     }
 
     // ── JMS listeners — stage only, return immediately ─────────────────────────
@@ -270,7 +275,11 @@ public class ComfyUiWorker {
     // ── Workflow patching ──────────────────────────────────────────────────────
 
     private ObjectNode loadWorkflow(String workflowPath) throws Exception {
-        String json = Files.readString(Path.of(workflowPath));
+        Path resolved = Path.of(workflowPath).toAbsolutePath().normalize();
+        if (!resolved.startsWith(workflowsDir)) {
+            throw new SecurityException("Workflow path outside allowed directory: " + workflowPath);
+        }
+        String json = Files.readString(resolved);
         return (ObjectNode) mapper.readTree(json);
     }
 
@@ -577,9 +586,9 @@ public class ComfyUiWorker {
             if (nodeOutput.has("images")) {
                 JsonNode img = nodeOutput.get("images").get(0);
                 return comfyuiUrl + "/view"
-                        + "?filename=" + img.get("filename").asText()
-                        + "&subfolder=" + img.get("subfolder").asText()
-                        + "&type=" + img.get("type").asText();
+                        + "?filename=" + URLEncoder.encode(img.get("filename").asText(), StandardCharsets.UTF_8)
+                        + "&subfolder=" + URLEncoder.encode(img.get("subfolder").asText(), StandardCharsets.UTF_8)
+                        + "&type=" + URLEncoder.encode(img.get("type").asText(), StandardCharsets.UTF_8);
             }
         }
         throw new RuntimeException("No image output found for prompt " + promptId);
