@@ -79,12 +79,10 @@ distclean: clean
 	    [ "$$keep" = "1" ] && touch "$$d/.gitkeep"; \
 	  fi; \
 	done
-	@echo "==> Removing ComfyUI clone (models/ and workflows/ preserved)..."
-	find loop/ComfyUI -mindepth 1 -maxdepth 1 \
-	  ! -name models ! -name workflows ! -name launch.sh ! -name README.md \
-	  -exec rm -rf {} +
+	@echo "==> Removing ComfyUI clone (including models)..."
+	rm -rf loop/ComfyUI
+	git checkout -- loop/ComfyUI/
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
-	@echo "    NOTE: SDXL checkpoints in loop/ComfyUI/models/ were preserved."
 
 # Interactive configuration TUI (menuconfig-style).
 # Generates config.yaml from auto-detected defaults.
