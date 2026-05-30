@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
+import jakarta.annotation.PreDestroy;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -58,6 +59,7 @@ public class ComfyUiWorker {
     private final RestClient comfyClient;
     private final GalleryBroadcastService galleryBroadcast;
     private final Path workflowsDir;
+    private final HttpClient httpClient;
 
     public ComfyUiWorker(
             PlatformTransactionManager txManager,
@@ -77,6 +79,12 @@ public class ComfyUiWorker {
         this.galleryBroadcast = galleryBroadcast;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
         this.workflowsDir = Path.of(workflowsDirParam).toAbsolutePath().normalize();
+        this.httpClient = HttpClient.newHttpClient();
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        httpClient.close();
     }
 
     // ── JMS listeners — stage only, return immediately ─────────────────────────
@@ -541,7 +549,6 @@ public class ComfyUiWorker {
         // WebSocket path with history fallback
         CompletableFuture<Void> done = new CompletableFuture<>();
         URI wsUri = URI.create(comfyuiWs + "?clientId=" + clientId);
-        HttpClient httpClient = HttpClient.newHttpClient();
         httpClient.newWebSocketBuilder().buildAsync(wsUri, new WebSocket.Listener() {
             @Override
             public java.util.concurrent.CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
