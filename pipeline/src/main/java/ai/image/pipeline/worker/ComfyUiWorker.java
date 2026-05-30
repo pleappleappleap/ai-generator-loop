@@ -7,16 +7,16 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import ai.image.pipeline.config.ModelsConfig;
 import ai.image.pipeline.service.GalleryBroadcastService;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
@@ -74,87 +74,55 @@ public class ComfyUiWorker {
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
     }
 
-    // ── JMS listeners (three queues, same handler) ─────────────────────────────
+    // ── JMS listeners — stage only, return immediately ─────────────────────────
+    // Tx1: JMS ACK + staging INSERT commit together when the @Transactional method
+    // returns. The poller below picks up the row and does the long ComfyUI work.
 
+    @Transactional
     @JmsListener(destination = "loop.generate")
-    public void onGenerate(String body) throws Exception {
-        process(body, "generate");
-    }
+    public void onGenerate(String body) throws Exception { stageGeneration(body, "generate"); }
 
+    @Transactional
     @JmsListener(destination = "loop.retry")
-    public void onRetry(String body) throws Exception {
-        process(body, "retry");
-    }
+    public void onRetry(String body) throws Exception { stageGeneration(body, "retry"); }
 
+    @Transactional
     @JmsListener(destination = "loop.inpaint")
-    public void onInpaint(String body) throws Exception {
-        process(body, "inpaint");
-    }
+    public void onInpaint(String body) throws Exception { stageGeneration(body, "inpaint"); }
 
-    // ── Crash recovery ─────────────────────────────────────────────────────────
-
-    @EventListener(ApplicationReadyEvent.class)
-    public void recoverPending() {
-        List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT image_uuid::text, session_uuid::text, prompt_id, payload::text " +
-                "FROM pending_generations",
-                Map.of());
-        for (Map<String, Object> row : rows) {
-            String imageUuid = (String) row.get("image_uuid");
-            String promptId = (String) row.get("prompt_id");
-            String payloadJson = (String) row.get("payload");
-            log.info("Recovery: resuming pending generation " + imageUuid);
-            try {
-                JsonNode payload = mapper.readTree(payloadJson);
-                resumeGeneration(imageUuid, promptId, payload);
-            } catch (Exception e) {
-                log.warning("Recovery failed for " + imageUuid + ": " + e.getMessage());
-            }
-        }
-    }
-
-    // ── Core processing ────────────────────────────────────────────────────────
-
-    private void process(String body, String type) throws Exception {
+    private void stageGeneration(String body, String type) throws Exception {
         JsonNode msg = mapper.readTree(body);
-        String imageUuid = msg.get("image_uuid").asText();
+        jdbc.update(
+                "INSERT INTO pending_generations (image_uuid, session_uuid, type, payload) " +
+                "VALUES (:id::uuid, :sess::uuid, :type, :payload::jsonb) ON CONFLICT DO NOTHING",
+                Map.of(
+                        "id", msg.get("image_uuid").asText(),
+                        "sess", msg.get("session_uuid").asText(),
+                        "type", type,
+                        "payload", body));
+    }
 
-        // Check for duplicate (message redelivery after Tx2 committed but before ACK)
-        boolean alreadyComplete = jdbc.queryForList(
-                "SELECT 1 FROM images WHERE image_uuid = :id::uuid AND image_path IS NOT NULL",
-                Map.of("id", imageUuid)).size() > 0;
-        if (alreadyComplete) {
-            log.info("Skipping already-complete generation " + imageUuid);
-            return;
+    // ── Polling loop — processes staged work (normal path + crash recovery) ────
+    // fixedDelay ensures only one execution is in flight at a time; the long
+    // ComfyUI call naturally gates the next poll.
+
+    @Scheduled(fixedDelay = 2000)
+    public void pollAndProcess() {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT image_uuid::text, prompt_id, payload::text " +
+                "FROM pending_generations LIMIT 1",
+                Map.of());
+        if (rows.isEmpty()) return;
+        Map<String, Object> row = rows.get(0);
+        String imageUuid = (String) row.get("image_uuid");
+        String promptId  = (String) row.get("prompt_id");
+        String payloadJson = (String) row.get("payload");
+        try {
+            JsonNode payload = mapper.readTree(payloadJson);
+            resumeGeneration(imageUuid, promptId, payload);
+        } catch (Exception e) {
+            log.warning("Generation processing failed for " + imageUuid + ": " + e.getMessage());
         }
-
-        // Tx1 (REQUIRES_NEW): ACK-independent staging INSERT
-        // The container's outer JTA Tx handles the JMS ACK when this method returns.
-        final boolean[] inserted = {false};
-        requiresNew.execute(status -> {
-            int rows = jdbc.update(
-                    "INSERT INTO pending_generations (image_uuid, session_uuid, type, payload) " +
-                    "VALUES (:id::uuid, :sess::uuid, :type, :payload::jsonb) ON CONFLICT DO NOTHING",
-                    Map.of(
-                            "id", imageUuid,
-                            "sess", msg.get("session_uuid").asText(),
-                            "type", type,
-                            "payload", body));
-            inserted[0] = rows > 0;
-            return null;
-        });
-
-        // If the staging row already existed (redelivery after Tx1 committed), skip re-staging
-        // and fall through to the external call with whatever state is already in the DB.
-        String existingPromptId = null;
-        if (!inserted[0]) {
-            List<String> pids = jdbc.queryForList(
-                    "SELECT prompt_id FROM pending_generations WHERE image_uuid = :id::uuid",
-                    Map.of("id", imageUuid), String.class);
-            existingPromptId = pids.isEmpty() ? null : pids.get(0);
-        }
-
-        resumeGeneration(imageUuid, existingPromptId, msg);
     }
 
     private void resumeGeneration(String imageUuid, String existingPromptId, JsonNode msg) throws Exception {

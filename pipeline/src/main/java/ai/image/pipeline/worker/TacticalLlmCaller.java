@@ -8,16 +8,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jms.annotation.JmsListener;
 import org.springframework.jms.core.JmsTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
@@ -65,62 +65,45 @@ public class TacticalLlmCaller {
         this.systemPrompt = loadSystemPrompt();
     }
 
-    // ── JMS listener ───────────────────────────────────────────────────────────
+    // ── JMS listener — stage only, return immediately ──────────────────────────
+    // Tx1: JMS ACK + staging INSERT commit together when @Transactional method returns.
+    // The poller below picks up the row and does the long LLM inference work.
 
+    @Transactional
     @JmsListener(destination = "loop.verdicts")
     public void onVerdict(String body) throws Exception {
         JsonNode msg = mapper.readTree(body);
-        String imageUuid = msg.get("image_uuid").asText();
-
-        // Skip if already decided (redelivery after Tx2 committed but before ACK)
-        boolean alreadyDecided = !jdbc.queryForList(
-                "SELECT 1 FROM images WHERE image_uuid = :id::uuid AND decision IS NOT NULL",
-                Map.of("id", imageUuid)).isEmpty();
-        if (alreadyDecided) {
-            log.info("Skipping already-decided verdict for " + imageUuid);
-            return;
-        }
-
-        // Tx1 (REQUIRES_NEW): stage
-        final String payloadJson = body;
-        requiresNew.execute(status -> {
-            jdbc.update(
-                    "INSERT INTO pending_decisions (image_uuid, session_uuid, verdict_payload) " +
-                    "VALUES (:id::uuid, :sess::uuid, :payload::jsonb) ON CONFLICT DO NOTHING",
-                    Map.of(
-                            "id", imageUuid,
-                            "sess", msg.get("session_uuid").asText(),
-                            "payload", payloadJson));
-            return null;
-        });
-
-        processVerdict(imageUuid, msg);
+        jdbc.update(
+                "INSERT INTO pending_decisions (image_uuid, session_uuid, verdict_payload) " +
+                "VALUES (:id::uuid, :sess::uuid, :payload::jsonb) ON CONFLICT DO NOTHING",
+                Map.of(
+                        "id", msg.get("image_uuid").asText(),
+                        "sess", msg.get("session_uuid").asText(),
+                        "payload", body));
     }
 
-    // ── Crash recovery ─────────────────────────────────────────────────────────
+    // ── Polling loop — processes staged work (normal path + crash recovery) ────
 
-    @EventListener(ApplicationReadyEvent.class)
-    public void recoverPending() {
+    @Scheduled(fixedDelay = 2000)
+    public void pollAndProcess() {
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT image_uuid::text, verdict_payload::text, decision " +
-                "FROM pending_decisions",
+                "FROM pending_decisions LIMIT 1",
                 Map.of());
-        for (Map<String, Object> row : rows) {
-            String imageUuid = (String) row.get("image_uuid");
-            String decision = (String) row.get("decision");
-            String payloadJson = (String) row.get("verdict_payload");
-            log.info("Recovery: resuming pending decision for " + imageUuid);
-            try {
-                JsonNode msg = mapper.readTree(payloadJson);
-                if (decision != null) {
-                    // LLM already ran but Tx2 failed — re-execute Tx2
-                    completeTx2(imageUuid, msg, decision, null);
-                } else {
-                    processVerdict(imageUuid, msg);
-                }
-            } catch (Exception e) {
-                log.warning("Recovery failed for " + imageUuid + ": " + e.getMessage());
+        if (rows.isEmpty()) return;
+        Map<String, Object> row = rows.get(0);
+        String imageUuid = (String) row.get("image_uuid");
+        String decision   = (String) row.get("decision");
+        String payloadJson = (String) row.get("verdict_payload");
+        try {
+            JsonNode msg = mapper.readTree(payloadJson);
+            if (decision != null) {
+                completeTx2(imageUuid, msg, decision, null);
+            } else {
+                processVerdict(imageUuid, msg);
             }
+        } catch (Exception e) {
+            log.warning("Decision processing failed for " + imageUuid + ": " + e.getMessage());
         }
     }
 
