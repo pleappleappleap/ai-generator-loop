@@ -27,8 +27,6 @@ public class JmsConfig {
     @Bean
     public JmsTemplate jmsTemplate(
             @Qualifier("xaConnectionFactory") XAConnectionFactory xaConnectionFactory) {
-        JmsTemplate template = new JmsTemplate((ConnectionFactory) xaConnectionFactory);
-        template.setSessionTransacted(false);
-        return template;
+        return new JmsTemplate((ConnectionFactory) xaConnectionFactory);
     }
 }
