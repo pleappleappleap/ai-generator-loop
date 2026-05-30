@@ -82,3 +82,32 @@ component_restart() {
     sleep 1
     component_start "$name" "$@"
 }
+
+# component_check_healthy url [match]
+# Returns 0 if url responds HTTP 200 (and body contains match if given), 1 otherwise.
+component_check_healthy() {
+    local url="$1" match="${2:-}"
+    local body
+    body=$(curl -sf --max-time 3 "$url" 2>/dev/null) || return 1
+    [ -z "$match" ] || echo "$body" | grep -q "$match" || return 1
+    return 0
+}
+
+# component_wait_healthy url name [max_wait=120] [match]
+# Blocks until healthy or exits the script with an error.
+component_wait_healthy() {
+    local url="$1" name="$2" max_wait="${3:-120}" match="${4:-}"
+    local interval=2 elapsed=0
+    printf "==> Waiting for %s" "$name"
+    while ! component_check_healthy "$url" "$match"; do
+        if [ "$elapsed" -ge "$max_wait" ]; then
+            echo ""
+            echo "ERROR: $name did not become healthy within ${max_wait}s — check $(basename "$PIDDIR")/$name.log" >&2
+            exit 1
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+        printf "."
+    done
+    echo " ready (${elapsed}s)"
+}

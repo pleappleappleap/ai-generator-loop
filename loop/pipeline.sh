@@ -35,5 +35,12 @@ case "${1:-status}" in
             ai.image.pipeline.PipelineApplication
         ;;
     status)  component_status pipeline ;;
-    *)       echo "Usage: $0 {start|stop|restart|status}" >&2; exit 1 ;;
+    health)
+        if component_check_healthy "http://localhost:8090/actuator/health" '"UP"'; then
+            printf "%-22s %s\n" "pipeline" "healthy"
+        else
+            printf "%-22s %s\n" "pipeline" "not ready"
+            exit 1
+        fi ;;
+    *)       echo "Usage: $0 {start|stop|restart|status|health}" >&2; exit 1 ;;
 esac

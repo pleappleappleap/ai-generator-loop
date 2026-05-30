@@ -50,5 +50,13 @@ case "${1:-status}" in
     stop)    component_stop llama_cpp ;;
     restart) component_stop llama_cpp; sleep 1; _start ;;
     status)  component_status llama_cpp ;;
-    *)       echo "Usage: $0 {start|stop|restart|status}" >&2; exit 1 ;;
+    health)
+        _resolve
+        if component_check_healthy "http://localhost:${LLM_PORT}/health" '"ok"'; then
+            printf "%-22s %s\n" "llama_cpp" "healthy"
+        else
+            printf "%-22s %s\n" "llama_cpp" "not ready"
+            exit 1
+        fi ;;
+    *)       echo "Usage: $0 {start|stop|restart|status|health}" >&2; exit 1 ;;
 esac

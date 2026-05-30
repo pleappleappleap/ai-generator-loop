@@ -21,5 +21,12 @@ case "${1:-status}" in
                  --app-dir "$SCORERS" \
                  --host 0.0.0.0 --port "$PORT" ;;
     status)  component_status artifact_scorer ;;
-    *)       echo "Usage: $0 {start|stop|restart|status}" >&2; exit 1 ;;
+    health)
+        if component_check_healthy "http://localhost:${PORT}/health"; then
+            printf "%-22s %s\n" "artifact_scorer" "healthy"
+        else
+            printf "%-22s %s\n" "artifact_scorer" "not ready"
+            exit 1
+        fi ;;
+    *)       echo "Usage: $0 {start|stop|restart|status|health}" >&2; exit 1 ;;
 esac
