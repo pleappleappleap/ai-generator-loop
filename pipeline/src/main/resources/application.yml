@@ -27,8 +27,6 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
-narayana:
-  log-dir: ${user.home}/.pipeline/narayana-store
 
 management:
   endpoints:

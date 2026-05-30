@@ -16,4 +16,3 @@ data:
   SIDECARS_CLIP_SCORER_URL: http://clip-scorer:8081
   SIDECARS_ARTIFACT_SCORER_URL: http://artifact-scorer:8082
   SIDECARS_VLM_SCORER_URL: http://vlm-scorer:8083
-  NARAYANA_LOG_DIR: /var/pipeline/narayana-store
