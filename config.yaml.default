@@ -4,7 +4,6 @@
 
 paths:
   root: auto          # auto: parent directory of this file
-  lancedb: auto       # auto: {root}/lancedb
   comfyui: auto       # auto: {root}/loop/ComfyUI
   output: auto        # auto: {root}/loop/output
   scorers: auto       # auto: {root}/loop/scorers
@@ -109,7 +108,6 @@ thresholds:
   clip: 0.25
   artifact: 0.50
   score_timeout_secs: 60
-  # The Rust aggregator reads these from config.yaml via serde_yaml.
 
 broker:
   url: tcp://localhost:61616            # Artemis OpenWire — Java pipeline connects here
@@ -120,9 +118,9 @@ broker:
   comfyui_ws: ws://127.0.0.1:8188/ws
 
 database:
-  path: auto              # auto: {paths.root}/pipeline.db
-  busy_timeout_ms: 5000
-  cleanup_interval_secs: 300
+  postgres_url: jdbc:postgresql://localhost:5432/pipeline   # override for K8s: jdbc:postgresql://postgres:5432/pipeline
+  username: pipeline
+  password: pipeline
 
 system:
   package_manager: auto   # auto | homebrew | apt | dnf | pacman | zypper
@@ -144,9 +142,6 @@ tactical:
     max_inpaints: 2   # inpaint budget per session
     accept_vlm_mean_min: 7.0   # minimum mean VLM score to accept a candidate
     accept_clip_min: 0.30      # minimum CLIP score to accept a candidate
-  retrieval:
-    similar_sessions_k: 5      # top-K similar past Loop records for context
-    session_history_limit: 10  # max prior images from current session to include
 
 ui:
   port: 7860           # port the browser UI listens on
