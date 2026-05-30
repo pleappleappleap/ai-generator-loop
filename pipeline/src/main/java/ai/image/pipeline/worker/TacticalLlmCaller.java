@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -52,7 +53,8 @@ public class TacticalLlmCaller {
             TacticalLlmConfig cfg,
             ContextService contextService,
             GalleryBroadcastService galleryBroadcast,
-            @Qualifier("tacticalLlmClient") RestClient llmClient) {
+            @Qualifier("tacticalLlmClient") RestClient llmClient,
+            @Value("${tactical-llm.system-prompt-file:tactical-llm/system_prompt.md}") String systemPromptFile) {
         this.requiresNew = new TransactionTemplate(txManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.jdbc = jdbc;
@@ -62,7 +64,7 @@ public class TacticalLlmCaller {
         this.contextService = contextService;
         this.galleryBroadcast = galleryBroadcast;
         this.llmClient = llmClient;
-        this.systemPrompt = loadSystemPrompt();
+        this.systemPrompt = loadSystemPrompt(systemPromptFile);
     }
 
     // ── JMS listener — stage only, return immediately ──────────────────────────
@@ -482,36 +484,16 @@ public class TacticalLlmCaller {
 
     // ── System prompt ──────────────────────────────────────────────────────────
 
-    private String loadSystemPrompt() {
-        String filePath = System.getProperty("tactical.system-prompt-file",
-                "tactical-llm/system_prompt.md");
+    private String loadSystemPrompt(String filePath) {
         try {
             return Files.readString(Path.of(filePath));
         } catch (Exception e) {
-            log.warning("Could not load system prompt from " + filePath + ": " + e.getMessage());
-            return DEFAULT_SYSTEM_PROMPT;
+            throw new IllegalStateException(
+                    "Cannot load tactical LLM system prompt from '" + filePath +
+                    "'. Set tactical-llm.system-prompt-file to an absolute path " +
+                    "or ensure the file exists relative to the working directory.", e);
         }
     }
-
-    private static final String DEFAULT_SYSTEM_PROMPT = """
-You are the tactical executor in a multi-agent AI image generation pipeline.
-Your job is to evaluate each generated image against the current creative vision
-and decide the best next step: accept, retry, inpaint, or give_up.
-On retry or inpaint, revise the prompt and optionally modify the ComfyUI workflow graph.
-Your context (north star, direction, taste) is provided in the decision prompt below.
-
-Respond with a single JSON object and nothing else:
-{
-  "decision": "accept" | "retry" | "inpaint" | "give_up",
-  "reasoning": "<one or two sentences>",
-  "confidence": <0.0-1.0>,
-  "retry_prompt": "<comma-separated tags>",
-  "retry_params": {},
-  "retry_model": "",
-  "retry_loras": [],
-  "retry_graph_ops": []
-}
-""";
 
     private static String nullIfBlank(String s) {
         return (s == null || s.isBlank()) ? null : s;

@@ -46,6 +46,7 @@ sidecars:
     url: http://localhost:8083
 
 tactical-llm:
+  system-prompt-file: tactical-llm/system_prompt.md
   url: http://localhost:8080/v1
   model: default
   temperature: 0.1
