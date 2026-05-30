@@ -126,6 +126,7 @@ def _build_defaults() -> dict:
             "artifact": 0.50,
         },
         "broker": {
+            "url":             "tcp://localhost:61616",
             "artemis_console": "http://localhost:8161",
             "comfyui_url":     "http://127.0.0.1:8188",
             "comfyui_ws":      "ws://127.0.0.1:8188/ws",
@@ -272,11 +273,15 @@ MENU_SCHEMA = [
         "key": "broker",
         "help": "Artemis and ComfyUI connection parameters",
         "children": [
-            {"label": "Artemis console",  "key": "artemis_console", "type": "string",
+            {"label": "Artemis URL (OpenWire)", "key": "url",             "type": "string",
+             "help": "Artemis OpenWire TCP URL used by the Java pipeline. "
+                     "Local: tcp://localhost:61616. K3s NodePort: tcp://<node-ip>:30616. "
+                     "Remote/virt cluster: set to the broker's external address."},
+            {"label": "Artemis console",        "key": "artemis_console", "type": "string",
              "help": "Hawtio management console URL"},
-            {"label": "ComfyUI URL",      "key": "comfyui_url",     "type": "string",
+            {"label": "ComfyUI URL",            "key": "comfyui_url",     "type": "string",
              "help": "ComfyUI HTTP API base URL"},
-            {"label": "ComfyUI WS",            "key": "comfyui_ws",      "type": "string",
+            {"label": "ComfyUI WS",             "key": "comfyui_ws",      "type": "string",
              "help": "ComfyUI WebSocket URL for completion events"},
         ],
     },

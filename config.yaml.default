@@ -112,8 +112,9 @@ thresholds:
   # The Rust aggregator reads these from config.yaml via serde_yaml.
 
 broker:
-  amqp_url: amqp://admin:admin@localhost:5672      # Artemis AMQP 1.0 (Rust components)
-  stomp_url: stomp://admin:admin@localhost:61613   # Artemis STOMP (Python components)
+  url: tcp://localhost:61616            # Artemis OpenWire — Java pipeline connects here
+                                        # K3s NodePort: tcp://<node-ip>:30616
+                                        # Remote/virt cluster: set to the broker's external address
   artemis_console: http://localhost:8161
   comfyui_url: http://127.0.0.1:8188
   comfyui_ws: ws://127.0.0.1:8188/ws

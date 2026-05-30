@@ -7,6 +7,9 @@ data:
   SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/pipeline
   SPRING_DATASOURCE_USERNAME: pipeline
   SPRING_DATASOURCE_PASSWORD: pipeline
+  # In-cluster default: Artemis resolves via K8s service DNS.
+  # Override with the external address (e.g. tcp://<node-ip>:30616) when
+  # Artemis runs in a different cluster or VM (see config.yaml broker.url).
   SPRING_ARTEMIS_BROKER_URL: tcp://artemis:61616
   SPRING_ARTEMIS_USER: admin
   SPRING_ARTEMIS_PASSWORD: admin

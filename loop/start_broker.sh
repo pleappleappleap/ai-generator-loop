@@ -36,6 +36,7 @@ else
     # First run: create the container.
     docker run -d \
         --name "$CONTAINER" \
+        -p 61616:61616 \
         -p 5672:5672 \
         -p 61613:61613 \
         -p 8161:8161 \

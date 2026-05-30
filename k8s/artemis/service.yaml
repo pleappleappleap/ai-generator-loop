@@ -10,6 +10,10 @@ spec:
   # on fixed host ports (5672/61613/8161) without needing Ingress.
   type: NodePort
   ports:
+    - name: openwire
+      port: 61616
+      targetPort: 61616
+      nodePort: 30616
     - name: amqp
       port: 5672
       targetPort: 5672

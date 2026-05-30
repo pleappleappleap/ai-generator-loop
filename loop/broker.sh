@@ -18,9 +18,10 @@ _status() {
     echo ""
     echo "==> Artemis endpoints:"
     _HOST=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || echo "localhost")
-    echo "  console: http://${_HOST}:30161  (admin / admin)"
-    echo "  AMQP:    ${_HOST}:30672"
-    echo "  STOMP:   ${_HOST}:30613"
+    echo "  OpenWire: tcp://${_HOST}:30616"
+    echo "  AMQP:     ${_HOST}:30672"
+    echo "  STOMP:    ${_HOST}:30613"
+    echo "  console:  http://${_HOST}:30161  (admin / admin)"
 }
 
 _start() {
