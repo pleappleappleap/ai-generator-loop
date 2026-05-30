@@ -13,7 +13,7 @@
         <dependency org="org.springframework.boot" name="spring-boot-starter-actuator"      rev="3.5.0" conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-data-jpa" rev="3.5.0" conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-artemis"  rev="3.5.0" conf="compile->default"/>
-        <dependency org="dev.snowdrop"             name="narayana-spring-boot-starter" rev="3.5.0" conf="compile->default"/>
+        <dependency org="dev.snowdrop"             name="narayana-spring-boot-starter" rev="3.4.0" conf="compile->default"/>
         <dependency org="org.postgresql"           name="postgresql"                   rev="42.7.3" conf="runtime->default"/>
         <dependency org="com.pgvector"             name="pgvector"                     rev="0.1.6"  conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-test"     rev="3.5.0" conf="test->default"/>
