@@ -11,15 +11,13 @@ aggregator, which applies cascade threshold logic and emits a verdict.
 | `clip_scorer.py` | Python (STOMP) | ViT-L-14 CLIP similarity; durable sub to `scorer.requests` |
 | `artifact_scorer.py` | Python (STOMP) | AI-image-detector; durable sub to `scorer.requests` |
 | `vlm_scorer.py` | Python (STOMP) | Qwen2.5-VL-7B Q5\_K\_M; durable sub to `scorer.requests` |
-| `router/` | Rust (AMQP 1.0) | Fans out `loop.events` → `scorer.requests` multicast |
+| `router/` | Rust (AMQP 1.0) | Fans out `loop.events` -> `scorer.requests` multicast |
 | `aggregator/` | Rust (AMQP 1.0) | Merges results into SQLite `scorer_session`; emits verdicts |
 | `coordinator/` | Rust (Unix socket) | XA 2PC log; conversation/workflow/budget API |
 | `lancedb_manager/` | Rust (AMQP 1.0) | Writes terminal Loop records to LanceDB |
 | `db/` | Rust (library) | Shared SQLite pool, schema, cleanup task |
 
-The scorers Python venv (`venv/`) is also used by the UI server
-(`loop/ui/server.py`) and `tactical_llm.py`, which share the same ML
-libraries and the FastAPI/uvicorn stack.
+The scorers Python venv (`venv/`) is also used by `tactical_llm.py`.
 
 ## Activating the Python Environment
 
@@ -49,10 +47,10 @@ venv/bin/pytest tests/ -v
 ```
 
 The `tests/` directory covers:
-- `test_clip_scorer.py` — CLIP scorer unit tests
-- `test_artifact_scorer.py` — artifact scorer unit tests
-- `test_vlm_scorer.py` — VLM scorer unit tests
-- `test_ui_server.py` — UI server REST, WebSocket, and STOMP listener tests
+- `test_clip_scorer.py`  -  CLIP scorer unit tests
+- `test_artifact_scorer.py`  -  artifact scorer unit tests
+- `test_vlm_scorer.py`  -  VLM scorer unit tests
+- `test_ui_server.py`  -  UI server REST, WebSocket, and STOMP listener tests
 
 ### Full suite (lint + typecheck + Rust + Python)
 ```bash
@@ -78,7 +76,8 @@ make all
 
 ```
 models/
-├── artifact-detector/    umm-maybe/AI-image-detector (HuggingFace)
-├── vlm/                  Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
-└── tactical/             Qwen3-72B-abliterated-Q4_K_M.gguf (served via llama.cpp server)
++-- artifact-detector/    umm-maybe/AI-image-detector (HuggingFace)
++-- vlm/                  Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
++-- tactical/             Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit/ (served via mlx_lm.server)
+\-- strategic/            Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated/ (served via mlx_lm.server)
 ```

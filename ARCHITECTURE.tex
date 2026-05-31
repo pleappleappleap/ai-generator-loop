@@ -75,7 +75,7 @@ natural language prompt and iteratively generates, scores, and refines
 images until a candidate meeting all quality thresholds is accepted by a
 tactical large language model (LLM).
 
-A browser-based pipeline UI at \texttt{http://localhost:7860} provides the
+A browser-based pipeline UI at \texttt{http://localhost:12000} provides the
 primary operator interface: create and resume creative workflows, watch images
 arrive in a live gallery as they are generated and scored, send thumbs
 up/down feedback, and chat with the tactical LLM to refine creative direction.
@@ -130,10 +130,10 @@ All platforms       & Free disk       & 100\,GB            & 200\,GB \\
 \end{tabular}
 \end{center}
 
-The pipeline holds approximately 44\,GB of model weights in GPU memory
-simultaneously (ComfyUI + SDXL $\approx$14\,GB; tactical LLM $\approx$43\,GB;
-scorers $\approx$8\,GB). On discrete-GPU systems the tactical LLM can be
-offloaded partially to CPU via the \texttt{n\_gpu\_layers} config key.
+The pipeline holds approximately 60\,GB of model weights in GPU memory
+simultaneously (ComfyUI + SDXL $\approx$14\,GB; tactical LLM $\approx$45\,GB active;
+scorers $\approx$8\,GB). The tactical and strategic LLMs are ultra-sparse MoE models
+(80B total, $\sim$3B active per forward pass) served via \texttt{mlx\_lm.server}.
 See Section~\ref{sec:memory} for the per-component breakdown.
 
 \subsection{Bootstrap Prerequisites}
@@ -213,7 +213,9 @@ regenerate this document (\texttt{make doc}).
 The pipeline runs Artemis via the official Docker image
 (\texttt{apache/activemq-artemis}). AMQP~1.0 (port 5672), STOMP (port
 61613), and the management console (port 8161) are pre-enabled in the image
---- no \texttt{broker.xml} editing is required.
+--- no \texttt{broker.xml} editing is required. \texttt{middleware.sh}
+port-forwards these to localhost ports 12008, (61613 via STOMP), and 12009
+respectively.
 
 \texttt{make prereqs-system} installs Docker; \texttt{make all} pulls the
 image. To pull the image on its own:
@@ -230,7 +232,7 @@ loop/start_broker.sh
 
 Broker data is persisted in \texttt{loop/artemis-data/} (bind-mounted into
 the container). The management console is available at
-\texttt{http://localhost:8161} (credentials: \texttt{admin} / \texttt{admin}).
+\texttt{http://localhost:12009} (credentials: \texttt{admin} / \texttt{admin}).
 
 \subsection{Python Environments}
 
@@ -261,37 +263,16 @@ deactivate
 
 \subsubsection{Scorers environment}
 
-Install \texttt{llama-cpp-python} with the correct GPU backend flag for your
-platform before installing the remaining requirements:
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Platform} & \textbf{CMAKE\_ARGS} \\
-\midrule
-macOS (Metal / MPS)  & \texttt{CMAKE\_ARGS="-DLLAMA\_METAL=on"} \\
-NVIDIA (CUDA)        & \texttt{CMAKE\_ARGS="-DGGML\_CUDA=on"} \\
-AMD (ROCm / HIP)     & \texttt{CMAKE\_ARGS="-DGGML\_HIPBLAS=on"} \\
-CPU only             & (no flag required) \\
-\bottomrule
-\end{tabular}
-\end{center}
-
 \begin{lstlisting}[style=shell]
 cd $SOXHLET_ROOT/loop/scorers
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-
-# Set CMAKE_ARGS per the table above, then:
-pip install llama-cpp-python --no-binary llama-cpp-python
-
-pip install -r requirements.txt
+pip install -r requirements.txt   # includes mlx-lm, openai, stomp.py
 deactivate
 \end{lstlisting}
 
-\texttt{make prereqs-python} runs all of the above automatically, including
-GPU backend detection.
+\texttt{make prereqs-python} runs all of the above automatically.
 
 \subsection{Model Downloads}
 
@@ -333,24 +314,36 @@ Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 
 Approximately 5\,GB download.
 
-\subsubsection{Tactical LLM (Qwen3-72B)}
+\subsubsection{Tactical LLM (Qwen3-Next-80B-A3B, MLX 4-bit)}
 
-Qwen3-72B is a hybrid thinking model: it can reason step-by-step through
-ambiguous decisions (retry vs.\ inpaint, prompt diagnosis) and respond
-directly for clear-cut cases, controlled by a \texttt{<think>} token in
-the prompt.
+Ultra-sparse MoE: 80B total parameters, $\sim$3B active per forward pass.
+Served by \texttt{mlx\_lm.server} on port 12001 (OpenAI-compatible API).
+Thinking mode is controlled per-request via \texttt{/think} / \texttt{/no\_think}
+system prompt prefix --- off by default, enabled only for borderline decisions.
 
 \begin{lstlisting}[style=shell]
-mkdir -p $SOXHLET_ROOT/loop/scorers/models/tactical
-curl -L -o $SOXHLET_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
-  "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/\
-Qwen3-72B-abliterated-Q4_K_M.gguf"
+source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
+huggingface-cli download \
+  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical/\
+Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
 \end{lstlisting}
 
-Approximately 43\,GB download. Verify the filenames match
-\texttt{config.yaml.default} keys \texttt{models.vlm.filename} and
-\texttt{tactical.model.filename}, or update \texttt{config.yaml} to match
-what you downloaded.
+Approximately 45\,GB download.
+
+\subsubsection{Strategic LLM (Qwen3-Next-80B-A3B-Thinking, bf16)}
+
+Same base architecture as tactical. Full bf16 precision; \texttt{mlx\_lm.server}
+demand-pages inactive expert arrays from SSD. Served on port 12005.
+
+\begin{lstlisting}[style=shell]
+huggingface-cli download \
+  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic/\
+Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+\end{lstlisting}
+
+Approximately 160\,GB download.
 
 \subsection{ComfyUI}
 
@@ -485,10 +478,11 @@ Operational state & SQLite WAL (\texttt{pipeline.db}) & Crash-safe, zero-depende
 Vector store & LanceDB & Embedded, Arrow-native, supports ANN search \\
 Image generation & ComfyUI + SDXL & Workflow-based; supports ControlNet / LoRA \\
 Holistic scoring & Qwen2.5-VL-7B (Q5\_K\_M) & Fast local VLM; no API dependency \\
-Tactical LLM & Qwen3-72B (Q4\_K\_M, hybrid thinking) via llama.cpp & Local; OpenAI-compatible server \\
-Browser UI & FastAPI + uvicorn + WebSocket & Workflow management; live gallery; chat \\
+Tactical LLM & Qwen3-Next-80B-A3B MLX 4-bit via mlx\_lm & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
+Strategic LLM & Qwen3-Next-80B-A3B-Thinking bf16 via mlx\_lm & Same architecture; thinking variant \\
+Browser UI & Spring Boot + WebSocket & Pipeline management; live gallery; strategic review \\
 Rust binaries & router, aggregator, coordinator, lancedb\_manager & Zero-GIL concurrency; compile-time safety \\
-Python processes & scorers, comfyui\_worker, tactical\_llm, ui/server & ML model hosting; stomp.py for STOMP \\
+Python processes & scorers, comfyui\_worker, tactical\_llm & ML model hosting; stomp.py for STOMP \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -519,10 +513,11 @@ Four components are implemented in Rust:
 \end{description}
 
 All components with ML model dependencies are Python (STOMP via stomp.py).
-The \textbf{llama.cpp server} runs as a standalone process (started by
-\texttt{start\_loop.sh}) and exposes an OpenAI-compatible HTTP API on port
-8080. Both \texttt{tactical\_llm.py} and the UI chat endpoint consume it via
-the \texttt{openai} Python client, so the model is loaded exactly once.
+The \textbf{mlx\_lm server} runs as a standalone process (started by
+\texttt{loop.sh}) and exposes an OpenAI-compatible HTTP API on port 12001.
+\texttt{tactical\_llm.py} consumes it via the \texttt{openai} Python client,
+so the model is loaded exactly once. A separate strategic LLM server runs on
+port 12005 during strategic sessions.
 
 \subsection{Component Diagram}
 
@@ -640,7 +635,7 @@ server receives every message without competing with pipeline consumers.
 % ============================================================
 
 \begin{enumerate}
-  \item The operator opens the browser UI at \texttt{http://localhost:7860}.
+  \item The operator opens the browser UI at \texttt{http://localhost:12000}.
         They create a conversation (\texttt{ConversationCreate}) and a
         workflow (\texttt{WorkflowCreate} + \texttt{WorkflowResume}) via the
         UI server, which calls the coordinator over its Unix socket.
@@ -682,11 +677,12 @@ server receives every message without competing with pipeline consumers.
 
   \item \texttt{tactical\_llm} receives the verdict, queries the coordinator
         for budget state (\texttt{BudgetGet}) and user context
-        (\texttt{ContextGet} — recent chat messages and thumbs ratings),
-        retrieves LanceDB session history, and calls the llama.cpp server's
-        OpenAI-compatible API (\texttt{tactical.model.server\_url}) to decide
-        accept / retry / inpaint / give\_up. The decision and verdict are
-        published to \texttt{/topic/tactical.decisions} via STOMP.
+        (\texttt{ContextGet} --- recent chat messages and thumbs ratings),
+        retrieves LanceDB session history, and calls the mlx\_lm server's
+        OpenAI-compatible API (\texttt{tactical.model.server\_url}, port 12001)
+        to decide accept / retry / inpaint / give\_up / escalate.
+        The decision and verdict are published to
+        \texttt{/topic/tactical.decisions} via STOMP.
 
   \item The UI server receives the decision on \texttt{tactical.decisions} and
         pushes a \texttt{decision} event over the gallery WebSocket to the
@@ -1102,27 +1098,24 @@ Section~2.4). Run the single start script; it manages all startup ordering
 internally.
 
 \begin{lstlisting}[style=shell]
-$SOXHLET_ROOT/loop/start_loop.sh
+# Start middleware first (K3s workloads + port-forwards)
+$SOXHLET_ROOT/middleware.sh start
+
+# Start the Loop super-component
+$SOXHLET_ROOT/loop.sh start
 \end{lstlisting}
 
-\texttt{start\_loop.sh} starts three slow-initialising processes in parallel
-(Artemis, ComfyUI, llama.cpp server), waits for them to be ready, then
-starts the coordinator, all workers, and the UI server. The full startup
-sequence:
+\texttt{loop.sh} starts components in dependency order:
 
 \begin{enumerate}
-  \item Artemis broker, ComfyUI, and llama.cpp server start in parallel
-        (none depend on each other).
-  \item \texttt{sleep 10} — covers model loading for ComfyUI and llama.cpp.
-  \item Coordinator starts; \texttt{sleep 1} for its Unix socket to bind.
-  \item comfyui\_worker, router, aggregator, lancedb\_manager start.
-  \item clip\_scorer, artifact\_scorer, vlm\_scorer start.
-  \item tactical\_llm starts (connects to llama.cpp server).
-  \item UI server starts (FastAPI + uvicorn on \texttt{ui.port}).
-  \item monitor starts.
+  \item Middleware health check (Artemis on 12008, PostgreSQL on 12007).
+  \item \textbf{Parallel}: ComfyUI (port 12006) and tactical LLM server
+        (\texttt{mlx\_lm.server} on port 12001).
+  \item Scorers: clip (12002), artifact (12003), vlm (12004).
+  \item Spring Boot pipeline (port 12000).
 \end{enumerate}
 
-Individual components can also be started manually for development:
+Individual components can also be started via their component scripts:
 
 \begin{lstlisting}[style=shell]
 # Rust binaries
@@ -1132,36 +1125,22 @@ $SOXHLET_ROOT/loop/scorers/target/release/aggregator
 $SOXHLET_ROOT/loop/scorers/target/release/lancedb_manager
 
 # ComfyUI
-$SOXHLET_ROOT/loop/ComfyUI/launch.sh
+$SOXHLET_ROOT/loop/comfyui.sh start
 
-# llama.cpp OpenAI-compatible server (loads tactical LLM model)
-cd $SOXHLET_ROOT/loop/scorers
-source venv/bin/activate
-python -m llama_cpp.server \
-  --model models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
-  --n_gpu_layers -1 \
-  --host 0.0.0.0 \
-  --port 8080
-
-# Python workers -- root venv
-source $SOXHLET_ROOT/venv/bin/activate
-PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/comfyui_worker.py
+# mlx_lm tactical LLM server (port 12001)
+$SOXHLET_ROOT/loop/tactical_llm.sh start
 
 # Python workers -- scorers venv
 source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
 python $SOXHLET_ROOT/loop/scorers/clip_scorer.py
 python $SOXHLET_ROOT/loop/scorers/artifact_scorer.py
 python $SOXHLET_ROOT/loop/scorers/vlm_scorer.py
-PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/tactical-llm/tactical_llm.py
-
-# UI server -- scorers venv
-PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/ui/server.py
+PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/tactical-llm/tactical_llm.py
 \end{lstlisting}
 
 \subsection{Using the Browser UI}
 
-Open \texttt{http://localhost:7860} (or the host and port configured in
-\texttt{ui.host} / \texttt{ui.port}). The left sidebar lists your
+Open \texttt{http://localhost:12000}. The left sidebar lists your
 conversations and workflows. Click \textbf{New Session} to create a
 conversation, then \textbf{New Workflow} to select a ComfyUI workflow file
 and budget parameters. Click \textbf{Generate} to submit a prompt and watch
@@ -1173,29 +1152,16 @@ creative direction.
 
 \subsection{Stopping the Pipeline}
 
-On macOS and Linux:
-
 \begin{lstlisting}[style=shell]
-pkill -f comfyui_worker
-pkill -f clip_scorer
-pkill -f artifact_scorer
-pkill -f vlm_scorer
-pkill -f tactical_llm
-pkill -f "ui/server"
-pkill -f "llama_cpp.server"
-pkill -f monitor
-pkill -f router
-pkill -f aggregator
-pkill -f coordinator
-pkill -f lancedb_manager
-"$SOXHLET_ROOT/loop/artemis-broker/bin/artemis" stop
+$SOXHLET_ROOT/loop.sh stop
+$SOXHLET_ROOT/middleware.sh stop
 \end{lstlisting}
 
 \subsection{Monitoring}
 
 \subsubsection{Artemis management console}
 
-The Artemis web console is available at \texttt{http://localhost:8161}
+The Artemis web console is available at \texttt{http://localhost:12009}
 (default credentials: \texttt{admin} / \texttt{admin}). It provides:
 
 \begin{itemize}
@@ -1210,7 +1176,7 @@ Verify on first start that the following addresses appear under
 
 \subsubsection{Pipeline UI}
 
-The browser UI at \texttt{http://localhost:7860} shows live image and
+The browser UI at \texttt{http://localhost:12000} shows live image and
 decision events as they occur. It is the primary operator interface for
 monitoring generation progress, reviewing verdicts, and interacting with
 the tactical LLM.
@@ -1232,10 +1198,10 @@ header), message ID, and the full JSON body. Messages remain in
 \label{sec:memory}
 % ============================================================
 
-The figures below reflect full-GPU-resident operation. On discrete-GPU
-systems with insufficient VRAM, the tactical LLM layers can be partially
-offloaded to CPU via \texttt{tactical.model.n\_gpu\_layers} in
-\texttt{config.yaml} (\texttt{-1} = all layers on GPU).
+The figures below reflect full-resident operation on Apple Silicon.
+The tactical and strategic LLMs are ultra-sparse MoE (80B total, \textasciitilde3B
+active per forward pass). Only one of the two LLM servers runs at a time;
+Loop and Strategic are mutually exclusive.
 
 \begin{center}
 \begin{tabular}{lll}
@@ -1251,22 +1217,22 @@ vlm\_scorer (Python)      & Holistic image evaluation            & $\sim$6\,GB \
 aggregator (Rust)         & Result collection and verdict        & $\sim$5\,MB \\
 coordinator (Rust)        & XA coordinator + Python API          & $\sim$5\,MB \\
 lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
-llama.cpp server (Qwen3-72B Q4\_K\_M) & Tactical LLM + chat    & $\sim$43\,GB \\
+mlx\_lm server (Qwen3-Next-80B-A3B, 4-bit) & Tactical LLM        & $\sim$45\,GB \\
 tactical\_llm (Python)    & Decision logic (model via HTTP)      & $\sim$50\,MB \\
-UI server (Python)        & FastAPI + uvicorn + WebSocket        & $\sim$80\,MB \\
-ActiveMQ Artemis          & Message broker                       & $\sim$300\,MB \\
+Spring Boot pipeline      & REST + WebSocket + strategic LLM     & $\sim$200\,MB \\
+ActiveMQ Artemis          & Message broker (K3s)                 & $\sim$300\,MB \\
 OS / system overhead      &                                      & $\sim$2\,GB \\
 \midrule
-\textbf{Total (GPU)}      &                                      & $\sim$66\,GB \\
+\textbf{Total (Loop)}     &                                      & $\sim$67\,GB \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-The llama.cpp server serves both \texttt{tactical\_llm.py} and the UI chat
-endpoint from a single model instance. The VLM scorer and llama.cpp server
-do not run simultaneously in the hot path (VLM scoring completes before
-tactical inference begins), but both remain resident in GPU memory
-throughout the session.
+The mlx\_lm server (tactical) and the VLM scorer do not run simultaneously
+in the hot path (VLM scoring completes before tactical inference begins),
+but both remain resident in memory throughout the Loop session. During
+a Strategic session the tactical LLM server is replaced by the strategic
+LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 
 % ============================================================
 \section{Threshold Calibration}
@@ -1343,7 +1309,7 @@ Test files and their coverage:
 \end{tabular}
 \end{center}
 
-External dependencies (LanceDB, Unix socket, STOMP broker, llama.cpp server)
+External dependencies (LanceDB, Unix socket, STOMP broker, mlx\_lm server)
 are mocked in all tests. The UI server tests inject a fake config module so
 they run without \texttt{config.yaml}.
 

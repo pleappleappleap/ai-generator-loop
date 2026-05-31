@@ -36,32 +36,32 @@ Address types: **anycast** = queue semantics (one consumer receives);
 
 ### `aggregator.clip.queue`
 **Publisher:** `clip_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP → AMQP 1.0
+**Protocol:** STOMP -> AMQP 1.0
 
 ```json
-{"image_uuid": "string", "clip_score": "float 0.0–1.0", "image_embedding": "array[float] 512-dim"}
+{"image_uuid": "string", "clip_score": "float 0.0-1.0", "image_embedding": "array[float] 512-dim"}
 ```
 
 ### `aggregator.artifact.queue`
 **Publisher:** `artifact_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP → AMQP 1.0
+**Protocol:** STOMP -> AMQP 1.0
 
 ```json
-{"image_uuid": "string", "ai_confidence": "float 0.0–1.0"}
+{"image_uuid": "string", "ai_confidence": "float 0.0-1.0"}
 ```
 
 ### `aggregator.vlm.queue`
 **Publisher:** `vlm_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP → AMQP 1.0
+**Protocol:** STOMP -> AMQP 1.0
 
 ```json
 {
   "image_uuid":               "string",
-  "photorealism":             "float 0–10",
-  "anatomical_coherence":     "float 0–10",
-  "interaction_plausibility": "float 0–10",
-  "lighting_consistency":     "float 0–10",
-  "prompt_adherence":         "float 0–10",
+  "photorealism":             "float 0-10",
+  "anatomical_coherence":     "float 0-10",
+  "interaction_plausibility": "float 0-10",
+  "lighting_consistency":     "float 0-10",
+  "prompt_adherence":         "float 0-10",
   "issues":          ["string"],
   "recommendations": ["string"]
 }
@@ -69,7 +69,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 
 ### `scorer.result`
 **Publisher:** `aggregator` (Rust)  **Consumer:** `tactical_llm.py`
-**Protocol:** AMQP 1.0 → STOMP
+**Protocol:** AMQP 1.0 -> STOMP
 
 ```json
 {
@@ -97,9 +97,9 @@ Address types: **anycast** = queue semantics (one consumer receives);
 **Protocol:** AMQP 1.0
 
 Original message body preserved. Artemis adds headers:
-- `_AMQ_ORIG_ADDRESS` — source address
-- `_AMQ_ORIG_ROUTING_TYPE` — anycast or multicast
-- `_AMQ_ACTUAL_EXPIRY` — when the message expired (if applicable)
+- `_AMQ_ORIG_ADDRESS`  -  source address
+- `_AMQ_ORIG_ROUTING_TYPE`  -  anycast or multicast
+- `_AMQ_ACTUAL_EXPIRY`  -  when the message expired (if applicable)
 
 ---
 
@@ -108,7 +108,7 @@ Original message body preserved. Artemis adds headers:
 ### `loop.events`
 **Publisher:** `comfyui_worker.py`
 **Consumers:** `router` (Rust), UI server (`server.py`)
-**Protocol:** STOMP → AMQP 1.0
+**Protocol:** STOMP -> AMQP 1.0
 
 ```json
 {
@@ -126,12 +126,12 @@ Original message body preserved. Artemis adds headers:
 ```
 
 The UI server subscribes to `loop.events` via STOMP to cache the
-`image_uuid → image_path` mapping so it can serve generated images to the
+`image_uuid -> image_path` mapping so it can serve generated images to the
 browser via `/image/{uuid}`.
 
 ### `scorer.requests`
 **Publisher:** `router` (Rust)  **Consumers:** all scorers (durable STOMP subscriptions)
-**Protocol:** AMQP 1.0 → STOMP
+**Protocol:** AMQP 1.0 -> STOMP
 **Message property:** `subject = score.<image_uuid>`
 
 Payload: unchanged `loop.events` message body.
@@ -148,7 +148,7 @@ Payload: unchanged `loop.events` message body.
 
 ### `loop.accepted`
 **Publisher:** `tactical_llm.py`  **Consumer:** `lancedb_manager` (Rust)
-**Protocol:** STOMP → AMQP 1.0
+**Protocol:** STOMP -> AMQP 1.0
 
 ```json
 {
@@ -174,7 +174,7 @@ to connected browser clients via the WebSocket gallery endpoint.
   "decision": {
     "decision":    "accept | retry | inpaint | give_up",
     "reasoning":   "string",
-    "confidence":  "float 0.0–1.0",
+    "confidence":  "float 0.0-1.0",
     "retry_prompt":  "string (if retry)",
     "retry_params":  "object (if retry)",
     "inpaint_regions": "array (if inpaint)",
@@ -189,7 +189,7 @@ to connected browser clients via the WebSocket gallery endpoint.
 ## Coordinator Unix Socket API
 
 Socket path: `{database.path}.sock` (e.g. `pipeline.db.sock`).
-Protocol: newline-delimited JSON (request → response per connection).
+Protocol: newline-delimited JSON (request -> response per connection).
 
 ### Conversation and Workflow Operations
 
@@ -246,4 +246,4 @@ configured port (default 12000):
 | `POST` | `/feedback` | Submit a thumbs rating (`FeedbackAdd`) |
 | `GET` | `/history` | Fetch conversation context (`ContextGet`) |
 | `GET` | `/image/{uuid}` | Serve a generated image (local file or proxied HTTP URL) |
-| `WS` | `/ws/gallery` | WebSocket — pushes `image_ready` and `decision` events to browsers |
+| `WS` | `/ws/gallery` | WebSocket  -  pushes `image_ready` and `decision` events to browsers |
