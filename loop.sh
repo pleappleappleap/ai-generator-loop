@@ -15,8 +15,8 @@
 #   status      Show status of all components.
 #   health      Check health of all loop components. Exits 0 if all healthy.
 
-LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+SOXHLET_ROOT="$(cd "$(dirname "$0")" && pwd)"
+LOOP_DIR="$SOXHLET_ROOT/loop"
 export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
 
@@ -88,7 +88,7 @@ _stop() {
     "$LOOP_DIR/tactical_llm.sh" stop
 
     echo "==> Loop stopped. Middleware (Artemis + PostgreSQL) is still running."
-    echo "    Use 'loop.sh stop --all' or '../middleware.sh stop --all' to tear down middleware."
+    echo "    Use 'loop.sh stop --all' or 'middleware.sh stop --all' to tear down middleware."
 }
 
 _stop_all() {
