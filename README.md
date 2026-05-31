@@ -99,19 +99,16 @@ The gallery updates in real time as images are generated and scored.
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `pipeline` | Java / Spring Boot | REST + WebSocket UI backend; strategic session handler |
-| `comfyui_worker.py` | Python / STOMP | Drives ComfyUI; registers images with coordinator |
-| `clip_scorer.py` | Python / STOMP | ViT-L-14 CLIP semantic similarity |
-| `artifact_scorer.py` | Python / STOMP | AI-image-detector artifact confidence |
-| `vlm_scorer.py` | Python / STOMP | Qwen2.5-VL-7B holistic image evaluation |
+| `pipeline` | Java / Spring Boot | REST + WebSocket UI backend; drives ComfyUI; calls tactical LLM; strategic session handler |
+| `clip_scorer.py` | Python / FastAPI | ViT-L-14 CLIP semantic similarity |
+| `artifact_scorer.py` | Python / FastAPI | AI-image-detector artifact confidence |
+| `vlm_scorer.py` | Python / FastAPI | Qwen2.5-VL-7B holistic image evaluation + analyze endpoint |
 | `router` | Rust / AMQP 1.0 | Fans out `loop.events` -> `scorer.requests` |
 | `aggregator` | Rust / AMQP 1.0 | Merges scorer results; applies threshold logic; emits verdicts |
 | `coordinator` | Rust / Unix socket | XA 2PC log; conversation/workflow/budget API |
 | `lancedb_manager` | Rust / AMQP 1.0 | Writes terminal Loop records to LanceDB |
-| `tactical_llm.py` | Python / STOMP | Receives verdicts; calls tactical LLM; decides next action |
 | `tactical LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B (MLX 4-bit) on port 12001 |
 | `strategic LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B-Thinking (bf16) on port 12005 |
-| `monitor.py` | Python / STOMP | Dead-letter consumer; logs `pipeline.dead` messages |
 
 ---
 
@@ -132,12 +129,9 @@ The gallery updates in real time as images are generated and scored.
 +-- pipeline/               Java Spring Boot pipeline (REST + WebSocket + strategic LLM)
 +-- middleware/              K8s manifests for Artemis and PostgreSQL
 +-- loop/
-|   +-- comfyui_worker.py
-|   +-- monitor.py
 |   +-- comfyui.sh          ComfyUI component manager
 |   +-- tactical_llm.sh     Tactical LLM server component manager (mlx_lm.server)
-|   +-- tactical-llm/       Tactical LLM decision logic
-|   |   +-- tactical_llm.py
+|   +-- tactical-llm/       Tactical LLM prompt library + system prompt
 |   |   +-- prompts.py
 |   |   \-- system_prompt.md
 |   +-- scorers/            Python scorers + Rust pipeline workers

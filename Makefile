@@ -46,7 +46,7 @@ docs:
 clean:
 	latexmk -C ARCHITECTURE.tex
 	rm -f *.aux *.log *.out *.toc *.fls *.fdb_latexmk
-	rm -rf __pycache__
+	rm -rf __pycache__ .pytest_cache .ruff_cache
 	$(MAKE) -C loop clean
 	$(MAKE) -C loop/tactical-llm clean
 	$(MAKE) -C pipeline clean

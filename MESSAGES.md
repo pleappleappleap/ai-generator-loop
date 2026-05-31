@@ -11,9 +11,9 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ## Anycast Addresses (queue semantics)
 
 ### `loop.request`
-**Publisher:** UI server (`server.py`), tactical LLM (retry)
-**Consumer:** `comfyui_worker.py`
-**Protocol:** STOMP
+**Publisher:** pipeline (UI session start, `TacticalLlmCaller` retry)
+**Consumer:** pipeline (`ComfyUiWorker`)
+**Protocol:** AMQP 1.0
 
 ```json
 {
@@ -68,8 +68,8 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `scorer.result`
-**Publisher:** `aggregator` (Rust)  **Consumer:** `tactical_llm.py`
-**Protocol:** AMQP 1.0 -> STOMP
+**Publisher:** `aggregator` (Rust)  **Consumer:** pipeline (`TacticalLlmCaller`)
+**Protocol:** AMQP 1.0
 
 ```json
 {
@@ -93,7 +93,7 @@ Address types: **anycast** = queue semantics (one consumer receives);
 ```
 
 ### `pipeline.dead`
-**Publisher:** Artemis DLX (from all failed queues)  **Consumer:** `monitor.py`
+**Publisher:** Artemis DLX (from all failed queues)  **Consumer:** none (inspect via Artemis console)
 **Protocol:** AMQP 1.0
 
 Original message body preserved. Artemis adds headers:
@@ -106,9 +106,9 @@ Original message body preserved. Artemis adds headers:
 ## Multicast Addresses (topic semantics)
 
 ### `loop.events`
-**Publisher:** `comfyui_worker.py`
-**Consumers:** `router` (Rust), UI server (`server.py`)
-**Protocol:** STOMP -> AMQP 1.0
+**Publisher:** pipeline (`ComfyUiWorker`)
+**Consumers:** `router` (Rust), pipeline (UI WebSocket push)
+**Protocol:** AMQP 1.0
 
 ```json
 {
@@ -147,8 +147,8 @@ Payload: unchanged `loop.events` message body.
 ```
 
 ### `loop.accepted`
-**Publisher:** `tactical_llm.py`  **Consumer:** `lancedb_manager` (Rust)
-**Protocol:** STOMP -> AMQP 1.0
+**Publisher:** pipeline (`TacticalLlmCaller`)  **Consumer:** `lancedb_manager` (Rust)
+**Protocol:** AMQP 1.0
 
 ```json
 {
@@ -159,9 +159,9 @@ Payload: unchanged `loop.events` message body.
 ```
 
 ### `tactical.decisions`
-**Publisher:** `tactical_llm.py`
-**Consumers:** UI server (`server.py`), strategic LLM (planned)
-**Protocol:** STOMP
+**Publisher:** pipeline (`TacticalLlmCaller`)
+**Consumer:** pipeline (UI WebSocket push)
+**Protocol:** AMQP 1.0
 
 The UI server subscribes to `tactical.decisions` to push live decision updates
 to connected browser clients via the WebSocket gallery endpoint.
@@ -231,10 +231,9 @@ Protocol: newline-delimited JSON (request -> response per connection).
 
 ---
 
-## UI Server REST and WebSocket API
+## Pipeline REST and WebSocket API
 
-The UI server (`loop/ui/server.py`) exposes the following endpoints on the
-configured port (default 12000):
+The Spring Boot pipeline exposes the following endpoints on port 12000:
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -245,5 +244,9 @@ configured port (default 12000):
 | `POST` | `/workflow/{id}/start-run` | Publish a `loop.request` message to start image generation |
 | `POST` | `/feedback` | Submit a thumbs rating (`FeedbackAdd`) |
 | `GET` | `/history` | Fetch conversation context (`ContextGet`) |
-| `GET` | `/image/{uuid}` | Serve a generated image (local file or proxied HTTP URL) |
+| `GET` | `/image/{uuid}` | Serve a generated image (local file) |
 | `WS` | `/ws/gallery` | WebSocket  -  pushes `image_ready` and `decision` events to browsers |
+| `GET` | `/strategic/` | Redirects to strategic UI (`/strategic/index.html`) |
+| `POST` | `/strategic/run` | Trigger a strategic session manually |
+| `GET` | `/strategic/status` | Current strategic session state |
+| `POST` | `/north-star` | Write a new north star directly (bypasses strategic LLM) |

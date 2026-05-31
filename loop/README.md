@@ -10,13 +10,11 @@ generated images in real time.
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `ui/server.py` | Python (FastAPI / STOMP) | Browser UI backend; REST + WebSocket gallery; subscribes to `loop.events` and `tactical.decisions` |
-| `comfyui_worker.py` | Python (STOMP) | Consumes `loop.request`, registers image with coordinator, drives ComfyUI API, publishes to `loop.events` |
-| `monitor.py` | Python (STOMP) | Dead-letter consumer  -  logs all messages in `pipeline.dead` |
+| `pipeline` | Java / Spring Boot | Browser UI backend; drives ComfyUI; calls tactical LLM; handles verdicts |
 | `scorers/router` | Rust (AMQP 1.0) | Consumes `loop.events`, fans out to `scorer.requests` multicast |
-| `scorers/clip_scorer.py` | Python (STOMP) | CLIP semantic similarity scoring |
-| `scorers/artifact_scorer.py` | Python (STOMP) | AI artifact detection |
-| `scorers/vlm_scorer.py` | Python (STOMP) | VLM holistic image evaluation |
+| `scorers/clip_scorer.py` | Python (FastAPI) | CLIP semantic similarity scoring |
+| `scorers/artifact_scorer.py` | Python (FastAPI) | AI artifact detection |
+| `scorers/vlm_scorer.py` | Python (FastAPI) | VLM holistic image evaluation + analyze endpoint |
 | `scorers/aggregator` | Rust (AMQP 1.0) | Accumulates scorer results in SQLite, emits verdicts, publishes cancels |
 | `scorers/coordinator` | Rust (Unix socket) | XA 2PC coordinator; conversation/workflow/budget API |
 | `scorers/lancedb_manager` | Rust (AMQP 1.0) | Reads scorer_session from SQLite, writes Loop records to LanceDB |
@@ -44,22 +42,22 @@ generated images in real time.
 - **Browser UI**: http://localhost:12000  -  real-time image gallery
 - **Strategic UI**: http://localhost:12000/strategic/  -  strategic session control
 - **Artemis management console**: http://localhost:12009
-- **Dead-letter monitor**: `python ~/soxhlet/loop/monitor.py`
 
 ## Address Topology
 
 ```
-loop.request              [anycast  / STOMP]      UI server, tactical_llm -> comfyui_worker
-loop.events               [multicast / STOMP+AMQP] comfyui_worker -> router, UI server
+loop.request              [anycast  / AMQP 1.0]   pipeline (retry) -> pipeline (ComfyUiWorker)
+loop.events               [multicast / AMQP 1.0]  pipeline (ComfyUiWorker) -> router, pipeline (UI)
 scorer.requests           [multicast / AMQP 1.0]  router -> all scorers
 scorer.events             [multicast / AMQP 1.0]  aggregator -> all scorers, lancedb_manager
-aggregator.clip.queue     [anycast  / STOMP+AMQP] clip_scorer -> aggregator
-aggregator.artifact.queue [anycast  / STOMP+AMQP] artifact_scorer -> aggregator
-aggregator.vlm.queue      [anycast  / STOMP+AMQP] vlm_scorer -> aggregator
-scorer.result             [anycast  / AMQP 1.0]   aggregator -> tactical_llm
-loop.accepted             [multicast / STOMP+AMQP] tactical_llm -> lancedb_manager
-tactical.decisions        [multicast / STOMP]      tactical_llm -> UI server
-pipeline.dead             [anycast  / AMQP 1.0]   DLX -> monitor
+aggregator.clip.queue     [anycast  / AMQP 1.0]   clip_scorer -> aggregator
+aggregator.artifact.queue [anycast  / AMQP 1.0]   artifact_scorer -> aggregator
+aggregator.vlm.queue      [anycast  / AMQP 1.0]   vlm_scorer -> aggregator
+scorer.result             [anycast  / AMQP 1.0]   aggregator -> pipeline (TacticalLlmCaller)
+loop.accepted             [anycast  / AMQP 1.0]   pipeline (TacticalLlmCaller) -> lancedb_manager
+loop.retry                [anycast  / AMQP 1.0]   pipeline (TacticalLlmCaller) -> pipeline (ComfyUiWorker)
+tactical.decisions        [multicast / AMQP 1.0]  pipeline (TacticalLlmCaller) -> pipeline (UI WebSocket)
+pipeline.dead             [anycast  / AMQP 1.0]   DLX -> (no active consumer)
 ```
 
 ## Threshold Configuration

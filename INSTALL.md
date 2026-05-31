@@ -165,8 +165,8 @@ This starts or resumes the K3s workloads and establishes:
 There are **three** separate virtual environments:
 
 - **Root venv** (`venv/`): used by utilities such as `check_env.py` and `model_picker.py`.
-- **Scorers venv** (`loop/scorers/venv/`): used by all scorer processes and
-  `tactical_llm.py`. Also provides `mlx_lm` for the tactical and strategic LLM servers.
+- **Scorers venv** (`loop/scorers/venv/`): used by all scorer processes.
+  Also provides `mlx_lm` for the tactical and strategic LLM servers.
 - **ComfyUI venv** (`loop/ComfyUI/venv/`): used exclusively by ComfyUI,
   managed by `make prereqs`.
 
@@ -447,17 +447,11 @@ the following addresses appear under **Addresses**:
 - `tactical.decisions` (multicast)
 - `pipeline.dead` (anycast)
 
-### Dead-letter monitor
+### Dead-letter queue
 
-In a separate terminal, start the dead-letter monitor to catch any messages
-that fail processing:
-
-```bash
-$SOXHLET_ROOT/loop/scorers/venv/bin/python $SOXHLET_ROOT/loop/monitor.py
-```
-
-Any message appearing in the monitor output indicates a processing error; the
-log will include the original queue name and message body.
+Failed messages land in the `pipeline.dead` queue. Inspect them via the
+Artemis management console at `http://localhost:12009` under **Queues ->
+pipeline.dead**.
 
 ### Tests
 

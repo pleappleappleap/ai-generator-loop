@@ -24,5 +24,5 @@ docs:
 		-o docs/
 
 clean:
-	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache docs venv
+	rm -rf __pycache__ tests/__pycache__ .pytest_cache tests/.pytest_cache .ruff_cache docs venv
 	rm -f *.pyc tests/*.pyc
