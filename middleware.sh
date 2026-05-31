@@ -1,8 +1,7 @@
 #!/bin/sh
-LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
+AI_IMAGE_ROOT="$(cd "$(dirname "$0")" && pwd)"
 export AI_IMAGE_ROOT
-. "$LOOP_DIR/lib/component.sh"
+. "$AI_IMAGE_ROOT/loop/lib/component.sh"
 NS=pipeline
 
 _require_kubectl() {

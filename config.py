@@ -84,6 +84,11 @@ def _resolve_auto_paths(data: dict) -> dict:
     if tmodel.get("dir") == "auto":
         tmodel["dir"] = str(Path(scorers) / "models" / "tactical")
 
+    strategic = data.get("strategic", {})
+    smodel = strategic.get("model", {})
+    if smodel.get("dir") == "auto":
+        smodel["dir"] = str(Path(r) / "strategic-llm" / "models")
+
     db = data.get("database", {})
     if db.get("path") == "auto":
         db["path"] = str(Path(r) / "pipeline.db")
@@ -180,6 +185,11 @@ class Config:
     def tactical(self) -> dict:
         """Tactical LLM configuration."""
         return self._data.get("tactical", {})
+
+    @property
+    def strategic(self) -> dict:
+        """Strategic LLM configuration."""
+        return self._data.get("strategic", {})
 
 
     def get(self, *keys: str, default: Any = None) -> Any:

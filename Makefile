@@ -8,18 +8,16 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config check \
         prereqs prereqs-system prereqs-python models models-pick setup \
-        artemis-broker artemis-pull docker-install comfyui-nodes
+        k8s-install comfyui-nodes
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
 
-ARTEMIS_IMAGE    := apache/activemq-artemis:latest
-ARTEMIS_PULL_OK  := loop/.artemis-image-pulled
-DOCKER_OK        := loop/.docker-installed
+K8S_OK           := loop/.k8s-installed
 COMFYUI_NODES_OK := loop/ComfyUI/custom_nodes/.nodes-installed
 
 all: venv/.installed loop/scorers/venv/.installed tactical-llm/venv/.installed \
-     $(COMFYUI_NODES_OK) $(ARTEMIS_PULL_OK) lint typecheck test build
+     $(COMFYUI_NODES_OK) lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
@@ -53,12 +51,12 @@ clean:
 	$(MAKE) -C tactical-llm clean
 	$(MAKE) -C pipeline clean
 
-# Auto-downloaded scorer model directories are declared in .gitignore.
+# Auto-downloaded model directories are declared in .gitignore.
 # distclean reads that file directly — no git command required — so adding a
 # new model directory to .gitignore is sufficient to make distclean handle it.
 # Within each such directory a .gitkeep sentinel (if present) is preserved so
 # the placeholder survives and make models knows where to put files.
-SCORER_MODEL_DIRS := $(shell grep -E '^loop/scorers/models/' .gitignore | sed 's|/*$$||')
+MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .gitignore | sed 's|/*$$||')
 
 # Remove everything that can be regenerated: venvs, the ComfyUI clone, and
 # auto-downloaded model files.  Reads .gitignore and .gitkeep files as the
@@ -69,8 +67,8 @@ SCORER_MODEL_DIRS := $(shell grep -E '^loop/scorers/models/' .gitignore | sed 's
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
 	rm -rf venv loop/scorers/venv tactical-llm/venv
-	@echo "==> Removing auto-downloaded scorer models (preserving .gitkeep sentinels)..."
-	@for d in $(SCORER_MODEL_DIRS); do \
+	@echo "==> Removing auto-downloaded model files (preserving .gitkeep sentinels)..."
+	@for d in $(MODEL_DIRS); do \
 	  if [ -d "$$d" ]; then \
 	    echo "    cleaning $$d"; \
 	    keep=0; [ -f "$$d/.gitkeep" ] && keep=1; \
@@ -106,73 +104,62 @@ config.yaml:
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
-# ── Docker install ─────────────────────────────────────────────────────────────
+# ── Kubernetes install ────────────────────────────────────────────────────────
+#
+# Artemis and PostgreSQL run as K3s pods (kubectl apply -k k8s/).
+# This target ensures a working kubectl + cluster is available.
+#
+# macOS:   Colima with the --kubernetes flag (embeds K3s in a lightweight VM).
+# Linux:   K3s via the official install script; sets up kubeconfig for the user.
+# Windows: Rancher Desktop via winget (bundles K3s + kubectl; no WSL2 required).
+k8s-install: $(K8S_OK)
 
-# Install Docker if not present. Sentinel prevents re-checks on subsequent runs.
-# macOS:   colima + docker CLI via Homebrew (no sudo, no GUI required).
-# Linux:   Official get.docker.com install script; enables the systemd service.
-# Windows: Docker Desktop via winget (Git Bash only — CMD/PowerShell blocked above).
-docker-install: $(DOCKER_OK)
-
-$(DOCKER_OK):
-	@_docker_wait() { \
-	  echo "==> Waiting for Docker daemon (up to 120 s)..."; \
+$(K8S_OK):
+	@_k8s_wait() { \
+	  echo "==> Waiting for Kubernetes API (up to 120 s)..."; \
 	  n=0; \
-	  while ! $${DOCKER_CMD:-docker} info >/dev/null 2>&1; do \
+	  while ! kubectl get nodes >/dev/null 2>&1; do \
 	    n=$$((n+1)); \
 	    if [ $$n -ge 60 ]; then \
-	      echo "ERROR: Docker daemon did not start within 120 s." >&2; \
-	      echo "       Start Docker manually and re-run make." >&2; \
+	      echo "ERROR: Kubernetes API did not respond within 120 s." >&2; \
+	      echo "       Check cluster status and re-run make." >&2; \
 	      exit 1; \
 	    fi; \
 	    sleep 2; \
 	  done; \
-	  echo "==> Docker daemon ready."; \
+	  echo "==> Kubernetes ready."; \
 	}; \
-	if docker info >/dev/null 2>&1; then \
-	  echo "==> Docker already running: $$(docker --version)"; \
+	if kubectl get nodes >/dev/null 2>&1; then \
+	  echo "==> Kubernetes already running: $$(kubectl version --client --short 2>/dev/null | head -1)"; \
 	elif command -v brew >/dev/null 2>&1; then \
-	  echo "==> Installing colima + docker CLI via Homebrew..."; \
-	  brew install colima docker; \
-	  echo "==> Starting colima (Docker daemon)..."; \
-	  colima start; \
-	  _docker_wait; \
+	  echo "==> Installing colima + kubectl via Homebrew..."; \
+	  brew install colima kubectl; \
+	  echo "==> Starting Colima with Kubernetes (K3s)..."; \
+	  colima start --kubernetes 2>/dev/null \
+	    || colima stop 2>/dev/null; colima start --kubernetes; \
+	  _k8s_wait; \
 	elif [ "$$(uname -s)" = "Linux" ]; then \
-	  echo "==> Installing Docker Engine via get.docker.com..."; \
-	  wget -qO- https://get.docker.com | sh; \
-	  sudo systemctl enable --now docker; \
-	  sudo usermod -aG docker "$$(id -un)"; \
-	  DOCKER_CMD="sudo docker" _docker_wait; \
-	  echo "NOTE: Log out and back in (or run 'newgrp docker') to use docker without sudo."; \
+	  echo "==> Installing K3s..."; \
+	  curl -sfL https://get.k3s.io | sh -; \
+	  echo "==> Configuring kubeconfig..."; \
+	  mkdir -p "$$HOME/.kube"; \
+	  sudo cp /etc/rancher/k3s/k3s.yaml "$$HOME/.kube/config"; \
+	  sudo chown "$$(id -u):$$(id -g)" "$$HOME/.kube/config"; \
+	  _k8s_wait; \
 	elif command -v winget >/dev/null 2>&1; then \
-	  echo "==> Installing Docker Desktop via winget..."; \
-	  winget install --id Docker.DockerDesktop -e \
+	  echo "==> Installing Rancher Desktop via winget (includes K3s + kubectl)..."; \
+	  winget install --id Rancher.RancherDesktop -e \
 	    --accept-package-agreements --accept-source-agreements; \
-	  echo "==> Launching Docker Desktop..."; \
-	  "/c/Program Files/Docker/Docker/Docker Desktop.exe" & \
-	  _docker_wait; \
+	  echo "NOTE: Rancher Desktop needs a moment to start its K3s cluster."; \
+	  echo "      Re-run 'make prereqs-system' after it has fully started."; \
+	  _k8s_wait; \
 	else \
-	  echo "ERROR: Cannot auto-install Docker on this platform." >&2; \
-	  echo "       Install from: https://docs.docker.com/get-docker/" >&2; \
+	  echo "ERROR: Cannot auto-install Kubernetes on this platform." >&2; \
+	  echo "       Install kubectl + a K3s provider (Colima, Rancher Desktop, or K3s) manually." >&2; \
 	  exit 1; \
 	fi
 	@mkdir -p loop
-	@touch $(DOCKER_OK)
-
-# ── Artemis broker setup (Docker) ─────────────────────────────────────────────
-
-# Pull the official Artemis Docker image once; sentinel file prevents re-pulls.
-# The broker runs via start_broker.sh which handles container create/start.
-# AMQP (5672), STOMP (61613), and the management console (8161) are pre-enabled
-# in the apache/activemq-artemis image — no broker.xml patching needed.
-artemis-broker: $(ARTEMIS_PULL_OK)
-artemis-pull:   $(ARTEMIS_PULL_OK)
-
-$(ARTEMIS_PULL_OK): $(DOCKER_OK)
-	docker pull $(ARTEMIS_IMAGE)
-	@mkdir -p loop
-	@touch $(ARTEMIS_PULL_OK)
-	@echo "==> Artemis image ready. Start the broker with: loop/start_broker.sh"
+	@touch $(K8S_OK)
 
 # Full first-time setup: system deps → Python venvs → config → models → build.
 setup: prereqs-system prereqs-python config models build
@@ -182,7 +169,7 @@ prereqs: prereqs-system prereqs-python
 # Install system-level packages using the detected package manager.
 # Installs: wget (Linux), Python 3.11, yq, Docker, Rust (via rustup), protoc.
 # LaTeX is optional and only needed for `make doc`.
-prereqs-system: docker-install
+prereqs-system: k8s-install
 	@PKG=""; \
 	if   command -v brew    >/dev/null 2>&1; then PKG=homebrew; \
 	elif command -v apt-get >/dev/null 2>&1; then PKG=apt; \
@@ -339,28 +326,16 @@ tactical-llm/venv/.installed:
 	@touch tactical-llm/venv/.installed
 	@echo "==> tactical-llm venv ready."
 
-# llama-cpp-python requires platform-specific CMAKE_ARGS for GPU support
-# and is installed separately after the rest of the requirements.
+# mlx-lm is Apple Silicon only and installed separately after the rest of the requirements.
 loop/scorers/venv/.installed: loop/scorers/requirements.txt
 	python3.11 -m venv loop/scorers/venv
 	loop/scorers/venv/bin/pip install --upgrade pip
 	loop/scorers/venv/bin/pip install -r loop/scorers/requirements.txt
-	@echo "==> Installing llama-cpp-python (detecting GPU backend)..."; \
+	@echo "==> Installing mlx-lm (Apple Silicon — required for tactical/strategic LLM serving)..."; \
 	if [ "$$(uname)" = "Darwin" ]; then \
-	  echo "    macOS detected — building with Metal support."; \
-	  CMAKE_ARGS="-DGGML_METAL=on" \
-	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
-	elif command -v nvcc >/dev/null 2>&1; then \
-	  echo "    NVIDIA CUDA detected — building with CUDA support."; \
-	  CMAKE_ARGS="-DGGML_CUDA=on" \
-	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
-	elif command -v rocm-smi >/dev/null 2>&1; then \
-	  echo "    AMD ROCm detected — building with HIP support."; \
-	  CMAKE_ARGS="-DGGML_HIPBLAS=on" \
-	    loop/scorers/venv/bin/pip install "llama-cpp-python[server]" --no-binary llama-cpp-python; \
+	  loop/scorers/venv/bin/pip install mlx-lm; \
 	else \
-	  echo "    No GPU detected — installing CPU-only llama-cpp-python."; \
-	  loop/scorers/venv/bin/pip install "llama-cpp-python[server]"; \
+	  echo "    NOTE: mlx-lm is Apple Silicon only — LLM serving unavailable on this platform." >&2; \
 	fi
 	@touch loop/scorers/venv/.installed
 	@echo "==> Scorers venv ready."

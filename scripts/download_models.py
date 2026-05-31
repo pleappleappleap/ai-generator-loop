@@ -62,7 +62,11 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> None:
 
 
 def _hf_snapshot(repo_id: str, local_dir: str) -> None:
-    Path(local_dir).mkdir(parents=True, exist_ok=True)
+    dest = Path(local_dir)
+    if dest.exists() and any(f for f in dest.iterdir() if not f.name.startswith(".")):
+        print(f"    Already present — skipping.")
+        return
+    dest.mkdir(parents=True, exist_ok=True)
     print(f"    hf download {repo_id} (snapshot)")
     subprocess.run(
         [_hf_bin(), "download", repo_id, "--local-dir", local_dir],
@@ -161,15 +165,26 @@ def _download_vlm() -> None:
 
 def _download_tactical() -> None:
     tac = _cfg.tactical.get("model", {})
-    filename = tac.get("filename", "")
+    name = tac.get("name") or tac.get("filename", "")  # MLX: directory name; GGUF: filename
     local_dir = tac.get("dir", "")
     source = tac.get("source", "")
-    if not filename or not local_dir or not source:
-        print("==> Tactical LLM: no filename/source configured — skipping.")
+    if not name or not local_dir or not source:
+        print("==> Tactical LLM: no name/source configured — skipping.")
         return
-    print(f"==> Tactical LLM: {filename}")
-    Path(local_dir).mkdir(parents=True, exist_ok=True)
-    _resolve_source(source, local_dir, filename)
+    print(f"==> Tactical LLM: {name}")
+    _resolve_source(source, str(Path(local_dir) / name), name)
+
+
+def _download_strategic() -> None:
+    strat = _cfg.strategic.get("model", {})
+    name = strat.get("name", "")
+    local_dir = strat.get("dir", "")
+    source = strat.get("source", "")
+    if not name or not local_dir or not source:
+        print("==> Strategic LLM: no name/source configured — skipping.")
+        return
+    print(f"==> Strategic LLM: {name}")
+    _resolve_source(source, str(Path(local_dir) / name), name)
 
 
 def _download_loras() -> None:
@@ -202,6 +217,7 @@ def main() -> None:
     _download_artifact_detector()
     _download_vlm()
     _download_tactical()
+    _download_strategic()
     _download_loras()
 
     ckpt_dir = Path(_cfg.paths.get("comfyui", "")) / "models" / "checkpoints"

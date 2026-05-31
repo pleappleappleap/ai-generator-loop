@@ -1,8 +1,8 @@
 #!/bin/sh
 # Loop super-component manager.
-# Manages the full image-generation loop: ComfyUI, llama.cpp (tactical),
+# Manages the full image-generation loop: ComfyUI, tactical LLM,
 # Python ML sidecars, and the Java pipeline.
-# Middleware (Artemis + PostgreSQL) is managed separately by middleware.sh.
+# Middleware (Artemis + PostgreSQL) is managed separately by middleware.sh at repo root.
 #
 # Usage: loop.sh {start|stop [--all]|restart|status|health}
 #
@@ -27,7 +27,7 @@ _COMFYUI_URL=$(yq '.broker.comfyui_url // "http://127.0.0.1:8188"' "$CFG" 2>/dev
 
 _LLM_URL=$(yq '.tactical.model.server_url // "http://localhost:8080/v1"' "$CFG" 2>/dev/null)
 : "${_LLM_URL:=http://localhost:8080/v1}"
-# Derive port from URL for the /health endpoint (strip path)
+# Strip path to get base URL; mlx_lm.server health check is GET /v1/models
 _LLM_BASE=$(echo "$_LLM_URL" | sed 's|/v1.*||')
 
 _CLIP_PORT=$(yq '.sidecars.clip_scorer.port // 8081' "$CFG" 2>/dev/null)
@@ -45,14 +45,14 @@ _PIPELINE_HEALTH="http://localhost:8090/actuator/health"
 
 _start() {
     echo "==> Starting middleware..."
-    "$LOOP_DIR/middleware.sh" start
+    "$AI_IMAGE_ROOT/middleware.sh" start
 
     echo ""
-    echo "==> Starting ComfyUI and llama.cpp..."
+    echo "==> Starting ComfyUI and tactical LLM..."
     "$LOOP_DIR/comfyui.sh" start
-    "$LOOP_DIR/llama_cpp.sh" start
-    component_wait_healthy "${_COMFYUI_URL}/system_stats" "ComfyUI"   180
-    component_wait_healthy "${_LLM_BASE}/health"          "llama.cpp" 300 '"ok"'
+    "$LOOP_DIR/tactical_llm.sh" start
+    component_wait_healthy "${_COMFYUI_URL}/system_stats"  "ComfyUI"      180
+    component_wait_healthy "${_LLM_BASE}/v1/models"        "tactical_llm" 300
 
     echo ""
     echo "==> Starting Python ML sidecars..."
@@ -83,29 +83,29 @@ _stop() {
     "$LOOP_DIR/artifact_scorer.sh" stop
     "$LOOP_DIR/vlm_scorer.sh" stop
 
-    echo "==> Stopping ComfyUI and llama.cpp..."
+    echo "==> Stopping ComfyUI and tactical LLM..."
     "$LOOP_DIR/comfyui.sh" stop
-    "$LOOP_DIR/llama_cpp.sh" stop
+    "$LOOP_DIR/tactical_llm.sh" stop
 
     echo "==> Loop stopped. Middleware (Artemis + PostgreSQL) is still running."
-    echo "    Use 'loop.sh stop --all' or 'middleware.sh stop --all' to tear down middleware."
+    echo "    Use 'loop.sh stop --all' or '../middleware.sh stop --all' to tear down middleware."
 }
 
 _stop_all() {
     _stop
     echo ""
     echo "==> Stopping middleware..."
-    "$LOOP_DIR/middleware.sh" stop --all
+    "$AI_IMAGE_ROOT/middleware.sh" stop --all
 }
 
 # ── Status ─────────────────────────────────────────────────────────────────────
 
 _status() {
     echo "┌─ Middleware ──────────────────────────────────────────┐"
-    "$LOOP_DIR/middleware.sh" health 2>/dev/null || "$LOOP_DIR/middleware.sh" status
+    "$AI_IMAGE_ROOT/middleware.sh" health 2>/dev/null || "$AI_IMAGE_ROOT/middleware.sh" status
     echo "├─ Loop ────────────────────────────────────────────────┤"
     "$LOOP_DIR/comfyui.sh" status
-    "$LOOP_DIR/llama_cpp.sh" status
+    "$LOOP_DIR/tactical_llm.sh" status
     "$LOOP_DIR/clip_scorer.sh" status
     "$LOOP_DIR/artifact_scorer.sh" status
     "$LOOP_DIR/vlm_scorer.sh" status
@@ -120,13 +120,13 @@ _status() {
 
 _health() {
     local ok=0
-    "$LOOP_DIR/middleware.sh" health || ok=1
+    "$AI_IMAGE_ROOT/middleware.sh" health || ok=1
     component_check_healthy "${_COMFYUI_URL}/system_stats" \
         && printf "%-22s %s\n" "comfyui" "healthy" \
         || { printf "%-22s %s\n" "comfyui" "not ready"; ok=1; }
-    component_check_healthy "${_LLM_BASE}/health" '"ok"' \
-        && printf "%-22s %s\n" "llama_cpp" "healthy" \
-        || { printf "%-22s %s\n" "llama_cpp" "not ready"; ok=1; }
+    component_check_healthy "${_LLM_BASE}/v1/models" \
+        && printf "%-22s %s\n" "tactical_llm" "healthy" \
+        || { printf "%-22s %s\n" "tactical_llm" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_CLIP_PORT}/health" \
         && printf "%-22s %s\n" "clip_scorer" "healthy" \
         || { printf "%-22s %s\n" "clip_scorer" "not ready"; ok=1; }

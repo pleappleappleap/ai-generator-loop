@@ -1,6 +1,6 @@
 # Scorers venv
-# llama-cpp-python is intentionally excluded — it requires platform-specific
-# CMAKE_ARGS for GPU support and is installed separately by `make prereqs-python`.
+# mlx-lm is intentionally excluded — it is Apple Silicon only and is installed
+# separately by `make prereqs-python` with a platform guard.
 fastapi
 uvicorn[standard]
 sse-starlette

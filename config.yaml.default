@@ -80,12 +80,6 @@ compute:
   #   cuda  — NVIDIA CUDA (Linux/Windows)
   #   rocm  — AMD ROCm (Linux; uses CUDA device naming in PyTorch)
   #   cpu   — CPU only
-  #
-  # n_gpu_layers (GGUF models only):
-  #   -1 = all layers on GPU/unified memory
-  #    0 = CPU only
-  #    N = first N transformer layers on GPU, remainder on CPU
-  #        (useful when GPU VRAM < full model size on discrete-GPU systems)
   comfyui:
     backend: auto
     listen: 0.0.0.0       # address ComfyUI binds to; 0.0.0.0 = all interfaces
@@ -99,10 +93,14 @@ compute:
     backend: auto
   vlm_scorer:
     backend: auto
-    n_gpu_layers: -1
+  # tactical_llm and strategic_llm are served by mlx_lm.server (Apple Silicon only).
+  # MLX handles device placement and MoE expert streaming natively — no manual layer
+  # offload flags. The models below are MoE; inactive expert arrays are demand-paged
+  # from SSD by the MLX runtime as needed.
   tactical_llm:
-    backend: auto
-    n_gpu_layers: -1
+    backend: mlx
+  strategic_llm:
+    backend: mlx
 
 thresholds:
   clip: 0.25
@@ -129,26 +127,41 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    filename: Soar-qwen-72b-abliterated.Q4_K_M.gguf
-    source: hf:mradermacher/Soar-qwen-72b-abliterated-GGUF/Soar-qwen-72b-abliterated.Q4_K_M.gguf
+    # MLX models are directories, not single files. `name` is the subdirectory within dir.
+    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
+    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
-    max_tokens: 512              # token limit for non-thinking responses
-    max_tokens_thinking: 4096   # token limit when Qwen3 chain-of-thought is enabled
-    server_url: http://localhost:8080/v1   # llama.cpp OpenAI-compatible server
-    model_name: default                   # model name sent in API requests
+    max_tokens: 128              # SD 1.5 generates in 3–8s; decisions must be concise
+    max_tokens_thinking: 512     # thinking budget for borderline/escalate re-queries only
+    server_url: http://localhost:8080/v1   # mlx_lm.server OpenAI-compatible endpoint
+    model_name: default
   decisions:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session
     accept_vlm_mean_min: 7.0   # minimum mean VLM score to accept a candidate
     accept_clip_min: 0.30      # minimum CLIP score to accept a candidate
+    thinking_score_threshold: 0.05  # re-query with thinking if best score within this margin of threshold
+
+strategic:
+  model:
+    dir: auto         # auto: {paths.scorers}/models/strategic
+    # Raw HuggingFace bf16 safetensors — no conversion needed. mlx_lm.server loads
+    # arrays lazily; inactive expert weights are demand-paged from SSD by the MLX
+    # runtime. Working set ~40–50 GB; full model ~160 GB on disk.
+    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    context_length: 32768
+    temperature: 0.6  # higher than tactical; strategic review benefits from exploration
+    server_url: http://localhost:8081/v1   # separate port — Loop and Strategic never run together
+    model_name: default
 
 ui:
   port: 7860           # port the browser UI listens on
   host: 0.0.0.0        # bind address; set to 127.0.0.1 to restrict to localhost
   # chat_backend: override which LLM server the chat panel talks to.
   # Defaults to tactical.model.server_url / model_name when omitted.
-  # Set this to the strategic LLM server when it becomes available.
+  # Set this to the strategic LLM server when running a strategic session.
   # chat_backend:
   #   server_url: http://localhost:8081/v1
-  #   model_name: strategic-model
+  #   model_name: default
