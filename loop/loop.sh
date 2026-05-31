@@ -16,8 +16,8 @@
 #   health      Check health of all loop components. Exits 0 if all healthy.
 
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
-export AI_IMAGE_ROOT
+SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
 
 # ── Config resolution ──────────────────────────────────────────────────────────
@@ -45,7 +45,7 @@ _PIPELINE_HEALTH="http://localhost:8090/actuator/health"
 
 _start() {
     echo "==> Starting middleware..."
-    "$AI_IMAGE_ROOT/middleware.sh" start
+    "$SOXHLET_ROOT/middleware.sh" start
 
     echo ""
     echo "==> Starting ComfyUI and tactical LLM..."
@@ -95,14 +95,14 @@ _stop_all() {
     _stop
     echo ""
     echo "==> Stopping middleware..."
-    "$AI_IMAGE_ROOT/middleware.sh" stop --all
+    "$SOXHLET_ROOT/middleware.sh" stop --all
 }
 
 # ── Status ─────────────────────────────────────────────────────────────────────
 
 _status() {
     echo "┌─ Middleware ──────────────────────────────────────────┐"
-    "$AI_IMAGE_ROOT/middleware.sh" health 2>/dev/null || "$AI_IMAGE_ROOT/middleware.sh" status
+    "$SOXHLET_ROOT/middleware.sh" health 2>/dev/null || "$SOXHLET_ROOT/middleware.sh" status
     echo "├─ Loop ────────────────────────────────────────────────┤"
     "$LOOP_DIR/comfyui.sh" status
     "$LOOP_DIR/tactical_llm.sh" status
@@ -120,7 +120,7 @@ _status() {
 
 _health() {
     local ok=0
-    "$AI_IMAGE_ROOT/middleware.sh" health || ok=1
+    "$SOXHLET_ROOT/middleware.sh" health || ok=1
     component_check_healthy "${_COMFYUI_URL}/system_stats" \
         && printf "%-22s %s\n" "comfyui" "healthy" \
         || { printf "%-22s %s\n" "comfyui" "not ready"; ok=1; }

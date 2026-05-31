@@ -65,10 +65,10 @@ Once installed (see `INSTALL.md`):
 
 ```bash
 # Start the broker
-~/ai-image/loop/start_broker.sh
+~/soxhlet/loop/start_broker.sh
 
 # Start the full pipeline
-~/ai-image/loop/start_loop.sh
+~/soxhlet/loop/start_loop.sh
 
 # Open the browser UI
 open http://localhost:7860
@@ -101,7 +101,7 @@ The gallery updates in real time as images are generated and scored.
 ## Repository Layout
 
 ```
-~/ai-image/
+~/soxhlet/
 ├── INSTALL.md              Full installation guide
 ├── ARCHITECTURE.tex        LaTeX source → ARCHITECTURE.pdf (make doc)
 ├── MESSAGES.md             Message schema contracts for all addresses

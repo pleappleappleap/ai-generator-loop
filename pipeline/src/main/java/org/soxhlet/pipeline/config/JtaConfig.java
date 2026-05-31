@@ -1,4 +1,4 @@
-package ai.image.pipeline.config;
+package org.soxhlet.pipeline.config;
 
 import com.arjuna.ats.arjuna.common.ObjectStoreEnvironmentBean;
 import com.arjuna.common.internal.util.propertyservice.BeanPopulator;

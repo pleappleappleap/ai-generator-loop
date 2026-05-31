@@ -1,8 +1,8 @@
-package ai.image.pipeline.worker;
+package org.soxhlet.pipeline.worker;
 
-import ai.image.pipeline.config.TacticalLlmConfig;
-import ai.image.pipeline.service.ContextService;
-import ai.image.pipeline.service.GalleryBroadcastService;
+import org.soxhlet.pipeline.config.TacticalLlmConfig;
+import org.soxhlet.pipeline.service.ContextService;
+import org.soxhlet.pipeline.service.GalleryBroadcastService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;

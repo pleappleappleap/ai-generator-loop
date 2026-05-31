@@ -71,15 +71,15 @@ Most distributions ship git and make. If not:
 ### All platforms — clone the repository
 
 ```bash
-git clone <repo-url> ~/ai-image
-cd ~/ai-image
+git clone <repo-url> ~/soxhlet
+cd ~/soxhlet
 ```
 
-Add `AI_IMAGE_ROOT` to your shell profile so the pipeline scripts can locate
+Add `SOXHLET_ROOT` to your shell profile so the pipeline scripts can locate
 `config.yaml` from any working directory:
 
 ```bash
-export AI_IMAGE_ROOT=~/ai-image
+export SOXHLET_ROOT=~/soxhlet
 ```
 
 ---
@@ -172,7 +172,7 @@ There are **three** separate virtual environments:
 ### Root environment
 
 ```bash
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -193,7 +193,7 @@ platform before installing the remaining requirements:
 | CPU only | *(no flag required)* |
 
 ```bash
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -211,7 +211,7 @@ The scorers `requirements.txt` includes the UI server dependencies:
 To activate the scorers environment in a shell, use the provided script:
 
 ```bash
-. $AI_IMAGE_ROOT/loop/scorers/activate.sh
+. $SOXHLET_ROOT/loop/scorers/activate.sh
 ```
 
 ---
@@ -239,7 +239,7 @@ non-default filename.
 ### AI artifact detector
 
 ```bash
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 source venv/bin/activate
 python - <<'EOF'
 from huggingface_hub import snapshot_download
@@ -253,9 +253,9 @@ EOF
 ### VLM scorer (Qwen2.5-VL-7B)
 
 ```bash
-mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/vlm
+mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
 # ~5 GB download
-curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
+curl -L -o $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 ```
 
@@ -270,9 +270,9 @@ by `start_loop.sh`). The `tactical_llm.py` Python process calls it via the
 OpenAI-compatible REST API.
 
 ```bash
-mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/tactical
+mkdir -p $SOXHLET_ROOT/loop/scorers/models/tactical
 # ~43 GB download
-curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
+curl -L -o $SOXHLET_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/Qwen3-72B-abliterated-Q4_K_M.gguf"
 ```
 
@@ -350,7 +350,7 @@ wget -q -O loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
 Copy the default template and open the interactive editor:
 
 ```bash
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 cp config.yaml.default config.yaml
 python menuconfig.py
 ```
@@ -400,7 +400,7 @@ python check_env.py
 ## 9. Build Rust Binaries
 
 ```bash
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 ~/.cargo/bin/cargo build --release
 ```
 
@@ -419,10 +419,10 @@ This produces four binaries in `target/release/`:
 
 ```bash
 # Terminal 1: Artemis broker
-$AI_IMAGE_ROOT/loop/start_broker.sh
+$SOXHLET_ROOT/loop/start_broker.sh
 
 # Terminal 2: Full pipeline (all components, including llama.cpp server and UI)
-$AI_IMAGE_ROOT/loop/start_loop.sh
+$SOXHLET_ROOT/loop/start_loop.sh
 
 # Terminal 3: Open the browser UI
 open http://localhost:7860
@@ -471,7 +471,7 @@ In a separate terminal, start the dead-letter monitor to catch any messages
 that fail processing:
 
 ```bash
-$AI_IMAGE_ROOT/loop/scorers/venv/bin/python $AI_IMAGE_ROOT/loop/monitor.py
+$SOXHLET_ROOT/loop/scorers/venv/bin/python $SOXHLET_ROOT/loop/monitor.py
 ```
 
 Any message appearing in the monitor output indicates a processing error; the
@@ -480,7 +480,7 @@ log will include the original queue name and message body.
 ### Tests
 
 ```bash
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 make test      # all Rust + Python tests
 ```
 
@@ -503,7 +503,7 @@ pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
 pkill -f "llama.server"
-"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis" stop
+"$SOXHLET_ROOT/loop/artemis-broker/bin/artemis" stop
 ```
 
 On Windows (Git Bash):
@@ -515,5 +515,5 @@ taskkill /f /fi "IMAGENAME eq router.exe"
 taskkill /f /fi "IMAGENAME eq aggregator.exe"
 taskkill /f /fi "IMAGENAME eq lancedb_manager.exe"
 taskkill /f /fi "IMAGENAME eq llama-server.exe"
-"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis.cmd" stop
+"$SOXHLET_ROOT/loop/artemis-broker/bin/artemis.cmd" stop
 ```

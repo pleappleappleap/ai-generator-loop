@@ -6,8 +6,8 @@
 # Usage: tactical_llm.sh {start|stop|restart|status|health}
 
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
-export AI_IMAGE_ROOT
+SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
 
 _resolve() {

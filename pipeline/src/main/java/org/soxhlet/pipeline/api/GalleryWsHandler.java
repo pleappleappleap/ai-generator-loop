@@ -1,6 +1,6 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
-import ai.image.pipeline.service.GalleryBroadcastService;
+import org.soxhlet.pipeline.service.GalleryBroadcastService;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;

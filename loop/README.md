@@ -24,7 +24,7 @@ generated images in real time.
 ## Starting the Loop
 
 ```bash
-~/ai-image/loop/start_loop.sh
+~/soxhlet/loop/start_loop.sh
 ```
 
 `start_loop.sh` starts components in parallel where possible:
@@ -59,7 +59,7 @@ pkill -f "llama.server"
 
 - **Browser UI**: http://localhost:7860 — real-time image gallery
 - **Artemis management console**: http://localhost:8161
-- **Dead-letter monitor**: `python ~/ai-image/loop/monitor.py`
+- **Dead-letter monitor**: `python ~/soxhlet/loop/monitor.py`
 
 ## Address Topology
 

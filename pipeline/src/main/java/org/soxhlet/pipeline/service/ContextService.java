@@ -1,4 +1,4 @@
-package ai.image.pipeline.service;
+package org.soxhlet.pipeline.service;
 
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Service;

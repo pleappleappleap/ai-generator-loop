@@ -1,4 +1,4 @@
-package ai.image.pipeline.config;
+package org.soxhlet.pipeline.config;
 
 import jakarta.jms.ConnectionFactory;
 import jakarta.jms.XAConnectionFactory;

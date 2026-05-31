@@ -10,8 +10,8 @@ to improve generation quality over time. Operates on LanceDB directly
 
 ## Interface
 
-Reads from LanceDB via `~/ai-image/lancedb_schema.py` and
-`~/ai-image/lancedb_manager.py`.
+Reads from LanceDB via `~/soxhlet/lancedb_schema.py` and
+`~/soxhlet/lancedb_manager.py`.
 
 Key query patterns:
 - Vector search on `prompt_embedding` for similar past sessions

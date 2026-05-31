@@ -1,10 +1,10 @@
 #!/bin/sh
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
-export AI_IMAGE_ROOT PYTHONPATH="$AI_IMAGE_ROOT"
+SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+export SOXHLET_ROOT PYTHONPATH="$SOXHLET_ROOT"
 . "$LOOP_DIR/lib/component.sh"
 
-CFG="$AI_IMAGE_ROOT/config.yaml"
+CFG="$SOXHLET_ROOT/config.yaml"
 PORT=$(yq '.sidecars.clip_scorer.port // 8081' "$CFG" 2>/dev/null)
 : "${PORT:=8081}"
 

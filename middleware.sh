@@ -1,7 +1,7 @@
 #!/bin/sh
-AI_IMAGE_ROOT="$(cd "$(dirname "$0")" && pwd)"
-export AI_IMAGE_ROOT
-. "$AI_IMAGE_ROOT/loop/lib/component.sh"
+SOXHLET_ROOT="$(cd "$(dirname "$0")" && pwd)"
+export SOXHLET_ROOT
+. "$SOXHLET_ROOT/loop/lib/component.sh"
 NS=pipeline
 
 _require_kubectl() {
@@ -36,7 +36,7 @@ _wait_pod_ready() {
 
 _start() {
     _require_kubectl
-    kubectl apply -k "$AI_IMAGE_ROOT/k8s/"
+    kubectl apply -k "$SOXHLET_ROOT/k8s/"
     _wait_pod_ready "app=postgres" "PostgreSQL" 120
     _wait_pod_ready "app=artemis"  "Artemis"    120
     _status
@@ -51,7 +51,7 @@ _stop() {
 
 _stop_all() {
     _require_kubectl
-    kubectl delete -k "$AI_IMAGE_ROOT/k8s/" 2>/dev/null || true
+    kubectl delete -k "$SOXHLET_ROOT/k8s/" 2>/dev/null || true
     echo "==> All middleware resources deleted"
 }
 

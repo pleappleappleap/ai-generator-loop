@@ -1,6 +1,6 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
-import ai.image.pipeline.service.TasteService;
+import org.soxhlet.pipeline.service.TasteService;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.PostMapping;

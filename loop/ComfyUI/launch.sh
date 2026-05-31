@@ -1,13 +1,13 @@
 #!/bin/sh
-AI_IMAGE_ROOT="${1:-${AI_IMAGE_ROOT:-}}"
-if [ -z "$AI_IMAGE_ROOT" ] && [ -f "$PWD/config.yaml" ] && [ -d "$PWD/loop" ]; then
-    AI_IMAGE_ROOT="$PWD"
+SOXHLET_ROOT="${1:-${SOXHLET_ROOT:-}}"
+if [ -z "$SOXHLET_ROOT" ] && [ -f "$PWD/config.yaml" ] && [ -d "$PWD/loop" ]; then
+    SOXHLET_ROOT="$PWD"
 fi
-: "${AI_IMAGE_ROOT:?provide root as \$1, set AI_IMAGE_ROOT in environment, or run from the repo root}"
-CFG="$AI_IMAGE_ROOT/config.yaml"
+: "${SOXHLET_ROOT:?provide root as \$1, set SOXHLET_ROOT in environment, or run from the repo root}"
+CFG="$SOXHLET_ROOT/config.yaml"
 
 COMFYUI=$(yq '.paths.comfyui' "$CFG")
-[ "$COMFYUI" = "auto" ] && COMFYUI="$AI_IMAGE_ROOT/loop/ComfyUI"
+[ "$COMFYUI" = "auto" ] && COMFYUI="$SOXHLET_ROOT/loop/ComfyUI"
 
 BACKEND=$(yq '.compute.comfyui.backend' "$CFG")
 LISTEN=$(yq '.compute.comfyui.listen' "$CFG")

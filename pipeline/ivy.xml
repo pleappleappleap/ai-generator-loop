@@ -1,5 +1,5 @@
 <ivy-module version="2.0">
-    <info organisation="ai.image" module="pipeline" revision="0.0.1"/>
+    <info organisation="org.soxhlet" module="pipeline" revision="0.0.1"/>
 
     <configurations>
         <conf name="compile"  description="Compile and runtime classpath"/>

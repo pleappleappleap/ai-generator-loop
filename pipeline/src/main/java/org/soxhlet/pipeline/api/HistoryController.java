@@ -1,4 +1,4 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.GetMapping;

@@ -1,16 +1,16 @@
 #!/bin/sh
 LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
-export AI_IMAGE_ROOT
+SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
 
-PIPELINE_DIR="$AI_IMAGE_ROOT/pipeline"
+PIPELINE_DIR="$SOXHLET_ROOT/pipeline"
 PIPELINE_CLASSES="$PIPELINE_DIR/build/classes"
 PIPELINE_LIB="$PIPELINE_DIR/build/lib"
 
 # Propagate broker.url from config.yaml → SPRING_ARTEMIS_BROKER_URL (if yq is available)
-if command -v yq >/dev/null 2>&1 && [ -f "$AI_IMAGE_ROOT/config.yaml" ]; then
-    _BROKER_URL=$(yq '.broker.url' "$AI_IMAGE_ROOT/config.yaml" 2>/dev/null)
+if command -v yq >/dev/null 2>&1 && [ -f "$SOXHLET_ROOT/config.yaml" ]; then
+    _BROKER_URL=$(yq '.broker.url' "$SOXHLET_ROOT/config.yaml" 2>/dev/null)
     if [ -n "$_BROKER_URL" ] && [ "$_BROKER_URL" != "null" ]; then
         export SPRING_ARTEMIS_BROKER_URL="$_BROKER_URL"
     fi
@@ -24,7 +24,7 @@ case "${1:-status}" in
         fi
         component_start pipeline java \
             -cp "$PIPELINE_LIB/*:$PIPELINE_CLASSES" \
-            ai.image.pipeline.PipelineApplication
+            org.soxhlet.pipeline.PipelineApplication
         ;;
     stop)    component_stop pipeline ;;
     restart)
@@ -32,7 +32,7 @@ case "${1:-status}" in
         sleep 1
         component_start pipeline java \
             -cp "$PIPELINE_LIB/*:$PIPELINE_CLASSES" \
-            ai.image.pipeline.PipelineApplication
+            org.soxhlet.pipeline.PipelineApplication
         ;;
     status)  component_status pipeline ;;
     health)

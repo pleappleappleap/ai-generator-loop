@@ -178,9 +178,9 @@ sudo dnf install git make
 \subsubsection{Clone the repository}
 
 \begin{lstlisting}[style=shell]
-git clone <repo-url> ~/ai-image
-cd ~/ai-image
-export AI_IMAGE_ROOT=~/ai-image   # add to shell profile
+git clone <repo-url> ~/soxhlet
+cd ~/soxhlet
+export SOXHLET_ROOT=~/soxhlet   # add to shell profile
 \end{lstlisting}
 
 \subsection{System Prerequisites (\texttt{make prereqs-system})}
@@ -251,7 +251,7 @@ There are three separate virtual environments:
 \subsubsection{Root environment}
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -278,7 +278,7 @@ CPU only             & (no flag required) \\
 \end{center}
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 python3.11 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -311,7 +311,7 @@ workflow default.
 \subsubsection{AI artifact detector}
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 source venv/bin/activate
 python - <<'EOF'
 from huggingface_hub import snapshot_download
@@ -325,8 +325,8 @@ EOF
 \subsubsection{VLM scorer (Qwen2.5-VL-7B)}
 
 \begin{lstlisting}[style=shell]
-mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/vlm
-curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
+mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
+curl -L -o $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/\
 Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
 \end{lstlisting}
@@ -341,8 +341,8 @@ directly for clear-cut cases, controlled by a \texttt{<think>} token in
 the prompt.
 
 \begin{lstlisting}[style=shell]
-mkdir -p $AI_IMAGE_ROOT/loop/scorers/models/tactical
-curl -L -o $AI_IMAGE_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
+mkdir -p $SOXHLET_ROOT/loop/scorers/models/tactical
+curl -L -o $SOXHLET_ROOT/loop/scorers/models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
   "https://huggingface.co/bartowski/Qwen3-72B-abliterated-GGUF/resolve/main/\
 Qwen3-72B-abliterated-Q4_K_M.gguf"
 \end{lstlisting}
@@ -360,10 +360,10 @@ installs its dependencies into a dedicated venv at
 
 \begin{lstlisting}[style=shell]
 git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-cp -rn /tmp/_comfyui_clone/. $AI_IMAGE_ROOT/loop/ComfyUI/
+cp -rn /tmp/_comfyui_clone/. $SOXHLET_ROOT/loop/ComfyUI/
 rm -rf /tmp/_comfyui_clone
-python3.11 -m venv $AI_IMAGE_ROOT/loop/ComfyUI/venv
-$AI_IMAGE_ROOT/loop/ComfyUI/venv/bin/pip install -r $AI_IMAGE_ROOT/loop/ComfyUI/requirements.txt
+python3.11 -m venv $SOXHLET_ROOT/loop/ComfyUI/venv
+$SOXHLET_ROOT/loop/ComfyUI/venv/bin/pip install -r $SOXHLET_ROOT/loop/ComfyUI/requirements.txt
 \end{lstlisting}
 
 \subsubsection{Custom nodes}
@@ -397,7 +397,7 @@ v0.1.0-alpha/groundingdino_swint_ogc.pth"
 Copy the default template and open the interactive editor:
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 cp config.yaml.default config.yaml
 python menuconfig.py
 \end{lstlisting}
@@ -452,7 +452,7 @@ python check_env.py
 \subsection{Building the Rust Binaries}
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 cargo build --release
 \end{lstlisting}
 
@@ -1102,7 +1102,7 @@ Section~2.4). Run the single start script; it manages all startup ordering
 internally.
 
 \begin{lstlisting}[style=shell]
-$AI_IMAGE_ROOT/loop/start_loop.sh
+$SOXHLET_ROOT/loop/start_loop.sh
 \end{lstlisting}
 
 \texttt{start\_loop.sh} starts three slow-initialising processes in parallel
@@ -1126,16 +1126,16 @@ Individual components can also be started manually for development:
 
 \begin{lstlisting}[style=shell]
 # Rust binaries
-$AI_IMAGE_ROOT/loop/scorers/target/release/coordinator
-$AI_IMAGE_ROOT/loop/scorers/target/release/router
-$AI_IMAGE_ROOT/loop/scorers/target/release/aggregator
-$AI_IMAGE_ROOT/loop/scorers/target/release/lancedb_manager
+$SOXHLET_ROOT/loop/scorers/target/release/coordinator
+$SOXHLET_ROOT/loop/scorers/target/release/router
+$SOXHLET_ROOT/loop/scorers/target/release/aggregator
+$SOXHLET_ROOT/loop/scorers/target/release/lancedb_manager
 
 # ComfyUI
-$AI_IMAGE_ROOT/loop/ComfyUI/launch.sh
+$SOXHLET_ROOT/loop/ComfyUI/launch.sh
 
 # llama.cpp OpenAI-compatible server (loads tactical LLM model)
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 source venv/bin/activate
 python -m llama_cpp.server \
   --model models/tactical/Qwen3-72B-abliterated-Q4_K_M.gguf \
@@ -1144,18 +1144,18 @@ python -m llama_cpp.server \
   --port 8080
 
 # Python workers -- root venv
-source $AI_IMAGE_ROOT/venv/bin/activate
-PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/comfyui_worker.py
+source $SOXHLET_ROOT/venv/bin/activate
+PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/comfyui_worker.py
 
 # Python workers -- scorers venv
-source $AI_IMAGE_ROOT/loop/scorers/venv/bin/activate
-python $AI_IMAGE_ROOT/loop/scorers/clip_scorer.py
-python $AI_IMAGE_ROOT/loop/scorers/artifact_scorer.py
-python $AI_IMAGE_ROOT/loop/scorers/vlm_scorer.py
-PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/tactical-llm/tactical_llm.py
+source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
+python $SOXHLET_ROOT/loop/scorers/clip_scorer.py
+python $SOXHLET_ROOT/loop/scorers/artifact_scorer.py
+python $SOXHLET_ROOT/loop/scorers/vlm_scorer.py
+PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/tactical-llm/tactical_llm.py
 
 # UI server -- scorers venv
-PYTHONPATH=$AI_IMAGE_ROOT python $AI_IMAGE_ROOT/loop/ui/server.py
+PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/ui/server.py
 \end{lstlisting}
 
 \subsection{Using the Browser UI}
@@ -1188,7 +1188,7 @@ pkill -f router
 pkill -f aggregator
 pkill -f coordinator
 pkill -f lancedb_manager
-"$AI_IMAGE_ROOT/loop/artemis-broker/bin/artemis" stop
+"$SOXHLET_ROOT/loop/artemis-broker/bin/artemis" stop
 \end{lstlisting}
 
 \subsection{Monitoring}
@@ -1218,8 +1218,8 @@ the tactical LLM.
 \subsubsection{Dead-letter monitor}
 
 \begin{lstlisting}[style=shell]
-source $AI_IMAGE_ROOT/venv/bin/activate
-python $AI_IMAGE_ROOT/loop/monitor.py
+source $SOXHLET_ROOT/venv/bin/activate
+python $SOXHLET_ROOT/loop/monitor.py
 \end{lstlisting}
 
 Every message appearing in monitor output indicates a processing failure.
@@ -1310,7 +1310,7 @@ WorkflowResume, FeedbackAdd, ChatAdd, ContextGet). Tests run against
 an in-memory SQLite database.
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 cargo test -p coordinator
 
 # All crates in the workspace
@@ -1322,7 +1322,7 @@ cargo test
 All Python tests run from the scorers venv:
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT/loop/scorers
+cd $SOXHLET_ROOT/loop/scorers
 venv/bin/pytest tests/ -v
 \end{lstlisting}
 
@@ -1350,7 +1350,7 @@ they run without \texttt{config.yaml}.
 \subsection{Full Suite}
 
 \begin{lstlisting}[style=shell]
-cd $AI_IMAGE_ROOT
+cd $SOXHLET_ROOT
 make all    # lint + typecheck + test + build
 \end{lstlisting}
 

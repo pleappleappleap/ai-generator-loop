@@ -1,20 +1,20 @@
 #!/bin/sh
 # Shared component lifecycle library.  Source this file; do not execute directly.
 #
-# Requires AI_IMAGE_ROOT to be set before sourcing.
+# Requires SOXHLET_ROOT to be set before sourcing.
 # Provides: component_start, component_stop, component_restart, component_status
 #
 # Usage in component scripts:
 #   LOOP_DIR="$(cd "$(dirname "$0")" && pwd)"
-#   AI_IMAGE_ROOT="${AI_IMAGE_ROOT:-$(dirname "$LOOP_DIR")}"
-#   export AI_IMAGE_ROOT
+#   SOXHLET_ROOT="${SOXHLET_ROOT:-$(dirname "$LOOP_DIR")}"
+#   export SOXHLET_ROOT
 #   . "$LOOP_DIR/lib/component.sh"
 
 PIDDIR="${PIDDIR:-/tmp/ai-loop}"
-CFG="$AI_IMAGE_ROOT/config.yaml"
-SCORERS="$AI_IMAGE_ROOT/loop/scorers"
-COMFYUI_DIR="$AI_IMAGE_ROOT/loop/ComfyUI"
-VENV="$AI_IMAGE_ROOT/venv"
+CFG="$SOXHLET_ROOT/config.yaml"
+SCORERS="$SOXHLET_ROOT/loop/scorers"
+COMFYUI_DIR="$SOXHLET_ROOT/loop/ComfyUI"
+VENV="$SOXHLET_ROOT/venv"
 SVENV="$SCORERS/venv"
 
 # Resolve yq "auto" paths using the config file.

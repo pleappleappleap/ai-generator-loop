@@ -1,4 +1,4 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;

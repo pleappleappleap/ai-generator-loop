@@ -1,4 +1,4 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;

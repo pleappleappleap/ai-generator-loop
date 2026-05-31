@@ -1,4 +1,4 @@
-package ai.image.pipeline.api;
+package org.soxhlet.pipeline.api;
 
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;

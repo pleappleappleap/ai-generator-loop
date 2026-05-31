@@ -1,11 +1,11 @@
-package ai.image.pipeline.worker;
+package org.soxhlet.pipeline.worker;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-import ai.image.pipeline.config.ModelsConfig;
-import ai.image.pipeline.service.GalleryBroadcastService;
+import org.soxhlet.pipeline.config.ModelsConfig;
+import org.soxhlet.pipeline.service.GalleryBroadcastService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;

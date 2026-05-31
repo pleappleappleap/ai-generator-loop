@@ -24,13 +24,13 @@ libraries and the FastAPI/uvicorn stack.
 ## Activating the Python Environment
 
 ```bash
-source ~/ai-image/loop/scorers/activate.sh
+source ~/soxhlet/loop/scorers/activate.sh
 ```
 
 ## Building Rust Binaries
 
 ```bash
-cd ~/ai-image/loop/scorers
+cd ~/soxhlet/loop/scorers
 ~/.cargo/bin/cargo build --release
 ```
 
@@ -38,13 +38,13 @@ cd ~/ai-image/loop/scorers
 
 ### Rust
 ```bash
-cd ~/ai-image/loop/scorers
+cd ~/soxhlet/loop/scorers
 ~/.cargo/bin/cargo test -p coordinator
 ```
 
 ### Python
 ```bash
-cd ~/ai-image/loop/scorers
+cd ~/soxhlet/loop/scorers
 venv/bin/pytest tests/ -v
 ```
 
@@ -56,7 +56,7 @@ The `tests/` directory covers:
 
 ### Full suite (lint + typecheck + Rust + Python)
 ```bash
-cd ~/ai-image/loop
+cd ~/soxhlet/loop
 make all
 ```
 
@@ -71,7 +71,7 @@ make all
 5. Publish results to `/queue/aggregator.<name>.queue` (anycast)
 6. Add the result column to `db/schema.sql` (`scorer_session` table)
 7. Add merge logic to `aggregator/src/main.rs`
-8. Add the score field to `~/ai-image/lancedb_schema.py`
+8. Add the score field to `~/soxhlet/lancedb_schema.py`
 9. Add tests to `tests/test_<name>_scorer.py`
 
 ## Model Storage
