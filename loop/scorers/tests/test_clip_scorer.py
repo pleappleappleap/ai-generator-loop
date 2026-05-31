@@ -83,3 +83,38 @@ def test_score_unreadable_image_returns_422(clip_client):
         })
 
     assert resp.status_code == 422
+
+
+def test_embed_text_returns_embedding(clip_client):
+    feat = _unit_feat()
+    with (
+        patch("clip_scorer.tokenizer") as mock_tok,
+        patch("clip_scorer.model") as mock_model,
+    ):
+        mock_tok.return_value = torch.zeros(1, 77, dtype=torch.long)
+        mock_model.encode_text.return_value = feat
+
+        resp = clip_client.post("/embed_text", json={"text": "a tiger"})
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "embedding" in data
+    assert isinstance(data["embedding"], list)
+    assert len(data["embedding"]) == 512
+
+
+def test_embed_text_embedding_is_normalized(clip_client):
+    feat = _unit_feat()
+    with (
+        patch("clip_scorer.tokenizer") as mock_tok,
+        patch("clip_scorer.model") as mock_model,
+    ):
+        mock_tok.return_value = torch.zeros(1, 77, dtype=torch.long)
+        mock_model.encode_text.return_value = feat
+
+        resp = clip_client.post("/embed_text", json={"text": "a tiger"})
+
+    import pytest
+    embedding = resp.json()["embedding"]
+    norm = sum(x * x for x in embedding) ** 0.5
+    assert norm == pytest.approx(1.0, abs=1e-4)

@@ -117,3 +117,86 @@ def test_score_uses_temperature_zero(vlm_client):
         call_kwargs = mock_llm.create_chat_completion.call_args[1]
         assert call_kwargs.get("temperature") == 0.0
         assert call_kwargs.get("stream") is False
+
+
+# ── /analyze ──────────────────────────────────────────────────────────────────
+
+def test_analyze_local_file_returns_answer(vlm_client):
+    with (
+        patch("builtins.open", mock_open(read_data=b"\x89PNG")),
+        patch("vlm_scorer.llm") as mock_llm,
+    ):
+        mock_llm.create_chat_completion.return_value = _llm_response("The image shows a tiger.")
+        resp = vlm_client.post("/analyze", json={
+            "image_url": "/tmp/fake.png",
+            "question": "What is in this image?",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "The image shows a tiger."
+
+
+def test_analyze_data_uri_returns_answer(vlm_client):
+    with patch("vlm_scorer.llm") as mock_llm:
+        mock_llm.create_chat_completion.return_value = _llm_response("A landscape.")
+        resp = vlm_client.post("/analyze", json={
+            "image_url": "data:image/png;base64,iVBORw0KGgo=",
+            "question": "Describe this.",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "A landscape."
+
+
+def test_analyze_http_url_returns_answer(vlm_client):
+    mock_response = MagicMock()
+    mock_response.__enter__.return_value = mock_response
+    mock_response.read.return_value = b"\x89PNG"
+    mock_response.headers.get.return_value = "image/png"
+    with (
+        patch("urllib.request.urlopen", return_value=mock_response),
+        patch("vlm_scorer.llm") as mock_llm,
+    ):
+        mock_llm.create_chat_completion.return_value = _llm_response("A cat.")
+        resp = vlm_client.post("/analyze", json={
+            "image_url": "http://example.com/image.png",
+            "question": "What is this?",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json()["answer"] == "A cat."
+
+
+def test_analyze_unreadable_local_file_returns_422(vlm_client):
+    with patch("builtins.open", side_effect=OSError("no such file")):
+        resp = vlm_client.post("/analyze", json={
+            "image_url": "/nonexistent/img.png",
+            "question": "What is this?",
+        })
+
+    assert resp.status_code == 422
+
+
+def test_analyze_bad_http_url_returns_422(vlm_client):
+    with patch("urllib.request.urlopen", side_effect=Exception("connection refused")):
+        resp = vlm_client.post("/analyze", json={
+            "image_url": "http://bad-host.example.com/img.png",
+            "question": "What is this?",
+        })
+
+    assert resp.status_code == 422
+
+
+def test_analyze_uses_temperature_zero_and_no_stream(vlm_client):
+    with (
+        patch("builtins.open", mock_open(read_data=b"\x89PNG")),
+        patch("vlm_scorer.llm") as mock_llm,
+    ):
+        mock_llm.create_chat_completion.return_value = _llm_response("Answer.")
+        vlm_client.post("/analyze", json={
+            "image_url": "/tmp/fake.png",
+            "question": "test",
+        })
+        call_kwargs = mock_llm.create_chat_completion.call_args[1]
+        assert call_kwargs.get("temperature") == 0.0
+        assert call_kwargs.get("stream") is False

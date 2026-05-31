@@ -11,6 +11,7 @@ open_clip_torch
 torch
 torchvision
 transformers
+llama-cpp-python
 accelerate
 pillow
 huggingface_hub
