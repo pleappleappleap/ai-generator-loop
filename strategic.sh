@@ -33,7 +33,10 @@ _stop_loop_if_running() {
 
 _start() {
     _stop_loop_if_running
+    echo "==> Starting middleware..."
+    "$SOXHLET_ROOT/middleware.sh" start
 
+    echo ""
     echo "==> Starting strategic LLM server..."
     "$STRATEGIC_DIR/strategic_llm.sh" start
     component_wait_healthy "${_LLM_BASE}/v1/models" "strategic_llm" 300
