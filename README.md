@@ -1,11 +1,11 @@
-# AI Image Generation Pipeline
+# Soxhlet
 
-An autonomous SDXL image generation pipeline with a browser UI. Open the UI,
+An autonomous image generation pipeline with a browser UI. Open the UI,
 enter a prompt, and watch the pipeline generate images, score them across three
 independent dimensions, and feed the results to a tactical LLM that decides
 whether to accept the image, revise the prompt, schedule targeted inpainting,
-or give up. Every generated image (including rejects) is stored as a vector
-embedding in LanceDB, giving the system long-term memory across sessions.
+or give up. Every generated image (including rejects) is stored with its
+embeddings in PostgreSQL, giving the system long-term memory across sessions.
 
 Sessions are organised into **conversations** (named projects) and
 **workflows** (individual generation runs). The browser UI manages this
