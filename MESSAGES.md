@@ -1,18 +1,18 @@
 # Message Schema Contracts
 
 All messages are JSON-encoded UTF-8. The pipeline uses ActiveMQ Artemis with
-two protocols: AMQP 1.0 (Rust components) and STOMP (Python components).
+AMQP 1.0 (all queues are consumed by the Spring Boot pipeline).
 
-Address types: **anycast** = queue semantics (one consumer receives);
-**multicast** = topic semantics (all subscribers receive).
+Address types: **anycast** = queue semantics (one consumer receives).
+All addresses below use anycast routing.
 
 ---
 
-## Anycast Addresses (queue semantics)
+## Anycast Addresses
 
-### `loop.request`
-**Publisher:** pipeline (UI session start, `TacticalLlmCaller` retry)
-**Consumer:** pipeline (`ComfyUiWorker`)
+### `loop.generate`
+**Publishers:** `WorkflowController` (workflow start-run), `ChatWsHandler` (chat session)
+**Consumer:** `ComfyUiWorker`
 **Protocol:** AMQP 1.0
 
 ```json
@@ -34,80 +34,25 @@ Address types: **anycast** = queue semantics (one consumer receives);
 }
 ```
 
-### `aggregator.clip.queue`
-**Publisher:** `clip_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP -> AMQP 1.0
-
-```json
-{"image_uuid": "string", "clip_score": "float 0.0-1.0", "image_embedding": "array[float] 512-dim"}
-```
-
-### `aggregator.artifact.queue`
-**Publisher:** `artifact_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP -> AMQP 1.0
-
-```json
-{"image_uuid": "string", "ai_confidence": "float 0.0-1.0"}
-```
-
-### `aggregator.vlm.queue`
-**Publisher:** `vlm_scorer.py`  **Consumer:** `aggregator` (Rust)
-**Protocol:** STOMP -> AMQP 1.0
-
-```json
-{
-  "image_uuid":               "string",
-  "photorealism":             "float 0-10",
-  "anatomical_coherence":     "float 0-10",
-  "interaction_plausibility": "float 0-10",
-  "lighting_consistency":     "float 0-10",
-  "prompt_adherence":         "float 0-10",
-  "issues":          ["string"],
-  "recommendations": ["string"]
-}
-```
-
-### `scorer.result`
-**Publisher:** `aggregator` (Rust)  **Consumer:** pipeline (`TacticalLlmCaller`)
+### `loop.retry`
+**Publisher:** `TacticalLlmCaller` (retry decision)
+**Consumer:** `ComfyUiWorker`
 **Protocol:** AMQP 1.0
 
-```json
-{
-  "image_uuid":      "string",
-  "verdict":         "candidate | rejected",
-  "reason":          "clip_threshold | artifact_threshold (omitted for candidate)",
-  "prompt":          "string",
-  "session_uuid":    "string",
-  "workflow_id":     "string",
-  "conversation_id": "string",
-  "workflow_path":   "string",
-  "sequence_number": "integer",
-  "scores": {
-    "clip":     {"image_uuid": "string", "clip_score": "float", "image_embedding": "array[float]"},
-    "artifact": {"image_uuid": "string", "ai_confidence": "float"},
-    "vlm":      {"image_uuid": "string", "photorealism": "float", "anatomical_coherence": "float",
-                 "interaction_plausibility": "float", "lighting_consistency": "float",
-                 "prompt_adherence": "float", "issues": ["string"], "recommendations": ["string"]}
-  }
-}
-```
+Same schema as `loop.generate`. Carries revised prompt and/or workflow params from the
+tactical LLM.
 
-### `pipeline.dead`
-**Publisher:** Artemis DLX (from all failed queues)  **Consumer:** none (inspect via Artemis console)
+### `loop.inpaint`
+**Publisher:** `TacticalLlmCaller` (inpaint decision)
+**Consumer:** `ComfyUiWorker`
 **Protocol:** AMQP 1.0
 
-Original message body preserved. Artemis adds headers:
-- `_AMQ_ORIG_ADDRESS`  -  source address
-- `_AMQ_ORIG_ROUTING_TYPE`  -  anycast or multicast
-- `_AMQ_ACTUAL_EXPIRY`  -  when the message expired (if applicable)
+Same schema as `loop.generate`. The workflow params carry inpainting region and prompt
+information derived from the tactical LLM decision.
 
----
-
-## Multicast Addresses (topic semantics)
-
-### `loop.events`
-**Publisher:** pipeline (`ComfyUiWorker`)
-**Consumers:** `router` (Rust), pipeline (UI WebSocket push)
+### `loop.generated`
+**Publisher:** `ComfyUiWorker` (after ComfyUI generation completes)
+**Consumer:** `Scorer`
 **Protocol:** AMQP 1.0
 
 ```json
@@ -125,109 +70,95 @@ Original message body preserved. Artemis adds headers:
 }
 ```
 
-The UI server subscribes to `loop.events` via STOMP to cache the
-`image_uuid -> image_path` mapping so it can serve generated images to the
-browser via `/image/{uuid}`.
-
-### `scorer.requests`
-**Publisher:** `router` (Rust)  **Consumers:** all scorers (durable STOMP subscriptions)
-**Protocol:** AMQP 1.0 -> STOMP
-**Message property:** `subject = score.<image_uuid>`
-
-Payload: unchanged `loop.events` message body.
-
-### `scorer.events`
-**Publisher:** `aggregator` (Rust)
-**Consumers:** all scorers (cancel flag), `lancedb_manager` (Rust)
-**Protocol:** AMQP 1.0
-**Message property:** `subject = cancel.<image_uuid>`
-
-```json
-{"image_uuid": "string"}
-```
-
-### `loop.accepted`
-**Publisher:** pipeline (`TacticalLlmCaller`)  **Consumer:** `lancedb_manager` (Rust)
+### `loop.verdicts`
+**Publisher:** `Scorer` (candidates only — images that pass all thresholds)
+**Consumer:** `TacticalLlmCaller`
 **Protocol:** AMQP 1.0
 
 ```json
 {
-  "image_uuid": "string",
-  "image_path": "string",
-  "scores":     "object (full scorer results)"
-}
-```
-
-### `tactical.decisions`
-**Publisher:** pipeline (`TacticalLlmCaller`)
-**Consumer:** pipeline (UI WebSocket push)
-**Protocol:** AMQP 1.0
-
-The UI server subscribes to `tactical.decisions` to push live decision updates
-to connected browser clients via the WebSocket gallery endpoint.
-
-```json
-{
-  "image_uuid":   "string",
-  "session_uuid": "string",
-  "workflow_id":  "string",
-  "decision": {
-    "decision":    "accept | retry | inpaint | give_up",
-    "reasoning":   "string",
-    "confidence":  "float 0.0-1.0",
-    "retry_prompt":  "string (if retry)",
-    "retry_params":  "object (if retry)",
-    "inpaint_regions": "array (if inpaint)",
-    "inpaint_prompt":  "string (if inpaint)"
+  "image_uuid":      "string",
+  "session_uuid":    "string",
+  "workflow_id":     "string",
+  "conversation_id": "string",
+  "sequence_number": "integer",
+  "prompt":          "string",
+  "workflow_path":   "string",
+  "image_path":      "string",
+  "scores": {
+    "clip":     {"image_uuid": "string", "clip_score": "float", "image_embedding": "array[float] 512-dim"},
+    "artifact": {"image_uuid": "string", "ai_confidence": "float"},
+    "vlm":      {
+      "image_uuid":               "string",
+      "photorealism":             "float 0-10",
+      "anatomical_coherence":     "float 0-10",
+      "interaction_plausibility": "float 0-10",
+      "lighting_consistency":     "float 0-10",
+      "prompt_adherence":         "float 0-10",
+      "issues":                   ["string"],
+      "recommendations":          ["string"]
+    }
   },
-  "verdict": "object (original scorer.result payload)"
+  "north_star_similarity": "float 0.0-1.0 (null if no active north star)"
 }
 ```
+
+Images rejected by threshold logic are written to PostgreSQL with `status = 'rejected'`
+and a `reason` field but are not published to any queue.
+
+### `pipeline.dead`
+**Publisher:** Artemis DLX (from all failed queues)
+**Consumer:** none (inspect via Artemis console at `http://localhost:12009`)
+**Protocol:** AMQP 1.0
+
+Original message body preserved. Artemis adds headers:
+- `_AMQ_ORIG_ADDRESS`  -  source address
+- `_AMQ_ORIG_ROUTING_TYPE`  -  anycast or multicast
+- `_AMQ_ACTUAL_EXPIRY`  -  when the message expired (if applicable)
 
 ---
 
-## Coordinator Unix Socket API
+## Scorer HTTP API
 
-Socket path: `{database.path}.sock` (e.g. `pipeline.db.sock`).
-Protocol: newline-delimited JSON (request -> response per connection).
+The three scorer sidecars are stateless HTTP services. They are called directly
+by the `Scorer` Java class (not via the broker).
 
-### Conversation and Workflow Operations
+### CLIP scorer — `http://localhost:12002`
 
-```json
-{"op":"ConversationCreate", "name": "My Project"}
-{"op":"WorkflowCreate",     "conversation_id":"...", "workflow_path":"sdxl.json",
-                             "max_retries":3, "max_inpaints":2}
-{"op":"WorkflowResume",     "workflow_id":"...", "budget_policy":"carry",
-                             "max_retries":3, "max_inpaints":2}
-{"op":"FeedbackAdd",        "image_uuid":"...", "workflow_id":"...", "run_id":"...",
-                             "rating":"up | down", "comment":"string (optional)"}
-{"op":"ChatAdd",            "conversation_id":"...", "role":"user | assistant",
-                             "content":"string"}
-{"op":"ContextGet",         "conversation_id":"...", "workflow_id":"...", "limit":20}
+```
+POST /score
+{ "image_path": "string" }
+→ { "image_uuid": "string", "clip_score": "float 0.0-1.0", "image_embedding": "array[float] 512-dim" }
+
+POST /embed_text
+{ "text": "string" }
+→ { "embedding": "array[float] 512-dim" }
 ```
 
-### Session Budget Operations
+### Artifact scorer — `http://localhost:12003`
 
-```json
-{"op":"BudgetInit",   "session_uuid":"...", "max_retries":3, "max_inpaints":2}
-{"op":"BudgetGet",    "session_uuid":"..."}
-{"op":"BudgetUpdate", "session_uuid":"...", "field":"retries_used | inpaints_used"}
-{"op":"SessionInit",  "image_uuid":"...", "session_uuid":"...", "sequence_number":1,
-                      "prompt":"...", "workflow_path":"...", "workflow_params":"{}",
-                      "score_timeout_secs":60}
+```
+POST /score
+{ "image_path": "string" }
+→ { "image_uuid": "string", "ai_confidence": "float 0.0-1.0" }
 ```
 
-### Responses
+### VLM scorer — `http://localhost:12004`
 
-```json
-{"ok": true}
-{"ok": true, "conversation_id": "uuid"}
-{"ok": true, "workflow_id": "uuid", "conversation_id": "uuid", "workflow_path": "sdxl.json"}
-{"ok": true, "run_id": "uuid"}
-{"ok": true, "retries_used":1, "inpaints_used":0, "max_retries":3, "max_inpaints":2}
-{"ok": true, "chat": [...], "feedback": [...]}
-{"ok": false, "error": "session not found"}
 ```
+POST /score
+{ "image_path": "string", "prompt": "string" }
+→ { "image_uuid": "string", "photorealism": float, "anatomical_coherence": float,
+    "interaction_plausibility": float, "lighting_consistency": float,
+    "prompt_adherence": float, "issues": [...], "recommendations": [...] }
+
+POST /analyze
+{ "image_url": "string", "question": "string" }
+→ { "answer": "string" }
+```
+
+The `/analyze` endpoint is called by `TacticalLlmCaller` during tool-use turns of the
+agentic decision loop.
 
 ---
 
@@ -238,15 +169,45 @@ The Spring Boot pipeline exposes the following endpoints on port 12000:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/` | Serves the browser UI (`static/index.html`) |
-| `POST` | `/session/start` | Create a new conversation via coordinator `ConversationCreate` |
-| `POST` | `/workflow/new` | Create + resume a workflow (`WorkflowCreate` then `WorkflowResume`) |
-| `POST` | `/workflow/{id}/resume` | Resume an existing workflow (`WorkflowResume`) |
-| `POST` | `/workflow/{id}/start-run` | Publish a `loop.request` message to start image generation |
-| `POST` | `/feedback` | Submit a thumbs rating (`FeedbackAdd`) |
-| `GET` | `/history` | Fetch conversation context (`ContextGet`) |
+| `POST` | `/session/start` | Create a new conversation (writes to PostgreSQL) |
+| `POST` | `/workflow/new` | Create a new workflow and start a run |
+| `POST` | `/workflow/{id}/resume` | Resume an existing workflow with new budget |
+| `POST` | `/workflow/{id}/start-run` | Publish a `loop.generate` message to start generation |
+| `POST` | `/feedback` | Submit a thumbs rating |
+| `GET` | `/history` | Fetch conversation context (chat + feedback) |
 | `GET` | `/image/{uuid}` | Serve a generated image (local file) |
-| `WS` | `/ws/gallery` | WebSocket  -  pushes `image_ready` and `decision` events to browsers |
+| `WS` | `/ws/gallery` | WebSocket — pushes `image_ready` and `decision` events to browsers |
 | `GET` | `/strategic/` | Redirects to strategic UI (`/strategic/index.html`) |
 | `POST` | `/strategic/run` | Trigger a strategic session manually |
 | `GET` | `/strategic/status` | Current strategic session state |
 | `POST` | `/north-star` | Write a new north star directly (bypasses strategic LLM) |
+
+### WebSocket gallery events
+
+The `/ws/gallery` WebSocket pushes two event types to connected browsers:
+
+**`image_ready`** — emitted by `ComfyUiWorker` after generation:
+```json
+{ "type": "image_ready", "image_uuid": "string", "image_path": "string",
+  "session_uuid": "string", "workflow_id": "string" }
+```
+
+**`decision`** — emitted by `TacticalLlmCaller` after each decision:
+```json
+{
+  "type": "decision",
+  "image_uuid": "string",
+  "session_uuid": "string",
+  "workflow_id": "string",
+  "decision": {
+    "decision":    "accept | retry | inpaint | give_up | escalate",
+    "reasoning":   "string",
+    "confidence":  "float 0.0-1.0",
+    "retry_prompt":      "string (if retry)",
+    "retry_params":      "object (if retry)",
+    "inpaint_regions":   "array (if inpaint)",
+    "inpaint_prompt":    "string (if inpaint)"
+  },
+  "scores": "object (full scorer results from loop.verdicts)"
+}
+```

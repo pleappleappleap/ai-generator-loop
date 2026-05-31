@@ -24,18 +24,17 @@ shared middleware:
 Loop and Strategic share the Spring Boot pipeline but cannot run simultaneously  - 
 all available GPU memory is concentrated on the active super-component.
 
-All inter-component communication flows through ActiveMQ Artemis (AMQP 1.0
-for Rust components, STOMP for Python). Operational state lives in a WAL-mode
-SQLite database (Rust coordinator) and PostgreSQL (Java pipeline). Long-term
-image history lives in LanceDB.
+All inter-component communication flows through ActiveMQ Artemis (AMQP 1.0).
+Operational state lives in PostgreSQL (Flyway-managed; pgvector extension for
+CLIP embeddings and north-star similarity queries).
 
 ---
 
 ## Architecture Documentation
 
 The authoritative design document is `ARCHITECTURE.pdf`. It covers the
-component diagram, full address and queue topology, SQLite schema, XA 2-phase
-commit protocol, conversation and workflow hierarchy, coordinator API,
+component diagram, full address and queue topology, PostgreSQL schema,
+Narayana JTA transaction boundaries, conversation and workflow hierarchy,
 memory budget, threshold calibration procedure, and scale-out path.
 
 Generate it from source:
@@ -55,20 +54,19 @@ the code.
 Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 
 1. **Hardware**: 64 GB+ GPU memory (Apple unified memory, CUDA VRAM, or system RAM for CPU), ~100 GB free disk.
-2. **System software**: Python 3.11, Rust (rustup), Java 21+, yq, K3s (or any K8s),
+2. **System software**: Python 3.11, Java 21+, yq, K3s (or any K8s),
    `kubectl`. Run `make prereqs-system` to install automatically.
-3. **Three Python venvs**: root (LanceDB, CLIP, stomp.py), scorers
-   (transformers, mlx-lm, fastapi, uvicorn, httpx, stomp.py), and
+3. **Three Python venvs**: root (CLIP, pgvector client), scorers
+   (transformers, mlx-lm, fastapi, uvicorn, httpx), and
    ComfyUI. Run `make prereqs-python` to create all three.
 4. **Models**: SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
-   (Qwen2.5-VL-7B Q5\_K\_M), tactical LLM (Qwen3-Next-80B-A3B MLX 4-bit), and
+   (Qwen3-VL-8B-Instruct Q8 GGUF), tactical LLM (Qwen3-Next-80B-A3B MLX 4-bit), and
    strategic LLM (Qwen3-Next-80B-A3B-Thinking bf16) via `make models`.
 5. **Middleware**: `middleware.sh start`  -  starts Artemis and PostgreSQL in K3s
    and establishes port-forwards (12007/12008/12009).
 6. **Configuration**: `cp config.yaml.default config.yaml`, then
    `python menuconfig.py`.
-7. **Build**: `cargo build --release` in `loop/scorers/`; `mvn package` in
-   `pipeline/`.
+7. **Build**: `mvn package` in `pipeline/`.
 
 ---
 
@@ -99,14 +97,10 @@ The gallery updates in real time as images are generated and scored.
 
 | Component | Language | Role |
 |-----------|----------|------|
-| `pipeline` | Java / Spring Boot | REST + WebSocket UI backend; drives ComfyUI; calls tactical LLM; strategic session handler |
-| `clip_scorer.py` | Python / FastAPI | ViT-L-14 CLIP semantic similarity |
-| `artifact_scorer.py` | Python / FastAPI | AI-image-detector artifact confidence |
-| `vlm_scorer.py` | Python / FastAPI | Qwen2.5-VL-7B holistic image evaluation + analyze endpoint |
-| `router` | Rust / AMQP 1.0 | Fans out `loop.events` -> `scorer.requests` |
-| `aggregator` | Rust / AMQP 1.0 | Merges scorer results; applies threshold logic; emits verdicts |
-| `coordinator` | Rust / Unix socket | XA 2PC log; conversation/workflow/budget API |
-| `lancedb_manager` | Rust / AMQP 1.0 | Writes terminal Loop records to LanceDB |
+| `pipeline` | Java / Spring Boot | REST + WebSocket UI backend; drives ComfyUI; calls scorer sidecars; tactical LLM agentic loop; strategic session handler |
+| `clip_scorer.py` | Python / FastAPI | ViT-L-14 CLIP semantic similarity; `/score` + `/embed_text` |
+| `artifact_scorer.py` | Python / FastAPI | AI-image-detector artifact confidence; `/score` |
+| `vlm_scorer.py` | Python / FastAPI | Qwen3-VL-8B holistic image evaluation; `/score` + `/analyze` |
 | `tactical LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B (MLX 4-bit) on port 12001 |
 | `strategic LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B-Thinking (bf16) on port 12005 |
 
@@ -126,22 +120,18 @@ The gallery updates in real time as images are generated and scored.
 +-- config.py               Python config loader
 +-- menuconfig.py           Interactive TUI configuration editor
 +-- model_picker.py         HuggingFace model browser
-+-- pipeline/               Java Spring Boot pipeline (REST + WebSocket + strategic LLM)
-+-- middleware/              K8s manifests for Artemis and PostgreSQL
++-- pipeline/               Java Spring Boot pipeline (REST + WebSocket + all JMS workers)
++-- middleware/             K8s manifests for Artemis and PostgreSQL
 +-- loop/
 |   +-- comfyui.sh          ComfyUI component manager
 |   +-- tactical_llm.sh     Tactical LLM server component manager (mlx_lm.server)
 |   +-- tactical-llm/       Tactical LLM prompt library + system prompt
 |   |   +-- prompts.py
 |   |   \-- system_prompt.md
-|   +-- scorers/            Python scorers + Rust pipeline workers
+|   +-- scorers/            Python HTTP scorer sidecars
 |   |   +-- clip_scorer.py
 |   |   +-- artifact_scorer.py
-|   |   +-- vlm_scorer.py
-|   |   +-- router/
-|   |   +-- aggregator/
-|   |   +-- coordinator/
-|   |   \-- lancedb_manager/
+|   |   \-- vlm_scorer.py
 |   \-- workflows/          ComfyUI workflow JSON files
 \-- strategic-llm/          Strategic LLM component scripts + system prompt
     +-- strategic_llm.sh    Strategic LLM server component manager (mlx_lm.server)
@@ -155,13 +145,12 @@ The gallery updates in real time as images are generated and scored.
 - **Browser UI**: `http://localhost:12000`  -  real-time image gallery and session control
 - **Strategic UI**: `http://localhost:12000/strategic/`  -  strategic session control
 - **Artemis console**: `http://localhost:12009` (admin / admin by default)
-- **Dead-letter queue**: `python loop/monitor.py` streams all failed messages
-- **Message contracts**: `MESSAGES.md` documents every address, routing type,
-  protocol, and payload schema
+- **Dead-letter queue**: Artemis console at `http://localhost:12009` → Queues → pipeline.dead
+- **Message contracts**: `MESSAGES.md` documents every address, protocol, publisher, consumer, and payload schema
 
 ## Tests
 
 ```bash
-make test     # all Rust + Python tests
+make test     # all Python tests
 make all      # tests + lint + typecheck + build
 ```

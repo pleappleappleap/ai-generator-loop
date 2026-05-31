@@ -79,24 +79,24 @@ A browser-based pipeline UI at \texttt{http://localhost:12000} provides the
 primary operator interface: create and resume creative workflows, watch images
 arrive in a live gallery as they are generated and scored, send thumbs
 up/down feedback, and chat with the tactical LLM to refine creative direction.
-The UI backend is a FastAPI server that subscribes to Artemis topics and
-streams events to the browser over WebSocket.
+The UI backend is a Spring Boot application serving a single-page frontend
+and streaming gallery events to the browser over WebSocket.
 
 The pipeline is designed around three principles:
 
 \begin{enumerate}
-  \item \textbf{Observable}: every message, score, and verdict flows through
-        inspectable queues and addresses. Artemis's management console
-        provides real-time visibility into all message flows. Dead-letter
-        messages accumulate in \texttt{pipeline.dead} for operator review.
-        The browser UI streams image and decision events live.
-  \item \textbf{Scalable}: each component is independently deployable. The
-        message broker provides natural decoupling. Adding scorer capacity
-        requires only adding subscriber processes.
-  \item \textbf{Persistent}: every generated image is recorded in LanceDB as
-        a vector embedding alongside full scorer results and generation
-        parameters. This long-term memory enables the strategic LLM to
-        identify patterns across sessions.
+  \item \textbf{Observable}: every message and verdict flows through
+        inspectable queues. Artemis's management console provides real-time
+        visibility into all message flows. Dead-letter messages accumulate in
+        \texttt{pipeline.dead} for operator review. The browser UI streams
+        image and decision events live.
+  \item \textbf{Scalable}: the Spring Boot pipeline, scorer sidecars, and LLM
+        servers are independently deployable. The message broker decouples
+        the generation and scoring tiers; scorer capacity scales horizontally.
+  \item \textbf{Persistent}: every generated image, its scorer results, and
+        all decision context are recorded in PostgreSQL. The strategic LLM
+        reads this history across sessions to identify patterns and refine
+        creative direction.
 \end{enumerate}
 
 % ============================================================
@@ -194,13 +194,13 @@ platform.
 \toprule
 \textbf{Tool} & \textbf{macOS} & \textbf{Linux} & \textbf{Notes} \\
 \midrule
-wget        & ---  & \checkmark & macOS uses curl (system native) \\
-Python 3.11 & \checkmark & \checkmark & via Homebrew / distro packages \\
-yq          & \checkmark & \checkmark & YAML query tool for shell scripts \\
-Docker      & \checkmark & \checkmark & Desktop (macOS/Windows) or Engine (Linux) \\
-Rust/cargo  & \checkmark & \checkmark & via rustup \\
-sqlx-cli    & \checkmark & \checkmark & SQLite compile-time query verification \\
-protoc      & \checkmark & \checkmark & required by LanceDB Rust crate \\
+wget              & ---        & \checkmark & macOS uses curl (system native) \\
+Python 3.11       & \checkmark & \checkmark & via Homebrew / distro packages \\
+yq                & \checkmark & \checkmark & YAML query tool for shell scripts \\
+K3s               & \checkmark & \checkmark & Hosts Artemis and PostgreSQL \\
+kubectl           & \checkmark & \checkmark & for port-forwards managed by middleware.sh \\
+Java 21+          & \checkmark & \checkmark & for the Spring Boot pipeline \\
+HuggingFace CLI   & \checkmark & \checkmark & \texttt{huggingface-cli} for model downloads \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -208,68 +208,64 @@ protoc      & \checkmark & \checkmark & required by LanceDB Rust crate \\
 \LaTeX{} is \emph{not} installed automatically --- it is only needed to
 regenerate this document (\texttt{make doc}).
 
-\subsection{ActiveMQ Artemis (Docker)}
+\subsection{ActiveMQ Artemis and PostgreSQL (K3s)}
 
-The pipeline runs Artemis via the official Docker image
-(\texttt{apache/activemq-artemis}). AMQP~1.0 (port 5672), STOMP (port
-61613), and the management console (port 8161) are pre-enabled in the image
---- no \texttt{broker.xml} editing is required. \texttt{middleware.sh}
-port-forwards these to localhost ports 12008, (61613 via STOMP), and 12009
-respectively.
-
-\texttt{make prereqs-system} installs Docker; \texttt{make all} pulls the
-image. To pull the image on its own:
+Artemis and PostgreSQL run as K3s workloads. \texttt{middleware.sh} manages
+them and establishes \texttt{kubectl port-forward} tunnels so local processes
+can reach them on the 12000 port range.
 
 \begin{lstlisting}[style=shell]
-make artemis-broker
+# Apply the K3s manifests (once)
+kubectl apply -f middleware/k8s/
+
+# Start middleware and establish port-forwards
+$SOXHLET_ROOT/middleware.sh start
 \end{lstlisting}
 
-Start the broker:
+Port-forwards established by \texttt{middleware.sh}:
 
-\begin{lstlisting}[style=shell]
-loop/start_broker.sh
-\end{lstlisting}
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+\textbf{Service} & \textbf{Local port} & \textbf{K3s target} \\
+\midrule
+PostgreSQL        & 12007 & \texttt{svc/postgres:5432} \\
+Artemis AMQP~1.0  & 12008 & \texttt{svc/artemis:61616} \\
+Artemis console   & 12009 & \texttt{svc/artemis:8161} \\
+\bottomrule
+\end{tabular}
+\end{center}
 
-Broker data is persisted in \texttt{loop/artemis-data/} (bind-mounted into
-the container). The management console is available at
-\texttt{http://localhost:12009} (credentials: \texttt{admin} / \texttt{admin}).
+The Artemis management console is available at \texttt{http://localhost:12009}
+(credentials: \texttt{admin} / \texttt{admin}).
 
 \subsection{Python Environments}
 
 There are three separate virtual environments:
 
 \begin{itemize}
-  \item \textbf{Root venv} (\texttt{venv/}): used by
-        \texttt{comfyui\_worker.py}, \texttt{monitor.py}, and utilities.
-  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): used by the
-        three scorer processes, \texttt{tactical\_llm.py}, and the
-        \textbf{UI server} (\texttt{loop/ui/server.py}). These processes
-        share large ML libraries (transformers, llama-cpp-python) and the
-        UI web framework (fastapi, uvicorn, httpx).
+  \item \textbf{Root venv} (\texttt{venv/}): used by utilities such as
+        \texttt{check\_env.py} and \texttt{model\_picker.py}.
+  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): used by all
+        three scorer sidecars and the \texttt{mlx\_lm} tactical and strategic
+        LLM servers. Includes \texttt{fastapi}, \texttt{uvicorn},
+        \texttt{httpx}, \texttt{transformers}, and \texttt{mlx-lm}.
   \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}): used
         exclusively by ComfyUI and managed by \texttt{make prereqs}.
 \end{itemize}
 
-\subsubsection{Root environment}
-
 \begin{lstlisting}[style=shell]
+# Root environment
 cd $SOXHLET_ROOT
 python3.11 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-deactivate
-\end{lstlisting}
+pip install --upgrade pip && pip install -r requirements.txt && deactivate
 
-\subsubsection{Scorers environment}
-
-\begin{lstlisting}[style=shell]
+# Scorers environment
 cd $SOXHLET_ROOT/loop/scorers
 python3.11 -m venv venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt   # includes mlx-lm, openai, stomp.py
-deactivate
+pip install --upgrade pip && pip install -r requirements.txt && deactivate
 \end{lstlisting}
 
 \texttt{make prereqs-python} runs all of the above automatically.
@@ -278,8 +274,7 @@ deactivate
 
 \subsubsection{SDXL checkpoint (ComfyUI)}
 
-Download a Stable Diffusion XL checkpoint (e.g., Absolute Reality XL) and
-place it in:
+Download a Stable Diffusion XL checkpoint and place it in:
 
 \begin{lstlisting}[style=shell]
 loop/ComfyUI/models/checkpoints/
@@ -303,16 +298,15 @@ snapshot_download(
 EOF
 \end{lstlisting}
 
-\subsubsection{VLM scorer (Qwen2.5-VL-7B)}
+\subsubsection{VLM scorer (Qwen3-VL-8B)}
 
 \begin{lstlisting}[style=shell]
-mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
-curl -L -o $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
-  "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/\
-Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
+# ~9 GB download (Q8 GGUF + multimodal projector)
+huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
+  Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
+  Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm
 \end{lstlisting}
-
-Approximately 5\,GB download.
 
 \subsubsection{Tactical LLM (Qwen3-Next-80B-A3B, MLX 4-bit)}
 
@@ -349,25 +343,12 @@ Approximately 160\,GB download.
 
 \texttt{make prereqs} clones ComfyUI into \texttt{loop/ComfyUI/} and
 installs its dependencies into a dedicated venv at
-\texttt{loop/ComfyUI/venv/}. To run this step manually:
-
-\begin{lstlisting}[style=shell]
-git clone --depth=1 https://github.com/comfyanonymous/ComfyUI /tmp/_comfyui_clone
-cp -rn /tmp/_comfyui_clone/. $SOXHLET_ROOT/loop/ComfyUI/
-rm -rf /tmp/_comfyui_clone
-python3.11 -m venv $SOXHLET_ROOT/loop/ComfyUI/venv
-$SOXHLET_ROOT/loop/ComfyUI/venv/bin/pip install -r $SOXHLET_ROOT/loop/ComfyUI/requirements.txt
-\end{lstlisting}
-
-\subsubsection{Custom nodes}
-
-The inpainting workflow requires ComfyUI-Manager and additional custom nodes.
-Start ComfyUI, open \texttt{http://127.0.0.1:8188}, install
-\textbf{ComfyUI-Manager} from the Manager menu, then use Manager to install:
+\texttt{loop/ComfyUI/venv/}. Custom nodes are installed by
+\texttt{make comfyui-nodes}:
 
 \begin{itemize}
-  \item \texttt{ComfyUI-Inpaint-Nodes}
-  \item \texttt{comfyui\_segment\_anything}
+  \item \texttt{comfyui-inpaint-nodes} (github.com/Acly/comfyui-inpaint-nodes)
+  \item \texttt{comfyui\_segment\_anything} (github.com/storyicon/comfyui\_segment\_anything)
 \end{itemize}
 
 \subsubsection{Optional vision models (inpainting)}
@@ -401,33 +382,32 @@ At minimum, verify these keys in \texttt{config.yaml}:
 compute:
   comfyui:
     backend: auto      # auto | mps | cuda | rocm | cpu
-    listen: 0.0.0.0    # bind address; 127.0.0.1 to restrict to localhost
+    port: 12006
     device_id:         # optional: integer index for eGPU or multi-GPU systems
 
 broker:
-  amqp_url:     amqp://admin:admin@localhost:5672    # Rust components
-  stomp_url:    stomp://admin:admin@localhost:61613  # Python components
-  artemis_data: auto   # resolves to {repo_root}/loop/artemis-broker
+  url: tcp://localhost:12008   # Artemis AMQP via port-forward from middleware.sh
 
 database:
-  path: auto           # resolves to {repo_root}/pipeline.db
+  postgres_url: jdbc:postgresql://localhost:12007/pipeline
 
-models:
-  vlm:
-    filename: Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf
+sidecars:
+  clip_scorer:
+    port: 12002
+  artifact_scorer:
+    port: 12003
+  vlm_scorer:
+    port: 12004
 
 tactical:
   model:
-    filename:   Qwen3-72B-abliterated-Q4_K_M.gguf
-    server_url: http://localhost:8080/v1   # llama.cpp OpenAI-compatible server
-    model_name: default                   # model name sent in API requests
+    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
+    server_url: http://localhost:12001/v1
 
-ui:
-  port: 7860       # browser UI port
-  host: 0.0.0.0    # bind address; 127.0.0.1 to restrict to localhost
-  # chat_backend:  # optional override for the chat LLM
-  #   server_url: http://localhost:8081/v1
-  #   model_name: strategic-model
+strategic:
+  model:
+    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    server_url: http://localhost:12005/v1
 \end{lstlisting}
 
 The \texttt{backend: auto} setting detects the platform at startup:
@@ -442,27 +422,12 @@ starting the pipeline:
 python check_env.py
 \end{lstlisting}
 
-\subsection{Building the Rust Binaries}
+\subsection{Building the Pipeline}
 
 \begin{lstlisting}[style=shell]
-cd $SOXHLET_ROOT/loop/scorers
-cargo build --release
+cd $SOXHLET_ROOT/pipeline
+mvn package -DskipTests
 \end{lstlisting}
-
-This produces four binaries in \texttt{target/release/}:
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Binary} & \textbf{Role} \\
-\midrule
-\texttt{router}          & Fans out \texttt{loop.events} $\to$ \texttt{scorer.requests} \\
-\texttt{aggregator}      & Merges scorer results; applies threshold logic; emits verdicts \\
-\texttt{coordinator}     & XA 2PC log; workflow/conversation hierarchy; Python API (Unix socket) \\
-\texttt{lancedb\_manager} & Writes terminal Loop records to LanceDB \\
-\bottomrule
-\end{tabular}
-\end{center}
 
 % ============================================================
 \section{Technology Stack}
@@ -473,16 +438,14 @@ This produces four binaries in \texttt{target/release/}:
 \toprule
 \textbf{Layer} & \textbf{Technology} & \textbf{Rationale} \\
 \midrule
-Message broker & ActiveMQ Artemis (AMQP~1.0 / STOMP) & Native AMQP~1.0; STOMP for Python clients \\
-Operational state & SQLite WAL (\texttt{pipeline.db}) & Crash-safe, zero-dependency, single machine \\
-Vector store & LanceDB & Embedded, Arrow-native, supports ANN search \\
-Image generation & ComfyUI + SDXL & Workflow-based; supports ControlNet / LoRA \\
-Holistic scoring & Qwen2.5-VL-7B (Q5\_K\_M) & Fast local VLM; no API dependency \\
-Tactical LLM & Qwen3-Next-80B-A3B MLX 4-bit via mlx\_lm & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
-Strategic LLM & Qwen3-Next-80B-A3B-Thinking bf16 via mlx\_lm & Same architecture; thinking variant \\
-Browser UI & Spring Boot + WebSocket & Pipeline management; live gallery; strategic review \\
-Rust binaries & router, aggregator, coordinator, lancedb\_manager & Zero-GIL concurrency; compile-time safety \\
-Python processes & scorers, comfyui\_worker, tactical\_llm & ML model hosting; stomp.py for STOMP \\
+Message broker    & ActiveMQ Artemis (AMQP~1.0)             & Native AMQP~1.0; K3s deployment \\
+Operational state & PostgreSQL + pgvector (K3s)             & Relational + vector queries; Flyway migrations \\
+Image generation  & ComfyUI + SDXL                          & Workflow-based; supports ControlNet / LoRA \\
+Holistic scoring  & Qwen3-VL-8B Q8 GGUF via llama.cpp      & Fast local VLM; no API dependency \\
+Tactical LLM      & Qwen3-Next-80B-A3B MLX 4-bit via mlx\_lm & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
+Strategic LLM     & Qwen3-Next-80B-A3B-Thinking bf16 via mlx\_lm & Same architecture; thinking variant \\
+Pipeline / UI     & Spring Boot + JMS + WebSocket           & All pipeline logic; REST + WebSocket UI \\
+Scorer sidecars   & Python (FastAPI + uvicorn)              & HTTP services; no broker dependency \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -491,144 +454,125 @@ Python processes & scorers, comfyui\_worker, tactical\_llm & ML model hosting; s
 \section{Component Architecture}
 % ============================================================
 
-\subsection{Language Selection}
+\subsection{Design}
 
-Four components are implemented in Rust:
+The Spring Boot pipeline is the sole message-driven component. It contains
+four internal workers, each responsible for a distinct phase of the loop:
 
 \begin{description}
-  \item[Router] Zero business logic, no ML dependencies. A compiled binary
-        with negligible memory footprint ($\sim$5\,MB) is appropriate for
-        pure message routing.
-  \item[Aggregator] Manages concurrent state across multiple incoming scorer
-        result streams. Rust's ownership model prevents data races at compile
-        time. State is accumulated in SQLite via \texttt{BEGIN IMMEDIATE}.
-  \item[Coordinator] XA 2-phase-commit manager and Python API. Owns all
-        SQLite tables: \texttt{xa\_log}, \texttt{scorer\_session},
-        \texttt{tactical\_budget}, \texttt{conversation}, \texttt{workflow},
-        \texttt{feedback}, and \texttt{chat\_message}. Exposes a Unix domain
-        socket for synchronous JSON RPC from Python processes.
-  \item[LanceDB Manager] Terminal event writer. Reads accumulated scorer
-        results from SQLite and writes a single durable Loop record to LanceDB
-        on each \texttt{loop.accepted} or \texttt{cancel.*} event.
+  \item[\texttt{ComfyUiWorker}] Listens on \texttt{loop.generate},
+        \texttt{loop.retry}, and \texttt{loop.inpaint}. Submits the workflow
+        to ComfyUI via HTTP/WebSocket. On completion publishes to
+        \texttt{loop.generated} and fires an \texttt{image\_ready} WebSocket
+        event via \texttt{GalleryBroadcastService}.
+  \item[\texttt{Scorer}] Listens on \texttt{loop.generated}. Calls the three
+        scorer sidecars in parallel via HTTP. Applies cascade threshold logic
+        in Java. Records results in PostgreSQL. Publishes passing candidates to
+        \texttt{loop.verdicts}; rejected images are written to PostgreSQL but
+        not published.
+  \item[\texttt{TacticalLlmCaller}] Listens on \texttt{loop.verdicts}. Runs
+        a full agentic loop: builds context from PostgreSQL, calls the tactical
+        LLM server with tool definitions (\texttt{analyze\_image} via VLM
+        sidecar), and handles the decision. Retry and inpaint decisions
+        publish to \texttt{loop.retry} / \texttt{loop.inpaint}. Accept writes
+        to PostgreSQL. Escalate writes a \texttt{pipeline\_events} row and
+        shuts down the Loop cleanly. Fires \texttt{decision} events via
+        \texttt{GalleryBroadcastService}.
+  \item[\texttt{GalleryBroadcastService}] In-process WebSocket broadcast.
+        Called directly by \texttt{ComfyUiWorker} and
+        \texttt{TacticalLlmCaller}. No broker involvement.
 \end{description}
 
-All components with ML model dependencies are Python (STOMP via stomp.py).
-The \textbf{mlx\_lm server} runs as a standalone process (started by
-\texttt{loop.sh}) and exposes an OpenAI-compatible HTTP API on port 12001.
-\texttt{tactical\_llm.py} consumes it via the \texttt{openai} Python client,
-so the model is loaded exactly once. A separate strategic LLM server runs on
-port 12005 during strategic sessions.
+The three scorer sidecars (\texttt{clip\_scorer.py},
+\texttt{artifact\_scorer.py}, \texttt{vlm\_scorer.py}) are stateless HTTP
+services. They hold their model weights in memory but have no connection to
+the message broker.
 
 \subsection{Component Diagram}
 
 \begin{center}
-\begin{tikzpicture}[node distance=0.9cm and 1.4cm]
-  % Generation layer
-  \node[component] (worker)    {comfyui\_worker};
-  \node[component,below=0.5cm of worker] (comfyui) {ComfyUI};
-  % Routing
-  \node[component,right=1.6cm of worker]  (router)   {router (Rust)};
-  % Scorers
-  \node[component,right=1.6cm of router,yshift=1.4cm]  (clip)     {clip\_scorer};
-  \node[component,right=1.6cm of router]               (artifact) {artifact\_scorer};
-  \node[component,right=1.6cm of router,yshift=-1.4cm] (vlm)      {vlm\_scorer};
-  % Aggregator and downstream
-  \node[component,right=1.6cm of artifact] (agg)      {aggregator};
-  \node[component,right=1.6cm of agg,yshift=1.0cm]  (tactical) {tactical LLM};
-  \node[component,right=1.6cm of agg,yshift=-1.0cm] (ldb)      {lancedb\_mgr};
-  % Stores
-  \node[store,below=1.2cm of agg]  (sqlite)  {pipeline.db};
-  \node[store,right=0.4cm of sqlite] (lancedb) {LanceDB};
-  % Coordinator
-  \node[component,below=0.6cm of sqlite] (coord) {coordinator};
-  % LLM server and UI
-  \node[component,above=0.8cm of tactical] (llmserver) {llama.cpp server};
-  \node[component,above=0.8cm of worker]   (ui)        {UI server};
+\begin{tikzpicture}[node distance=0.9cm and 1.6cm]
+  % Browser
+  \node[component] (browser) {Browser};
 
-  % Generation path
-  \draw[arrow] (worker)   -- (router)   node[lbl,above] {loop.events};
-  \draw[arrow] (router)   -- (clip)     node[lbl,above,xshift=-3mm] {scorer.requests};
-  \draw[arrow] (router)   -- (artifact);
-  \draw[arrow] (router)   -- (vlm);
-  \draw[arrow] (clip)     -- (agg);
-  \draw[arrow] (artifact) -- (agg);
-  \draw[arrow] (vlm)      -- (agg);
-  \draw[arrow] (agg)      -- (tactical) node[lbl,above] {scorer.result};
-  \draw[arrow] (agg)      -- (ldb)      node[lbl,right] {cancel.*};
-  \draw[arrow] (tactical) -- (ldb)      node[lbl,right,xshift=2mm] {loop.accepted};
-  \draw[arrow] (ldb)      -- (lancedb);
-  \draw[arrow] (agg)      -- (sqlite);
-  \draw[arrow] (worker)   -- (comfyui)  node[lbl,right] {HTTP/WS};
-  % Socket connections
-  \draw[arrow,dashed] (worker)   -- (coord)     node[lbl,right,yshift=-4mm] {socket};
-  \draw[arrow,dashed] (tactical) -- (coord)     node[lbl,right] {socket};
-  \draw[arrow,dashed] (ui)       -- (coord)     node[lbl,left]  {socket};
-  % LLM server
-  \draw[arrow,dashed] (tactical) -- (llmserver) node[lbl,right] {HTTP};
-  \draw[arrow,dashed] (ui)       -- (llmserver) node[lbl,above] {HTTP};
-  % UI STOMP subscriptions
-  \draw[arrow,dotted] (tactical) -- (ui)        node[lbl,above] {tactical.decisions};
-  % UI submits generation
-  \draw[arrow] (ui)       -- (worker)   node[lbl,left] {loop.request};
+  % Spring Boot pipeline box
+  \node[component,right=2.4cm of browser,yshift=2.0cm] (comfyworker) {ComfyUiWorker};
+  \node[component,below=0.5cm of comfyworker] (scorer) {Scorer};
+  \node[component,below=0.5cm of scorer] (tactical) {TacticalLlmCaller};
+  \node[component,below=0.5cm of tactical] (gallery) {GalleryBroadcast};
+
+  % External services
+  \node[component,right=2.4cm of comfyworker] (comfyui) {ComfyUI};
+  \node[component,right=2.4cm of scorer,yshift=1.0cm]  (clip)     {clip\_scorer};
+  \node[component,right=2.4cm of scorer]               (artifact) {artifact\_scorer};
+  \node[component,right=2.4cm of scorer,yshift=-1.0cm] (vlm)      {vlm\_scorer};
+  \node[component,right=2.4cm of tactical] (llmserver) {mlx\_lm server};
+
+  % Stores
+  \node[store,below=1.4cm of gallery]  (postgres)  {PostgreSQL};
+  \node[component,left=2.4cm of comfyworker,yshift=-0.8cm] (artemis) {Artemis};
+
+  % Fit box around pipeline internals
+  \begin{scope}[on background layer]
+    \node[draw=black,dashed,rounded corners=5pt,fill=gray!5,
+      fit=(comfyworker)(scorer)(tactical)(gallery),
+      label=above:\small\textit{Spring Boot pipeline}] {};
+  \end{scope}
+
+  % Broker flows (AMQP)
+  \draw[arrow] (artemis)    -- node[lbl,above] {loop.generate} (comfyworker);
+  \draw[arrow] (comfyworker) .. controls +(left:1.5cm) and +(left:1.5cm) .. node[lbl,left] {loop.generated} (scorer);
+  \draw[arrow] (scorer)     .. controls +(left:1.5cm) and +(left:1.5cm) .. node[lbl,left] {loop.verdicts} (tactical);
+  \draw[arrow] (tactical)   .. controls +(left:2cm) and +(left:2cm) .. node[lbl,left,xshift=-4mm] {loop.retry / loop.inpaint} (comfyworker);
+
+  % HTTP flows
+  \draw[arrow,dashed] (comfyworker) -- node[lbl,above] {HTTP/WS} (comfyui);
+  \draw[arrow,dashed] (scorer) -- node[lbl,above,xshift=2mm] {HTTP} (clip);
+  \draw[arrow,dashed] (scorer) -- node[lbl,above] {HTTP} (artifact);
+  \draw[arrow,dashed] (scorer) -- node[lbl,above,xshift=2mm] {HTTP} (vlm);
+  \draw[arrow,dashed] (tactical) -- node[lbl,above] {HTTP} (llmserver);
+  \draw[arrow,dashed] (tactical) .. controls +(right:1.4cm) and +(left:1.4cm) .. node[lbl,above,xshift=3mm] {/analyze} (vlm);
+
+  % PostgreSQL
+  \draw[arrow,dashed] (scorer) -- (postgres);
+  \draw[arrow,dashed] (tactical) -- (postgres);
+
+  % WebSocket to browser
+  \draw[arrow,dashed] (gallery) -- node[lbl,below] {WebSocket} (browser);
 \end{tikzpicture}
 \end{center}
 
-Solid arrows are AMQP~1.0 or STOMP message flows. Dashed arrows are HTTP or
-Unix socket calls. The dotted arrow represents the UI's STOMP topic
-subscription (\texttt{/topic/tactical.decisions}) that delivers LLM decisions
-to the gallery.
+Solid arrows are AMQP~1.0 message flows (via Artemis). Dashed arrows are
+HTTP calls or direct in-process calls. All scoring results and decisions are
+written to PostgreSQL.
 
 % ============================================================
 \section{Address and Queue Topology}
 % ============================================================
 
-Artemis supports two routing types: \textsc{anycast} (queue semantics, one
-consumer receives) and \textsc{multicast} (topic semantics, all subscribers
-receive). The table below lists all pipeline addresses.
+All pipeline addresses use anycast routing (queue semantics: one consumer
+receives). There are no multicast (topic) addresses --- WebSocket broadcast
+to browsers is handled in-process by \texttt{GalleryBroadcastService}.
 
 \begin{center}
-\begin{tabular}{lllll}
+\begin{tabular}{llll}
 \toprule
-\textbf{Address} & \textbf{Type} & \textbf{Protocol} & \textbf{Publisher} & \textbf{Consumer(s)} \\
+\textbf{Address} & \textbf{Protocol} & \textbf{Publisher} & \textbf{Consumer} \\
 \midrule
-\texttt{loop.request}          & anycast   & STOMP      & UI server             & comfyui\_worker \\
-\texttt{loop.events}           & multicast & STOMP/AMQP & comfyui\_worker       & router, UI server \\
-\texttt{scorer.requests}       & multicast & AMQP~1.0   & router                & all scorers \\
-\texttt{scorer.events}         & multicast & AMQP~1.0   & aggregator            & all scorers, lancedb\_mgr \\
-\texttt{aggregator.clip.queue} & anycast   & STOMP/AMQP & clip\_scorer          & aggregator \\
-\texttt{aggregator.artifact.queue} & anycast & STOMP/AMQP & artifact\_scorer   & aggregator \\
-\texttt{aggregator.vlm.queue}  & anycast   & STOMP/AMQP & vlm\_scorer           & aggregator \\
-\texttt{scorer.result}         & anycast   & AMQP~1.0   & aggregator            & tactical LLM \\
-\texttt{loop.accepted}         & multicast & STOMP/AMQP & tactical LLM          & lancedb\_mgr \\
-\texttt{tactical.decisions}    & multicast & STOMP      & tactical LLM          & UI server \\
-\texttt{pipeline.dead}         & anycast   & AMQP~1.0   & (DLX from all queues) & monitor \\
+\texttt{loop.generate}  & AMQP~1.0 & WorkflowController, ChatWsHandler & ComfyUiWorker \\
+\texttt{loop.generated} & AMQP~1.0 & ComfyUiWorker                     & Scorer \\
+\texttt{loop.verdicts}  & AMQP~1.0 & Scorer (candidates only)          & TacticalLlmCaller \\
+\texttt{loop.retry}     & AMQP~1.0 & TacticalLlmCaller                 & ComfyUiWorker \\
+\texttt{loop.inpaint}   & AMQP~1.0 & TacticalLlmCaller                 & ComfyUiWorker \\
+\texttt{pipeline.dead}  & AMQP~1.0 & (DLX from all queues)             & (none; Artemis console) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Python processes use STOMP durable subscriptions to the multicast addresses
-\texttt{scorer.requests} and \texttt{scorer.events}. Each scorer connects
-with a unique \texttt{client-id} header on \texttt{CONNECT} and subscribes
-with a \texttt{durable-subscription-name} header on \texttt{SUBSCRIBE}.
-Artemis creates a named durable queue bound to the multicast address,
-preserving messages across scorer restarts.
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Process} & \textbf{client-id} & \textbf{Durable subscription names} \\
-\midrule
-\texttt{clip\_scorer}     & \texttt{clip-scorer}     & \texttt{scorer.clip.requests}, \texttt{scorer.clip.events} \\
-\texttt{artifact\_scorer} & \texttt{artifact-scorer} & \texttt{scorer.artifact.requests}, \texttt{scorer.artifact.events} \\
-\texttt{vlm\_scorer}      & \texttt{vlm-scorer}      & \texttt{scorer.vlm.requests}, \texttt{scorer.vlm.events} \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-The UI server uses non-durable topic subscriptions (\texttt{client-id:
-ui-server}) on \texttt{/topic/loop.events} and
-\texttt{/topic/tactical.decisions}. These are broadcast topics; the UI
-server receives every message without competing with pipeline consumers.
+Images rejected by the cascade threshold logic are written to PostgreSQL
+with \texttt{status = 'rejected'} but are not published to any queue.
+The \texttt{loop.retry} and \texttt{loop.inpaint} addresses carry the same
+JSON schema as \texttt{loop.generate} with revised prompt / workflow params.
 
 % ============================================================
 \section{Data Flow}
@@ -636,69 +580,79 @@ server receives every message without competing with pipeline consumers.
 
 \begin{enumerate}
   \item The operator opens the browser UI at \texttt{http://localhost:12000}.
-        They create a conversation (\texttt{ConversationCreate}) and a
-        workflow (\texttt{WorkflowCreate} + \texttt{WorkflowResume}) via the
-        UI server, which calls the coordinator over its Unix socket.
-        Clicking \textbf{Generate} causes the UI server to publish a
-        generation request to \texttt{/queue/loop.request} via STOMP,
-        carrying the \texttt{workflow\_id}, \texttt{conversation\_id},
-        \texttt{run\_id} (= session\_uuid), and prompt.
+        They create a conversation and workflow via the REST API (Spring Boot
+        pipeline writes to PostgreSQL). Clicking \textbf{Generate} causes
+        \texttt{WorkflowController} to publish a generation request to
+        \texttt{loop.generate} carrying the \texttt{workflow\_id},
+        \texttt{conversation\_id}, \texttt{session\_uuid}, and prompt.
 
-  \item \texttt{comfyui\_worker} receives the request, registers the image
-        session with the coordinator (\texttt{SessionInit}), submits the
-        ComfyUI workflow, and waits for completion via WebSocket.
+  \item \texttt{ComfyUiWorker} receives the \texttt{loop.generate} message,
+        inserts a \texttt{pending\_generations} row (Narayana JTA), submits
+        the ComfyUI workflow via HTTP, and polls for completion via WebSocket.
 
-  \item On completion, publishes the result to \texttt{/topic/loop.events}
-        via STOMP. The UI server's STOMP listener receives this message,
-        caches the \texttt{image\_uuid $\to$ image\_path} mapping, and
-        pushes an \texttt{image\_ready} event over the gallery WebSocket to
-        the browser.
+  \item On completion, \texttt{ComfyUiWorker} publishes to
+        \texttt{loop.generated} and calls \texttt{GalleryBroadcastService}
+        to push an \texttt{image\_ready} WebSocket event to the browser.
 
-  \item Rust \texttt{router} receives from \texttt{loop.events} via AMQP~1.0
-        and fans out to \texttt{scorer.requests} (multicast) with subject
-        \texttt{score.<uuid>}.
+  \item \texttt{Scorer} receives from \texttt{loop.generated} and calls all
+        three scorer sidecars in parallel via HTTP:
+        \begin{itemize}
+          \item \texttt{POST http://localhost:12002/score} (CLIP scorer)
+          \item \texttt{POST http://localhost:12003/score} (artifact scorer)
+          \item \texttt{POST http://localhost:12004/score} (VLM scorer)
+        \end{itemize}
+        It also queries PostgreSQL for the active north star embedding and
+        computes a cosine similarity score via the pgvector extension
+        (\texttt{north\_star\_similarity}).
 
-  \item All three scorers receive the message simultaneously and begin scoring
-        in parallel (durable STOMP subscriptions).
-
-  \item As results arrive, the Rust \texttt{aggregator} merges them into the
-        \texttt{scorer\_session} SQLite row using \texttt{BEGIN IMMEDIATE}
-        transactions.
-
-  \item Threshold evaluation on each arrival:
+  \item Threshold evaluation in \texttt{Scorer.java}:
     \begin{itemize}
-      \item CLIP score below threshold: mark rejected in SQLite, publish
-            \texttt{cancel.*} to \texttt{scorer.events}, emit rejected verdict
-            to \texttt{scorer.result}.
-      \item Artifact confidence above threshold: same cancel and reject flow.
-      \item All three results within bounds: mark candidate in SQLite, emit
-            candidate verdict to \texttt{scorer.result}.
+      \item CLIP score below \texttt{thresholds.clip}: write rejected record
+            to PostgreSQL; stop.
+      \item Artifact confidence above \texttt{thresholds.artifact}: same.
+      \item VLM mean score below \texttt{thresholds.accept\_vlm\_mean\_min}:
+            same.
+      \item All scores within bounds: write candidate record to PostgreSQL,
+            publish to \texttt{loop.verdicts} with full scorer results.
     \end{itemize}
 
-  \item \texttt{tactical\_llm} receives the verdict, queries the coordinator
-        for budget state (\texttt{BudgetGet}) and user context
-        (\texttt{ContextGet} --- recent chat messages and thumbs ratings),
-        retrieves LanceDB session history, and calls the mlx\_lm server's
-        OpenAI-compatible API (\texttt{tactical.model.server\_url}, port 12001)
-        to decide accept / retry / inpaint / give\_up / escalate.
-        The decision and verdict are published to
-        \texttt{/topic/tactical.decisions} via STOMP.
+  \item \texttt{TacticalLlmCaller} receives the verdict from
+        \texttt{loop.verdicts}, loads conversation context from PostgreSQL
+        (recent chat messages, feedback, north star, session direction), and
+        runs the agentic decision loop:
+    \begin{enumerate}
+      \item Builds system prompt (context + north star + taste synthesis).
+      \item Calls \texttt{mlx\_lm.server} at port 12001 with tool definitions
+            (\texttt{analyze\_image}). Thinking is off by default
+            (\texttt{/no\_think}).
+      \item If the LLM emits \texttt{analyze\_image} tool calls: executes
+            \texttt{POST http://localhost:12004/analyze} and appends results.
+      \item Re-prompts until the LLM emits a final decision JSON or the tool
+            iteration cap is reached. For borderline cases or a first-pass
+            \texttt{escalate} signal, re-queries with thinking budget enabled.
+    \end{enumerate}
 
-  \item The UI server receives the decision on \texttt{tactical.decisions} and
-        pushes a \texttt{decision} event over the gallery WebSocket to the
-        browser, which updates the image card's verdict badge.
-
-  \item On accept: tactical LLM publishes to \texttt{/topic/loop.accepted}.
-        On retry: publishes a new request to \texttt{/queue/loop.request} and
-        increments the retry counter via \texttt{BudgetUpdate}.
-
-  \item \texttt{lancedb\_manager} receives terminal events
-        (\texttt{loop.accepted} or \texttt{cancel.*}), reads the completed
-        \texttt{scorer\_session} row, performs an idempotent existence check,
-        and writes the final Loop record to LanceDB.
+  \item Decision handling in \texttt{TacticalLlmCaller}:
+    \begin{description}
+      \item[\texttt{accept}] Writes accepted image record to PostgreSQL.
+            Fires \texttt{decision} WebSocket event via
+            \texttt{GalleryBroadcastService}.
+      \item[\texttt{retry}] Publishes to \texttt{loop.retry} with revised
+            prompt and/or workflow params. Increments retry counter in
+            PostgreSQL budget table.
+      \item[\texttt{inpaint}] Publishes to \texttt{loop.inpaint} with
+            region and prompt. Increments inpaint counter.
+      \item[\texttt{give\_up}] Writes give-up record to PostgreSQL. No further
+            messages published.
+      \item[\texttt{escalate}] Writes a \texttt{pipeline\_events} row
+            (\texttt{type = 'mode\_switch\_requested'}) and calls
+            \texttt{SpringApplication.exit()} to shut down the Loop cleanly.
+            \texttt{loop.sh} detects the shutdown, finds the pending escalation,
+            and starts \texttt{strategic.sh} automatically.
+    \end{description}
 \end{enumerate}
 
-\subsection{Cancel Flow}
+\subsection{Cancel Flow (threshold cascade)}
 
 \begin{center}
 \begin{tikzpicture}[node distance=0.7cm]
@@ -707,9 +661,11 @@ server receives every message without competing with pipeline consumers.
   \node[component,right=2.2cm of clipcheck] (artifact) {Artifact score};
   \node[component,below=of artifact] (artcheck) {$>$ threshold?};
   \node[component,right=2.2cm of artcheck] (vlm) {VLM score};
-  \node[component,below=of vlm] (candidate) {candidate};
+  \node[component,below=of vlm] (vlmcheck) {mean $<$ min?};
+  \node[component,right=2.2cm of vlmcheck] (candidate) {candidate};
   \node[component,left=1.6cm of clipcheck,yshift=-0.8cm] (r1) {rejected};
   \node[component,left=1.6cm of artcheck,yshift=-0.8cm] (r2) {rejected};
+  \node[component,below=0.8cm of vlmcheck,xshift=-1.4cm] (r3) {rejected};
 
   \draw[arrow] (clip) -- (clipcheck);
   \draw[arrow] (clipcheck) -- node[lbl,above] {no} (artifact);
@@ -717,7 +673,9 @@ server receives every message without competing with pipeline consumers.
   \draw[arrow] (artifact) -- (artcheck);
   \draw[arrow] (artcheck) -- node[lbl,above] {no} (vlm);
   \draw[arrow] (artcheck) -- node[lbl,left] {yes} (r2);
-  \draw[arrow] (vlm) -- (candidate);
+  \draw[arrow] (vlm) -- (vlmcheck);
+  \draw[arrow] (vlmcheck) -- node[lbl,above] {no} (candidate);
+  \draw[arrow] (vlmcheck) -- node[lbl,left] {yes} (r3);
 \end{tikzpicture}
 \end{center}
 
@@ -725,154 +683,66 @@ server receives every message without competing with pipeline consumers.
 \section{Persistence Layer}
 % ============================================================
 
-\subsection{SQLite Operational Database (\texttt{pipeline.db})}
+\subsection{PostgreSQL Schema}
 
-The coordinator owns \texttt{pipeline.db} in WAL mode with
-\texttt{PRAGMA synchronous=FULL}. Seven tables are defined.
+The pipeline uses a Flyway-managed PostgreSQL database with the pgvector
+extension for CLIP embeddings. Schema is applied in migrations V1--V4 under
+\texttt{pipeline/src/main/resources/db/migration/}.
 
-\subsubsection{xa\_log}
-Durable XA transaction log for 2-phase commit coordination.
+\subsubsection{Core tables}
 
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{xid}          & TEXT PRIMARY KEY & Transaction ID \\
-\texttt{state}        & TEXT             & prepared $|$ committed $|$ rolledback \\
-\texttt{participants} & TEXT             & JSON list of resource managers \\
-\texttt{created\_at}  & INTEGER          & Unix timestamp \\
-\texttt{resolved\_at} & INTEGER?         & Unix timestamp, null until resolved \\
-\bottomrule
-\end{tabular}
-\end{center}
+\begin{description}
+  \item[\texttt{conversations}] Named creative projects. Parent of all workflows.
+  \item[\texttt{workflows}] A stable creative direction within a conversation.
+        Carries \texttt{workflow\_path}, \texttt{max\_retries},
+        \texttt{max\_inpaints}, and \texttt{budget\_policy} (fresh $|$ carry).
+  \item[\texttt{images}] One row per generated image. Key columns:
+        \texttt{image\_uuid}, \texttt{session\_uuid}, \texttt{workflow\_id},
+        \texttt{conversation\_id}, \texttt{image\_path}, \texttt{status}
+        (pending $|$ scored $|$ accepted $|$ rejected), \texttt{embedding
+        vector(512)}, \texttt{north\_star\_similarity float},
+        \texttt{clip\_score}, \texttt{artifact\_confidence}, and VLM scorer
+        fields.
+  \item[\texttt{budget}] Per-run retry and inpaint budget counters keyed by
+        \texttt{session\_uuid}.
+  \item[\texttt{chat\_messages}] Chat history between the operator and the
+        tactical LLM, scoped per conversation.
+  \item[\texttt{user\_feedback}] Thumbs up/down ratings with optional comment,
+        scoped per image and workflow.
+\end{description}
 
-\subsubsection{scorer\_session}
-In-flight per-image state, written by coordinator on \texttt{SessionInit} and
-read by aggregator and lancedb\_manager.
+\subsubsection{Pending-work tables (XA staging)}
 
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{image\_uuid}      & TEXT PRIMARY KEY & Unique per generated image \\
-\texttt{session\_uuid}    & TEXT             & Parent run (= run\_id) \\
-\texttt{workflow\_id}     & TEXT?            & Parent workflow \\
-\texttt{conversation\_id} & TEXT?            & Parent conversation \\
-\texttt{sequence\_number} & INTEGER          & Position within session \\
-\texttt{prompt}           & TEXT?            & Generation prompt \\
-\texttt{workflow\_path}   & TEXT?            & Workflow file path \\
-\texttt{workflow\_params} & TEXT?            & JSON generation params \\
-\texttt{clip}             & TEXT?            & JSON scorer result, null until arrived \\
-\texttt{artifact}         & TEXT?            & JSON scorer result, null until arrived \\
-\texttt{vlm}              & TEXT?            & JSON scorer result, null until arrived \\
-\texttt{verdict}          & TEXT?            & null $|$ candidate $|$ rejected \\
-\texttt{rejection\_reason}& TEXT?            & Rejection cause, null for candidates \\
-\texttt{image\_path}      & TEXT?            & Output image URL \\
-\texttt{created\_at}      & INTEGER          & Unix timestamp \\
-\texttt{expires\_at}      & INTEGER          & Unix timestamp; row deleted by cleanup \\
-\bottomrule
-\end{tabular}
-\end{center}
+Three tables serve as transactional staging rows within Narayana JTA
+transactions, preventing message loss across restarts:
 
-\subsubsection{tactical\_budget}
-Per-run retry and inpaint budget counters.
+\begin{description}
+  \item[\texttt{pending\_generations}] Written by \texttt{ComfyUiWorker}
+        inside the JMS transaction before submitting to ComfyUI. Cleaned up
+        on successful completion.
+  \item[\texttt{pending\_scorings}] Written by \texttt{Scorer} inside the
+        JMS transaction before calling scorer sidecars.
+  \item[\texttt{pending\_decisions}] Written by \texttt{TacticalLlmCaller}
+        inside the JMS transaction before calling the LLM.
+\end{description}
 
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{session\_uuid}    & TEXT PRIMARY KEY & Run identifier \\
-\texttt{workflow\_id}     & TEXT?            & Parent workflow \\
-\texttt{conversation\_id} & TEXT?            & Parent conversation \\
-\texttt{retries\_used}    & INTEGER          & Retry attempts consumed \\
-\texttt{inpaints\_used}   & INTEGER          & Inpaint passes consumed \\
-\texttt{max\_retries}     & INTEGER          & Run retry ceiling \\
-\texttt{max\_inpaints}    & INTEGER          & Run inpaint ceiling \\
-\texttt{created\_at}      & INTEGER          & Unix timestamp \\
-\texttt{expires\_at}      & INTEGER          & Unix timestamp (24\,h TTL) \\
-\bottomrule
-\end{tabular}
-\end{center}
+\subsubsection{Strategic context tables}
 
-\subsubsection{conversation}
-Top-level grouping of related workflows.
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{id}         & INTEGER PRIMARY KEY & Auto-increment \\
-\texttt{uuid}       & TEXT UNIQUE         & External identifier \\
-\texttt{name}       & TEXT?               & Human-readable label \\
-\texttt{created\_at}& INTEGER             & Unix timestamp \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{workflow}
-A stable creative direction within a conversation. Each \textit{resume}
-creates a new run (a new \texttt{tactical\_budget} row); the workflow itself
-is long-lived.
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
-\texttt{uuid}             & TEXT UNIQUE         & External identifier \\
-\texttt{conversation\_id} & TEXT                & FK to conversation.uuid \\
-\texttt{name}             & TEXT?               & Human-readable label \\
-\texttt{workflow\_path}   & TEXT                & ComfyUI workflow JSON path \\
-\texttt{description}      & TEXT?               & Creative intent \\
-\texttt{budget\_policy}   & TEXT                & fresh $|$ carry \\
-\texttt{max\_retries}     & INTEGER             & Default retry ceiling \\
-\texttt{max\_inpaints}    & INTEGER             & Default inpaint ceiling \\
-\texttt{created\_at}      & INTEGER             & Unix timestamp \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{feedback}
-User thumbs up/down ratings recorded by the UI.
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
-\texttt{image\_uuid}      & TEXT                & Image rated \\
-\texttt{workflow\_id}     & TEXT                & Parent workflow \\
-\texttt{run\_id}          & TEXT                & Parent run \\
-\texttt{rating}           & TEXT                & up $|$ down \\
-\texttt{comment}          & TEXT?               & Optional text \\
-\texttt{created\_at}      & INTEGER             & Unix timestamp \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{chat\_message}
-Chat history between the operator and the tactical LLM, stored per conversation.
-
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{id}               & INTEGER PRIMARY KEY & Auto-increment \\
-\texttt{conversation\_id} & TEXT                & FK to conversation.uuid \\
-\texttt{workflow\_id}     & TEXT?               & Optional workflow scope \\
-\texttt{role}             & TEXT                & user $|$ assistant \\
-\texttt{content}          & TEXT                & Message body \\
-\texttt{created\_at}      & INTEGER             & Unix timestamp \\
-\bottomrule
-\end{tabular}
-\end{center}
+\begin{description}
+  \item[\texttt{north\_star}] The active creative goal. One row per revision.
+        Superseded rows have \texttt{superseded\_at} set. Contains
+        \texttt{content text} and \texttt{embedding vector(512)} (CLIP text
+        encoding of the north star, used for \texttt{north\_star\_similarity}
+        queries).
+  \item[\texttt{session\_direction}] Tactical guidance for the current
+        workflow run, written by the strategic LLM.
+  \item[\texttt{taste\_synthesis}] Accumulated aesthetic preferences derived
+        from user feedback across sessions, written by the strategic LLM.
+  \item[\texttt{pipeline\_events}] Mode switch signalling. Written by
+        \texttt{TacticalLlmCaller} on \texttt{escalate} decision
+        (\texttt{type = 'mode\_switch\_requested'}). Read by \texttt{loop.sh}
+        to trigger strategic session startup.
+\end{description}
 
 \subsection{Conversation and Workflow Hierarchy}
 
@@ -889,121 +759,18 @@ The data model is a four-level hierarchy:
         budget policy). A workflow is \textit{resumed} to start a new run;
         the workflow record itself is never replaced.
   \item[Run] One invocation of the generation loop. Corresponds to a
-        \texttt{session\_uuid} in the operational tables. Each run has its
-        own \texttt{tactical\_budget} row.
+        \texttt{session\_uuid}. Each run has its own \texttt{budget} row.
   \item[Image] One generated image within a run. Corresponds to an
-        \texttt{image\_uuid} in \texttt{scorer\_session} and LanceDB.
+        \texttt{image\_uuid} in the \texttt{images} table.
 \end{description}
-
-\subsection{Coordinator Unix Socket API}
-
-The coordinator binds a Unix domain socket at
-\texttt{\{database.path\}.sock}. Requests and responses are
-newline-delimited JSON objects.
-
-\begin{center}
-\begin{tabular}{ll}
-\toprule
-\textbf{Request} & \textbf{Effect} \\
-\midrule
-\texttt{ConversationCreate} & Insert row into \texttt{conversation}; return \texttt{conversation\_id} \\
-\texttt{WorkflowCreate}     & Insert row into \texttt{workflow}; return \texttt{workflow\_id} \\
-\texttt{WorkflowResume}     & Insert \texttt{tactical\_budget} for a new run; return \texttt{run\_id} \\
-\texttt{BudgetInit}         & Insert row into \texttt{tactical\_budget} (\texttt{INSERT OR IGNORE}) \\
-\texttt{BudgetGet}          & Return budget counters for a run \\
-\texttt{BudgetUpdate}       & Atomically increment \texttt{retries\_used} or \texttt{inpaints\_used} \\
-\texttt{SessionInit}        & Insert row into \texttt{scorer\_session} (\texttt{INSERT OR IGNORE}) \\
-\texttt{FeedbackAdd}        & Insert row into \texttt{feedback} \\
-\texttt{ChatAdd}            & Insert row into \texttt{chat\_message} \\
-\texttt{ContextGet}         & Return recent chat messages and feedback for LLM context \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-Example request/response pairs:
-
-\begin{lstlisting}[style=shell]
-# ConversationCreate
-{"op":"ConversationCreate","name":"beach portraits"}
-{"ok":true,"conversation_id":"conv-uuid-..."}
-
-# WorkflowCreate
-{"op":"WorkflowCreate","conversation_id":"conv-uuid-...",
- "workflow_path":"workflows/sdxl_base.json","max_retries":3,"max_inpaints":2}
-{"ok":true,"workflow_id":"wf-uuid-...","conversation_id":"conv-uuid-..."}
-
-# WorkflowResume (creates a new run)
-{"op":"WorkflowResume","workflow_id":"wf-uuid-..."}
-{"ok":true,"run_id":"run-uuid-..."}
-
-# BudgetGet
-{"op":"BudgetGet","session_uuid":"run-uuid-..."}
-{"ok":true,"retries_used":1,"inpaints_used":0,"max_retries":3,"max_inpaints":2}
-
-# ContextGet
-{"op":"ContextGet","conversation_id":"conv-uuid-...","workflow_id":"wf-uuid-...","limit":20}
-{"ok":true,"chat":[{"role":"user","content":"more dramatic lighting"},...],
- "feedback":[{"image_uuid":"img-...","rating":"up","comment":"nice"},...]}
-
-# Session not found
-{"ok":false,"error":"session not found"}
-\end{lstlisting}
-
-\subsection{LanceDB Schema}
-
-\subsubsection{sessions table}
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{session\_uuid}   & string      & Primary key \\
-\texttt{created\_at}     & string      & ISO 8601 \\
-\texttt{user\_prompt}    & string      & Original user prompt \\
-\texttt{prompt\_embedding} & vector[512] & CLIP text encoding \\
-\bottomrule
-\end{tabular}
-\end{center}
-
-\subsubsection{loop table}
-\begin{center}
-\begin{tabular}{lll}
-\toprule
-\textbf{Field} & \textbf{Type} & \textbf{Description} \\
-\midrule
-\texttt{image\_uuid}      & string  & Primary key \\
-\texttt{session\_uuid}    & string  & Run identifier \\
-\texttt{workflow\_id}     & string? & Parent workflow \\
-\texttt{conversation\_id} & string? & Parent conversation \\
-\texttt{sequence\_number} & int64   & Position within run \\
-\texttt{created\_at}      & string  & ISO 8601 \\
-\texttt{prompt}           & string? & Generation prompt \\
-\texttt{workflow\_path}   & string? & Workflow file path \\
-\texttt{workflow\_params} & string? & JSON generation params \\
-\texttt{clip\_score}      & float64? & CLIP similarity \\
-\texttt{artifact\_score}  & float64? & AI artifact confidence \\
-\texttt{vlm\_photorealism}  & float64? & 0--10 \\
-\texttt{vlm\_anatomical}    & float64? & 0--10 \\
-\texttt{vlm\_interaction}   & float64? & 0--10 \\
-\texttt{vlm\_lighting}      & float64? & 0--10 \\
-\texttt{vlm\_prompt}        & float64? & 0--10 \\
-\texttt{vlm\_issues}        & string?  & JSON list \\
-\texttt{vlm\_recommendations} & string? & JSON list \\
-\texttt{verdict}          & string?  & candidate $|$ rejected \\
-\texttt{rejection\_reason}& string?  & null for candidates \\
-\texttt{image\_path}      & string?  & null for rejected \\
-\bottomrule
-\end{tabular}
-\end{center}
 
 % ============================================================
 \section{Browser UI}
 \label{sec:ui}
 % ============================================================
 
-The pipeline UI is a single-page application served by a FastAPI + uvicorn
-server at \texttt{loop/ui/server.py}. It runs in the scorers venv alongside
-\texttt{tactical\_llm.py}.
+The pipeline UI is a single-page application served by the Spring Boot
+pipeline at \texttt{http://localhost:12000}.
 
 \subsection{REST Endpoints}
 
@@ -1016,10 +783,14 @@ server at \texttt{loop/ui/server.py}. It runs in the scorers venv alongside
 \texttt{POST} & \texttt{/session/start}               & Create a conversation \\
 \texttt{POST} & \texttt{/workflow/new}                & Create a workflow and first run \\
 \texttt{POST} & \texttt{/workflow/\{id\}/resume}      & Resume a workflow (new run) \\
-\texttt{POST} & \texttt{/workflow/\{id\}/start-run}   & Enqueue a generation request \\
+\texttt{POST} & \texttt{/workflow/\{id\}/start-run}   & Publish a \texttt{loop.generate} message \\
 \texttt{POST} & \texttt{/feedback}                    & Record thumbs up/down for an image \\
 \texttt{GET}  & \texttt{/history}                     & Recent chat and feedback for a workflow \\
-\texttt{GET}  & \texttt{/image/\{uuid\}}              & Proxy ComfyUI image by UUID \\
+\texttt{GET}  & \texttt{/image/\{uuid\}}              & Serve a generated image from disk \\
+\texttt{GET}  & \texttt{/strategic/}                  & Strategic review UI \\
+\texttt{POST} & \texttt{/strategic/run}               & Trigger a strategic session manually \\
+\texttt{GET}  & \texttt{/strategic/status}            & Current strategic session state \\
+\texttt{POST} & \texttt{/north-star}                  & Write a new north star directly \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1027,75 +798,45 @@ server at \texttt{loop/ui/server.py}. It runs in the scorers venv alongside
 \subsection{WebSocket Endpoints}
 
 \begin{description}
-  \item[\texttt{/ws/gallery}] Pushes \texttt{image\_ready} and
-        \texttt{decision} events to all connected browsers. The server's
-        STOMP listener translates Artemis topic messages into gallery events
-        broadcast to every open WebSocket connection.
-  \item[\texttt{/ws/chat}] Bidirectional streaming chat with the LLM.
+  \item[\texttt{/ws/gallery}] Gallery push. \texttt{GalleryBroadcastService}
+        forwards two event types directly from Java to all connected browsers:
+        \texttt{image\_ready} (emitted by \texttt{ComfyUiWorker}) and
+        \texttt{decision} (emitted by \texttt{TacticalLlmCaller}). No broker
+        subscription is involved.
+  \item[\texttt{/ws/chat}] Bidirectional streaming chat with the tactical LLM.
         Browser sends \texttt{\{conversation\_id, workflow\_id, message\}};
         server streams back \texttt{\{type:"chunk", text:"...\}$\ldots$\{type:"done"\}}.
-        Each exchange is stored via \texttt{ChatAdd} so the tactical LLM
-        can retrieve operator intent from \texttt{ContextGet}.
+        Each exchange is stored in \texttt{chat\_messages} so the tactical LLM
+        can retrieve operator intent at decision time.
 \end{description}
-
-\subsection{Image Path Cache}
-
-Image paths are cached in-process (\texttt{image\_uuid $\to$ URL or local path})
-from \texttt{/topic/loop.events} STOMP messages. The \texttt{GET
-/image/\{uuid\}} endpoint resolves the path from this cache and either
-proxies the ComfyUI HTTP URL or reads the file from disk, depending on
-the prefix.
-
-\subsection{Chat Backend Configuration}
-
-By default the chat WebSocket calls the tactical LLM server at
-\texttt{tactical.model.server\_url}. Set \texttt{ui.chat\_backend.server\_url}
-and \texttt{ui.chat\_backend.model\_name} in \texttt{config.yaml} to switch
-the chat panel to a different LLM (e.g., a future strategic model) without
-code changes.
 
 % ============================================================
 \section{Data-Loss Protection}
 % ============================================================
 
-\subsection{XA 2-Phase Commit}
+\subsection{Narayana JTA Transactions}
 
-The aggregator uses a 2-phase commit protocol coordinated by the coordinator
-binary. SQLite serves as the durable XA log with \texttt{PRAGMA
-synchronous=FULL}. Phase~1 (Prepare) writes the participant list and fsyncs
-before any phase-2 action. Phase~2 (Commit or Rollback) updates the log
-entry and removes the transaction from the in-memory registry.
+All message-to-database writes use Narayana JTA (XA) transactions. The JMS
+message receive and the PostgreSQL write are committed atomically. On crash
+recovery, Narayana rolls back any prepared-but-not-committed XA transactions
+on startup.
 
-On startup, the coordinator scans \texttt{xa\_log} for rows in state
-\texttt{prepared} and rolls them back (conservative recovery strategy).
-
-\subsection{LanceDB Write Protection}
-
-LanceDB has no XA resource-manager support. Writes are protected by:
-
-\begin{enumerate}
-  \item \texttt{scorer\_session} row existence (XA-protected upstream).
-  \item Idempotent existence check before each write (\texttt{image\_uuid}
-        uniqueness in the \texttt{loop} table).
-  \item Message redelivery: ack only after a successful LanceDB write; nack
-        without requeue (DLX) on unrecoverable failure.
-\end{enumerate}
+The three pending-work tables (\texttt{pending\_generations},
+\texttt{pending\_scorings}, \texttt{pending\_decisions}) act as durable
+staging: each worker inserts a row in the JTA transaction. On restart, the
+pipeline can detect and resume in-flight work.
 
 \subsection{Dead Letter Exchange}
 
-All pipeline queues declare \texttt{x-dead-letter-address: pipeline.dlx}
-routing to \texttt{pipeline.dead}. The \texttt{monitor.py} process subscribes
-to \texttt{pipeline.dead} and logs all arriving messages for operator review.
+All pipeline queues declare \texttt{x-dead-letter-address: pipeline.dead}.
+Failed or expired messages accumulate in \texttt{pipeline.dead} for operator
+review via the Artemis management console at \texttt{http://localhost:12009}.
 
 % ============================================================
 \section{Operations}
 % ============================================================
 
 \subsection{Starting the Pipeline}
-
-Ensure \texttt{AI\_IMAGE\_ROOT} is exported in your shell environment (see
-Section~2.4). Run the single start script; it manages all startup ordering
-internally.
 
 \begin{lstlisting}[style=shell]
 # Start middleware first (K3s workloads + port-forwards)
@@ -1111,31 +852,20 @@ $SOXHLET_ROOT/loop.sh start
   \item Middleware health check (Artemis on 12008, PostgreSQL on 12007).
   \item \textbf{Parallel}: ComfyUI (port 12006) and tactical LLM server
         (\texttt{mlx\_lm.server} on port 12001).
-  \item Scorers: clip (12002), artifact (12003), vlm (12004).
+  \item Scorer sidecars: clip (12002), artifact (12003), vlm (12004).
   \item Spring Boot pipeline (port 12000).
 \end{enumerate}
 
-Individual components can also be started via their component scripts:
+Individual component scripts:
 
 \begin{lstlisting}[style=shell]
-# Rust binaries
-$SOXHLET_ROOT/loop/scorers/target/release/coordinator
-$SOXHLET_ROOT/loop/scorers/target/release/router
-$SOXHLET_ROOT/loop/scorers/target/release/aggregator
-$SOXHLET_ROOT/loop/scorers/target/release/lancedb_manager
-
-# ComfyUI
 $SOXHLET_ROOT/loop/comfyui.sh start
-
-# mlx_lm tactical LLM server (port 12001)
 $SOXHLET_ROOT/loop/tactical_llm.sh start
 
-# Python workers -- scorers venv
 source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
 python $SOXHLET_ROOT/loop/scorers/clip_scorer.py
 python $SOXHLET_ROOT/loop/scorers/artifact_scorer.py
 python $SOXHLET_ROOT/loop/scorers/vlm_scorer.py
-PYTHONPATH=$SOXHLET_ROOT python $SOXHLET_ROOT/loop/tactical-llm/tactical_llm.py
 \end{lstlisting}
 
 \subsection{Using the Browser UI}
@@ -1146,9 +876,8 @@ conversation, then \textbf{New Workflow} to select a ComfyUI workflow file
 and budget parameters. Click \textbf{Generate} to submit a prompt and watch
 the gallery fill with images and verdicts in real time. Use the thumbs
 up/down buttons on each image card to record feedback; the tactical LLM
-reads this via \texttt{ContextGet} when making future decisions. The chat
-panel in the right sidebar is a persistent conversation with the LLM for
-creative direction.
+reads this context when making future decisions. The chat panel in the right
+sidebar is a persistent conversation with the LLM for creative direction.
 
 \subsection{Stopping the Pipeline}
 
@@ -1166,13 +895,14 @@ The Artemis web console is available at \texttt{http://localhost:12009}
 
 \begin{itemize}
   \item Real-time message counts per address and queue.
-  \item Consumer connection status for each durable subscription.
+  \item Consumer connection status for each queue.
   \item Manual browse, send, and drain operations on any queue.
 \end{itemize}
 
 Verify on first start that the following addresses appear under
-\textbf{Addresses}: \texttt{loop.request}, \texttt{loop.events},
-\texttt{scorer.requests}, \texttt{scorer.result}, \texttt{pipeline.dead}.
+\textbf{Addresses}: \texttt{loop.generate}, \texttt{loop.generated},
+\texttt{loop.verdicts}, \texttt{loop.retry}, \texttt{loop.inpaint},
+\texttt{pipeline.dead}.
 
 \subsubsection{Pipeline UI}
 
@@ -1181,17 +911,11 @@ decision events as they occur. It is the primary operator interface for
 monitoring generation progress, reviewing verdicts, and interacting with
 the tactical LLM.
 
-\subsubsection{Dead-letter monitor}
+\subsubsection{Dead-letter queue}
 
-\begin{lstlisting}[style=shell]
-source $SOXHLET_ROOT/venv/bin/activate
-python $SOXHLET_ROOT/loop/monitor.py
-\end{lstlisting}
-
-Every message appearing in monitor output indicates a processing failure.
-The log includes the original queue name (\texttt{\_AMQ\_ORIG\_ADDRESS}
-header), message ID, and the full JSON body. Messages remain in
-\texttt{pipeline.dead} until explicitly drained or the broker is restarted.
+Failed messages land in the \texttt{pipeline.dead} queue. Inspect them via
+the Artemis management console under \textbf{Queues $\to$ pipeline.dead}.
+The \texttt{\_AMQ\_ORIG\_ADDRESS} header records the source address.
 
 % ============================================================
 \section{Memory Budget}
@@ -1209,21 +933,16 @@ Loop and Strategic are mutually exclusive.
 \textbf{Component} & \textbf{Role} & \textbf{Memory} \\
 \midrule
 ComfyUI + SDXL           & Image generation                     & $\sim$14\,GB \\
-comfyui\_worker (Python)  & Loop queue consumer                  & $\sim$50\,MB \\
-router (Rust)             & Generation event fanout              & $\sim$5\,MB \\
-clip\_scorer (Python)     & Prompt adherence + embedding         & $\sim$1.7\,GB \\
-artifact\_scorer (Python) & Photorealism scoring                 & $\sim$500\,MB \\
-vlm\_scorer (Python)      & Holistic image evaluation            & $\sim$6\,GB \\
-aggregator (Rust)         & Result collection and verdict        & $\sim$5\,MB \\
-coordinator (Rust)        & XA coordinator + Python API          & $\sim$5\,MB \\
-lancedb\_manager (Rust)   & LanceDB write manager                & $\sim$5\,MB \\
-mlx\_lm server (Qwen3-Next-80B-A3B, 4-bit) & Tactical LLM        & $\sim$45\,GB \\
-tactical\_llm (Python)    & Decision logic (model via HTTP)      & $\sim$50\,MB \\
-Spring Boot pipeline      & REST + WebSocket + strategic LLM     & $\sim$200\,MB \\
-ActiveMQ Artemis          & Message broker (K3s)                 & $\sim$300\,MB \\
-OS / system overhead      &                                      & $\sim$2\,GB \\
+clip\_scorer (Python)    & Prompt adherence + embedding         & $\sim$1.7\,GB \\
+artifact\_scorer (Python)& Photorealism scoring                 & $\sim$500\,MB \\
+vlm\_scorer (Python)     & Holistic image evaluation            & $\sim$6\,GB \\
+mlx\_lm server (Qwen3-Next-80B-A3B, 4-bit) & Tactical LLM    & $\sim$45\,GB \\
+Spring Boot pipeline     & REST + WebSocket + JMS workers       & $\sim$200\,MB \\
+ActiveMQ Artemis (K3s)   & Message broker                       & $\sim$300\,MB \\
+PostgreSQL (K3s)         & Operational state                    & $\sim$200\,MB \\
+OS / system overhead     &                                      & $\sim$2\,GB \\
 \midrule
-\textbf{Total (Loop)}     &                                      & $\sim$67\,GB \\
+\textbf{Total (Loop)}    &                                      & $\sim$70\,GB \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -1243,21 +962,26 @@ LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 \toprule
 \textbf{Threshold} & \textbf{Default} & \textbf{Semantics} \\
 \midrule
-\texttt{thresholds.clip}     & 0.25 & Reject if CLIP score $< 0.25$ \\
-\texttt{thresholds.artifact} & 0.50 & Reject if AI confidence $> 0.50$ \\
+\texttt{thresholds.clip}              & 0.25 & Reject if CLIP score $< 0.25$ \\
+\texttt{thresholds.artifact}          & 0.50 & Reject if AI confidence $> 0.50$ \\
+\texttt{thresholds.accept\_vlm\_mean\_min} & 7.0 & Reject if VLM mean score $< 7.0$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
-Both values are placeholders. Calibration procedure:
+All values are placeholders. Calibration procedure:
 
 \begin{enumerate}
-  \item Run the loop permissively (\texttt{clip: 0.0}, \texttt{artifact: 1.0}).
-  \item Query the \texttt{loop} LanceDB table and examine score distributions.
+  \item Run the loop permissively (\texttt{clip: 0.0}, \texttt{artifact: 1.0},
+        \texttt{accept\_vlm\_mean\_min: 0.0}).
+  \item Query the \texttt{images} PostgreSQL table and examine score
+        distributions across accepted and rejected images.
   \item Set \texttt{clip} at the point below which VLM scores are consistently poor.
   \item Set \texttt{artifact} at the point above which photorealism scores are consistently poor.
+  \item Set \texttt{accept\_vlm\_mean\_min} at a mean VLM score that reliably
+        filters poor-quality candidates without discarding good ones.
   \item Iterate: thresholds too aggressive waste good candidates; too permissive
-        waste VLM compute.
+        waste tactical LLM compute.
 \end{enumerate}
 
 All threshold values are read from \texttt{config.yaml} at process startup.
@@ -1266,22 +990,6 @@ No code changes are required for recalibration.
 % ============================================================
 \section{Testing}
 % ============================================================
-
-\subsection{Rust Tests}
-
-The coordinator test suite covers the XA state machine, crash recovery,
-budget operations, \texttt{SessionInit} idempotency, and the full
-conversation/workflow hierarchy (ConversationCreate, WorkflowCreate,
-WorkflowResume, FeedbackAdd, ChatAdd, ContextGet). Tests run against
-an in-memory SQLite database.
-
-\begin{lstlisting}[style=shell]
-cd $SOXHLET_ROOT/loop/scorers
-cargo test -p coordinator
-
-# All crates in the workspace
-cargo test
-\end{lstlisting}
 
 \subsection{Python Tests}
 
@@ -1299,19 +1007,12 @@ Test files and their coverage:
 \toprule
 \textbf{File} & \textbf{Coverage} \\
 \midrule
-\texttt{test\_clip\_scorer.py}     & CLIP scoring, cancel event handling \\
-\texttt{test\_artifact\_scorer.py} & Artifact detection, cancel event handling \\
-\texttt{test\_vlm\_scorer.py}      & VLM scoring, cancel event, malformed JSON \\
-\texttt{test\_monitor.py}          & Dead-letter formatting, listener ack/count \\
-\texttt{test\_ui\_server.py}       & REST endpoints, WebSocket events, image proxy,
-                                     gallery manager, STOMP listener \\
+\texttt{test\_clip\_scorer.py}     & CLIP scoring, text embedding endpoint \\
+\texttt{test\_artifact\_scorer.py} & Artifact detection scoring \\
+\texttt{test\_vlm\_scorer.py}      & VLM scoring, /analyze endpoint, malformed JSON \\
 \bottomrule
 \end{tabular}
 \end{center}
-
-External dependencies (LanceDB, Unix socket, STOMP broker, mlx\_lm server)
-are mocked in all tests. The UI server tests inject a fake config module so
-they run without \texttt{config.yaml}.
 
 \subsection{Full Suite}
 
@@ -1325,18 +1026,18 @@ make all    # lint + typecheck + test + build
 % ============================================================
 
 \begin{description}
-  \item[Multiple ComfyUI workers] Add STOMP consumers on \texttt{/queue/loop.request}.
-  \item[Multiple scorer instances] Durable STOMP subscriptions ensure each
-        process gets an independent copy of each score request. Add processes;
-        no broker reconfiguration needed.
-  \item[Remote scoring nodes] Change \texttt{broker.stomp\_url} in
-        \texttt{config.yaml}. Artemis handles clustering natively.
-  \item[Managed broker] Migrate to Amazon MQ for ActiveMQ (AMQP~1.0 / STOMP
-        compatible).
-  \item[Cloud LanceDB] Change \texttt{paths.lancedb} to an S3 URI.
-  \item[Strategic LLM for chat] Set \texttt{ui.chat\_backend.server\_url} and
-        \texttt{ui.chat\_backend.model\_name} in \texttt{config.yaml}. No code
-        changes required.
+  \item[Multiple ComfyUI workers] Run multiple Spring Boot pipeline instances
+        with competing consumers on \texttt{loop.generate} and
+        \texttt{loop.generated}. Artemis anycast distributes work across
+        consumers.
+  \item[Remote scoring nodes] Deploy scorer sidecars on separate machines and
+        update \texttt{sidecars.*.host} in \texttt{config.yaml}. The pipeline
+        calls them via HTTP; no broker reconfiguration needed.
+  \item[Managed broker] Migrate to Amazon MQ for ActiveMQ (AMQP~1.0
+        compatible). Update \texttt{broker.url} in \texttt{config.yaml}.
+  \item[Strategic LLM for chat] The chat WebSocket calls the tactical LLM
+        by default. Future: route chat to the strategic model by updating
+        the chat handler's LLM client configuration.
 \end{description}
 
 \end{document}

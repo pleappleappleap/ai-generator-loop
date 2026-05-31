@@ -99,12 +99,10 @@ This installs automatically, per platform:
 | wget |  -  | Yes | macOS uses curl (system native) |
 | Python 3.11 | Yes | Yes | via Homebrew / distro package manager |
 | yq | Yes | Yes | YAML query tool used by shell scripts |
-| Docker / K3s | Yes | Yes | K3s hosts Artemis and PostgreSQL |
+| K3s | Yes | Yes | K3s hosts Artemis and PostgreSQL |
 | kubectl | Yes | Yes | for port-forwards managed by `middleware.sh` |
 | Java 21+ | Yes | Yes | for the Spring Boot pipeline |
-| Rust + cargo | Yes | Yes | via rustup |
-| sqlx-cli | Yes | Yes | Rust SQLite compile-time query verification |
-| protoc | Yes | Yes | required by LanceDB Rust crate |
+| HuggingFace CLI | Yes | Yes | `huggingface-cli` for model downloads |
 
 TeX is **not** installed automatically. It is only needed to regenerate
 `ARCHITECTURE.pdf`:
@@ -193,7 +191,8 @@ deactivate
 ```
 
 The scorers `requirements.txt` includes `mlx-lm` (for the tactical and
-strategic LLM servers), `openai`, and `stomp.py`.
+strategic LLM servers), `fastapi`, `uvicorn`, `httpx`, `transformers`, and
+`huggingface_hub`.
 
 To activate the scorers environment in a shell, use the provided script:
 
@@ -237,13 +236,15 @@ snapshot_download(
 EOF
 ```
 
-### VLM scorer (Qwen2.5-VL-7B)
+### VLM scorer (Qwen3-VL-8B)
 
 ```bash
 mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
-# ~5 GB download
-curl -L -o $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf \
-  "https://huggingface.co/bartowski/Qwen2.5-VL-7B-Instruct-GGUF/resolve/main/Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf"
+# ~9 GB download (Q8 GGUF + mmproj)
+huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
+  Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
+  Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm
 ```
 
 ### Tactical LLM (Qwen3-Next-80B-A3B, MLX 4-bit)
@@ -374,25 +375,7 @@ python check_env.py
 
 ---
 
-## 9. Build Binaries
-
-### Rust
-
-```bash
-cd $SOXHLET_ROOT/loop/scorers
-~/.cargo/bin/cargo build --release
-```
-
-This produces four binaries in `target/release/`:
-
-| Binary | Role |
-|--------|------|
-| `router` | Fans out `loop.events` -> `scorer.requests` |
-| `aggregator` | Merges scorer results, emits verdicts |
-| `coordinator` | XA 2PC + conversation/workflow/budget API (Unix socket) |
-| `lancedb_manager` | Writes terminal records to LanceDB |
-
-### Java pipeline
+## 9. Build Pipeline
 
 ```bash
 cd $SOXHLET_ROOT/pipeline
