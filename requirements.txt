@@ -1,14 +1,1 @@
-lancedb
-open_clip_torch
-torch
-stomp.py
-pydantic
-rich
-huggingface_hub
-requests
-yq
-openai
-fastapi
-uvicorn[standard]
-httpx
-websocket-client
+pyyaml

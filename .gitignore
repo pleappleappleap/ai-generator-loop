@@ -5,6 +5,7 @@ config.yaml
 pipeline.db
 pipeline.db-shm
 pipeline.db-wal
+pipeline.db.sock
 
 # ── Python ─────────────────────────────────────────────────────────────────────
 __pycache__/
@@ -23,19 +24,15 @@ venv/
 loop/scorers/venv/
 loop/ComfyUI/venv/
 
-# ── Rust build artifacts ───────────────────────────────────────────────────────
-loop/scorers/target/
-
 # ── Java / Ivy ─────────────────────────────────────────────────────────────────
 pipeline/build/
 pipeline/tools/
-pipeline/.gradle/
 
 # ── Model files (large binaries — download via make models) ───────────────────
 loop/scorers/models/vlm/
 loop/scorers/models/tactical/
 loop/scorers/models/artifact-detector/
-strategic-llm/models/
+loop/strategic-llm/models/
 
 # ── Artemis broker data (Docker bind mount) ───────────────────────────────────
 artemis-data/
@@ -53,7 +50,7 @@ loop/ComfyUI/custom_nodes/.nodes-installed
 
 # ── Generated documentation (make docs) ───────────────────────────────────────
 loop/scorers/docs/
-tactical-llm/docs/
+loop/tactical-llm/docs/
 
 # ── LaTeX build artifacts ──────────────────────────────────────────────────────
 *.aux

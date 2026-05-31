@@ -6,7 +6,7 @@ ifeq ($(OS),Windows_NT)
   endif
 endif
 
-.PHONY: all lint typecheck test build format docs clean distclean config check \
+.PHONY: all lint typecheck test build format docs clean distclean config \
         prereqs prereqs-system prereqs-python models models-pick setup \
         k8s-install comfyui-nodes
 
@@ -16,20 +16,20 @@ CFG := $(or $(wildcard config.yaml),config.yaml.default)
 K8S_OK           := loop/.k8s-installed
 COMFYUI_NODES_OK := loop/ComfyUI/custom_nodes/.nodes-installed
 
-all: venv/.installed loop/scorers/venv/.installed tactical-llm/venv/.installed \
+all: venv/.installed loop/scorers/venv/.installed loop/tactical-llm/venv/.installed \
      $(COMFYUI_NODES_OK) lint typecheck test build
 
 lint:
 	$(MAKE) -C loop lint
-	$(MAKE) -C tactical-llm lint
+	$(MAKE) -C loop/tactical-llm lint
 
 typecheck:
 	$(MAKE) -C loop typecheck
-	$(MAKE) -C tactical-llm typecheck
+	$(MAKE) -C loop/tactical-llm typecheck
 
 test:
 	$(MAKE) -C loop test
-	$(MAKE) -C tactical-llm test
+	$(MAKE) -C loop/tactical-llm test
 	$(MAKE) -C pipeline test
 
 build:
@@ -41,14 +41,14 @@ format:
 docs:
 	latexmk -pdf -interaction=nonstopmode ARCHITECTURE.tex
 	$(MAKE) -C loop docs
-	$(MAKE) -C tactical-llm docs
+	$(MAKE) -C loop/tactical-llm docs
 
 clean:
 	latexmk -C ARCHITECTURE.tex
 	rm -f *.aux *.log *.out *.toc *.fls *.fdb_latexmk
 	rm -rf __pycache__
 	$(MAKE) -C loop clean
-	$(MAKE) -C tactical-llm clean
+	$(MAKE) -C loop/tactical-llm clean
 	$(MAKE) -C pipeline clean
 
 # Auto-downloaded model directories are declared in .gitignore.
@@ -56,7 +56,7 @@ clean:
 # new model directory to .gitignore is sufficient to make distclean handle it.
 # Within each such directory a .gitkeep sentinel (if present) is preserved so
 # the placeholder survives and make models knows where to put files.
-MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .gitignore | sed 's|/*$$||')
+MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^loop/strategic-llm/models' .gitignore | sed 's|/*$$||')
 
 # Remove everything that can be regenerated: venvs, the ComfyUI clone, and
 # auto-downloaded model files.  Reads .gitignore and .gitkeep files as the
@@ -66,7 +66,7 @@ MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .git
 # After distclean, restore with: make setup
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
-	rm -rf venv loop/scorers/venv tactical-llm/venv
+	rm -rf venv loop/scorers/venv loop/tactical-llm/venv
 	@echo "==> Removing auto-downloaded model files (preserving .gitkeep sentinels)..."
 	@for d in $(MODEL_DIRS); do \
 	  if [ -d "$$d" ]; then \
@@ -92,11 +92,6 @@ config:
 		exit 1; \
 	}
 	python3.11 menuconfig.py
-
-# Validate the environment against the current config.yaml.
-# Checks services, GPU backend, model files, venvs, and Rust binaries.
-check: config.yaml venv/.installed
-	venv/bin/python3 check_env.py
 
 config.yaml:
 	@echo "config.yaml not found — running make config first"
@@ -268,7 +263,7 @@ prereqs-system: k8s-install
 # Sentinel files (venv/.installed, loop/scorers/venv/.installed) let Make
 # skip reinstallation when nothing has changed.
 prereqs-python: venv/.installed loop/scorers/venv/.installed loop/ComfyUI/venv/.installed \
-                tactical-llm/venv/.installed
+                loop/tactical-llm/venv/.installed
 
 venv/.installed: requirements.txt
 	python3.11 -m venv venv
@@ -321,9 +316,9 @@ $(COMFYUI_NODES_OK): loop/ComfyUI/venv/.installed
 	@touch $(COMFYUI_NODES_OK)
 	@echo "==> ComfyUI custom nodes installed."
 
-tactical-llm/venv/.installed:
-	$(MAKE) -C tactical-llm venv
-	@touch tactical-llm/venv/.installed
+loop/tactical-llm/venv/.installed:
+	$(MAKE) -C loop/tactical-llm venv
+	@touch loop/tactical-llm/venv/.installed
 	@echo "==> tactical-llm venv ready."
 
 # mlx-lm is Apple Silicon only and installed separately after the rest of the requirements.
