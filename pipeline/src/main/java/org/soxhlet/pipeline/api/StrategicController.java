@@ -3,9 +3,11 @@ package org.soxhlet.pipeline.api;
 import org.soxhlet.pipeline.worker.StrategicLlmCaller;
 import org.soxhlet.pipeline.worker.StrategicLlmCaller.SessionResult;
 import org.soxhlet.pipeline.worker.StrategicLlmCaller.State;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.net.URI;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -17,6 +19,13 @@ public class StrategicController {
 
     public StrategicController(StrategicLlmCaller caller) {
         this.caller = caller;
+    }
+
+    @GetMapping({"", "/"})
+    public ResponseEntity<Void> ui() {
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(URI.create("/strategic/index.html"))
+                .build();
     }
 
     @PostMapping("/run")
