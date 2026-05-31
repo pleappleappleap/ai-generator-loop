@@ -18,20 +18,21 @@ _LLM_BASE=$(echo "$_LLM_SERVER_URL" | sed 's|/v1.*||')
 _UI_PORT=$(yq '.ui.port // 7860' "$CFG" 2>/dev/null)
 : "${_UI_PORT:=7860}"
 
-_check_loop_not_running() {
+_stop_loop_if_running() {
     local pid_file="$PIDDIR/pipeline.pid"
     if [ -f "$pid_file" ]; then
         local pid
         pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
-            echo "ERROR: Loop is running (pipeline PID $pid). Stop it first: ./loop.sh stop" >&2
-            exit 1
+            echo "==> Loop super-component is running — stopping it first..."
+            "$SOXHLET_ROOT/loop.sh" stop
+            echo ""
         fi
     fi
 }
 
 _start() {
-    _check_loop_not_running
+    _stop_loop_if_running
 
     echo "==> Starting strategic LLM server..."
     "$STRATEGIC_DIR/strategic_llm.sh" start
