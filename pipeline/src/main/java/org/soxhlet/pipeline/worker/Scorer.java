@@ -256,7 +256,7 @@ public class Scorer {
                 if ("candidate".equals(finalVerdict)) {
                     ObjectNode verdictMsg = buildVerdictMessage(
                             imageUuid, sessionUuid, sequenceNumber, prompt,
-                            workflowPath, workflowId, conversationId,
+                            workflowPath, workflowId, conversationId, imagePath,
                             clipScore, aiConfidence, vlmScores, issues, recs, finalNorthStarSim);
                     jmsTemplate.convertAndSend("loop.verdicts", mapper.writeValueAsString(verdictMsg));
                     log.info("Published verdict for " + imageUuid);
@@ -271,7 +271,7 @@ public class Scorer {
     private ObjectNode buildVerdictMessage(
             String imageUuid, String sessionUuid, int sequenceNumber,
             String prompt, String workflowPath,
-            String workflowId, String conversationId,
+            String workflowId, String conversationId, String imagePath,
             double clipScore, double artifactScore, ObjectNode vlmScores,
             String[] issues, String[] recs, Double northStarSimilarity) {
         ObjectNode scores = mapper.createObjectNode()
@@ -289,6 +289,7 @@ public class Scorer {
         msg.put("workflow_path", workflowPath);
         msg.put("workflow_id", workflowId != null ? workflowId : "");
         msg.put("conversation_id", conversationId != null ? conversationId : "");
+        msg.put("image_path", imagePath != null ? imagePath : "");
         msg.set("scores", scores);
         ArrayNode issuesNode = mapper.createArrayNode();
         for (String i : issues) issuesNode.add(i);

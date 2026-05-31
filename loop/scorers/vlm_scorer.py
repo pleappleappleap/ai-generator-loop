@@ -91,8 +91,17 @@ def analyze(req: AnalyzeRequest) -> dict[str, Any]:
         except Exception as exc:
             raise HTTPException(status_code=422, detail=str(exc))
         url = f"data:{content_type};base64,{base64.b64encode(image_bytes).decode()}"
-    else:
+    elif req.image_url.startswith("data:"):
         url = req.image_url
+    else:
+        try:
+            with open(req.image_url, "rb") as f:
+                image_b64 = base64.b64encode(f.read()).decode()
+        except OSError as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        ext = Path(req.image_url).suffix.lower().lstrip(".")
+        mime = "jpeg" if ext in ("jpg", "jpeg") else ext or "png"
+        url = f"data:image/{mime};base64,{image_b64}"
 
     with _infer_lock:
         response = llm.create_chat_completion(

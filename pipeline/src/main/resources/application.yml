@@ -46,12 +46,13 @@ sidecars:
     url: http://localhost:8083
 
 tactical-llm:
-  system-prompt-file: tactical-llm/system_prompt.md
+  system-prompt-file: loop/tactical-llm/system_prompt.md
   url: http://localhost:8080/v1
   model: default
   temperature: 0.1
-  max-tokens: 512
-  max-tokens-thinking: 4096
+  max-tokens: 128
+  max-tokens-thinking: 512
+  max-tool-iterations: 3
   decisions:
     max-retries: 3
     max-inpaints: 2

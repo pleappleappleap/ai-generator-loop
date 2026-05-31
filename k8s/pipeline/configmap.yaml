@@ -11,7 +11,7 @@ data:
   # Override with the external address (e.g. tcp://<node-ip>:30616) when
   # Artemis runs in a different cluster or VM (see config.yaml broker.url).
   SPRING_ARTEMIS_BROKER_URL: tcp://artemis:61616
-  TACTICAL_LLM_SYSTEM_PROMPT_FILE: /app/tactical-llm/system_prompt.md
+  TACTICAL_LLM_SYSTEM_PROMPT_FILE: /app/loop/tactical-llm/system_prompt.md
   SPRING_ARTEMIS_USER: admin
   SPRING_ARTEMIS_PASSWORD: admin
   SIDECARS_CLIP_SCORER_URL: http://clip-scorer:8081

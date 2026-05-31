@@ -10,8 +10,9 @@ public class TacticalLlmConfig {
     private String url = "http://localhost:8080/v1";
     private String model = "default";
     private double temperature = 0.1;
-    private int maxTokens = 512;
-    private int maxTokensThinking = 4096;
+    private int maxTokens = 128;
+    private int maxTokensThinking = 512;
+    private int maxToolIterations = 3;
     private Decisions decisions = new Decisions();
 
     public String getUrl() { return url; }
@@ -24,6 +25,8 @@ public class TacticalLlmConfig {
     public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
     public int getMaxTokensThinking() { return maxTokensThinking; }
     public void setMaxTokensThinking(int maxTokensThinking) { this.maxTokensThinking = maxTokensThinking; }
+    public int getMaxToolIterations() { return maxToolIterations; }
+    public void setMaxToolIterations(int maxToolIterations) { this.maxToolIterations = maxToolIterations; }
     public Decisions getDecisions() { return decisions; }
     public void setDecisions(Decisions decisions) { this.decisions = decisions; }
 
