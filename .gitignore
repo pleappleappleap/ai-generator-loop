@@ -32,7 +32,7 @@ pipeline/tools/
 loop/scorers/models/vlm/
 loop/scorers/models/tactical/
 loop/scorers/models/artifact-detector/
-loop/strategic-llm/models/
+strategic-llm/models/
 
 # ── Artemis broker data (Docker bind mount) ───────────────────────────────────
 artemis-data/

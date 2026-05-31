@@ -56,7 +56,7 @@ clean:
 # new model directory to .gitignore is sufficient to make distclean handle it.
 # Within each such directory a .gitkeep sentinel (if present) is preserved so
 # the placeholder survives and make models knows where to put files.
-MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^loop/strategic-llm/models' .gitignore | sed 's|/*$$||')
+MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .gitignore | sed 's|/*$$||')
 
 # Remove everything that can be regenerated: venvs, the ComfyUI clone, and
 # auto-downloaded model files.  Reads .gitignore and .gitkeep files as the
