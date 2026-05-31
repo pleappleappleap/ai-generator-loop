@@ -144,6 +144,18 @@ public class Scorer {
                 .retrieve()
                 .body(JsonNode.class);
 
+        // ── North star similarity ──────────────────────────────────────────────
+        Double northStarSimilarity = null;
+        if (embeddingStr != null) {
+            List<Double> simRows = jdbc.queryForList(
+                    "SELECT (1 - (ns.embedding <=> :emb::vector))::float8 " +
+                    "FROM north_star ns " +
+                    "WHERE ns.superseded_at IS NULL AND ns.embedding IS NOT NULL " +
+                    "ORDER BY ns.id DESC LIMIT 1",
+                    Map.of("emb", embeddingStr), Double.class);
+            if (!simRows.isEmpty()) northStarSimilarity = simRows.get(0);
+        }
+
         // ── Threshold logic ────────────────────────────────────────────────────
         String verdict;
         String rejectionReason = null;
@@ -172,9 +184,10 @@ public class Scorer {
         }
 
         // ── Tx2: delete staging row, upsert scores, publish verdict ───────────
-        final String finalVerdict        = verdict;
-        final String finalRejectionReason = rejectionReason;
-        final String finalEmbedding      = embeddingStr;
+        final String  finalVerdict         = verdict;
+        final String  finalRejectionReason = rejectionReason;
+        final String  finalEmbedding       = embeddingStr;
+        final Double  finalNorthStarSim    = northStarSimilarity;
 
         requiresNew.execute(status -> {
             try {
@@ -186,22 +199,23 @@ public class Scorer {
                             image_uuid, session_uuid, sequence_number, prompt,
                             workflow_path, workflow_params, workflow_id, conversation_id,
                             clip_score, artifact_score, vlm_scores, vlm_issues, vlm_recs,
-                            verdict, rejection_reason, image_path, embedding
+                            verdict, rejection_reason, image_path, embedding, north_star_similarity
                         ) VALUES (
                             :imageUuid::uuid, :sessionUuid::uuid, :seqNum, :prompt,
                             :workflowPath, :workflowParams::jsonb, :workflowId::uuid, :conversationId::uuid,
                             :clipScore, :artifactScore, :vlmScores::jsonb, :vlmIssues, :vlmRecs,
-                            :verdict, :rejectionReason, :imagePath, :embedding::vector
+                            :verdict, :rejectionReason, :imagePath, :embedding::vector, :northStarSim
                         )
                         ON CONFLICT (image_uuid) DO UPDATE SET
-                            clip_score       = EXCLUDED.clip_score,
-                            artifact_score   = EXCLUDED.artifact_score,
-                            vlm_scores       = EXCLUDED.vlm_scores,
-                            vlm_issues       = EXCLUDED.vlm_issues,
-                            vlm_recs         = EXCLUDED.vlm_recs,
-                            verdict          = EXCLUDED.verdict,
-                            rejection_reason = EXCLUDED.rejection_reason,
-                            embedding        = EXCLUDED.embedding
+                            clip_score            = EXCLUDED.clip_score,
+                            artifact_score        = EXCLUDED.artifact_score,
+                            vlm_scores            = EXCLUDED.vlm_scores,
+                            vlm_issues            = EXCLUDED.vlm_issues,
+                            vlm_recs              = EXCLUDED.vlm_recs,
+                            verdict               = EXCLUDED.verdict,
+                            rejection_reason      = EXCLUDED.rejection_reason,
+                            embedding             = EXCLUDED.embedding,
+                            north_star_similarity = EXCLUDED.north_star_similarity
                         """;
 
                 MapSqlParameterSource params = new MapSqlParameterSource()
@@ -233,7 +247,8 @@ public class Scorer {
                         .addValue("verdict", finalVerdict)
                         .addValue("rejectionReason", finalRejectionReason)
                         .addValue("imagePath", imagePath)
-                        .addValue("embedding", finalEmbedding);
+                        .addValue("embedding", finalEmbedding)
+                        .addValue("northStarSim", finalNorthStarSim);
 
                 jdbc.update(sql, params);
                 log.info("Stored image " + imageUuid + " verdict=" + finalVerdict);
@@ -242,7 +257,7 @@ public class Scorer {
                     ObjectNode verdictMsg = buildVerdictMessage(
                             imageUuid, sessionUuid, sequenceNumber, prompt,
                             workflowPath, workflowId, conversationId,
-                            clipScore, aiConfidence, vlmScores, issues, recs);
+                            clipScore, aiConfidence, vlmScores, issues, recs, finalNorthStarSim);
                     jmsTemplate.convertAndSend("loop.verdicts", mapper.writeValueAsString(verdictMsg));
                     log.info("Published verdict for " + imageUuid);
                 }
@@ -258,11 +273,12 @@ public class Scorer {
             String prompt, String workflowPath,
             String workflowId, String conversationId,
             double clipScore, double artifactScore, ObjectNode vlmScores,
-            String[] issues, String[] recs) {
+            String[] issues, String[] recs, Double northStarSimilarity) {
         ObjectNode scores = mapper.createObjectNode()
                 .put("clip_score", clipScore)
                 .put("artifact_score", artifactScore);
         scores.set("vlm_scores", vlmScores);
+        if (northStarSimilarity != null) scores.put("north_star_similarity", northStarSimilarity);
 
         ObjectNode msg = mapper.createObjectNode();
         msg.put("image_uuid", imageUuid);

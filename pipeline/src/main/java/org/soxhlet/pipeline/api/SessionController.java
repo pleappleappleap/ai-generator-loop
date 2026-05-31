@@ -1,8 +1,7 @@
 package org.soxhlet.pipeline.api;
 
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.soxhlet.pipeline.service.ContextService;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -14,10 +13,15 @@ public class SessionController {
 
     private final NamedParameterJdbcTemplate jdbc;
     private final ObjectMapper mapper;
+    private final ContextService contextService;
 
-    public SessionController(NamedParameterJdbcTemplate jdbc, ObjectMapper mapper) {
+    public SessionController(
+            NamedParameterJdbcTemplate jdbc,
+            ObjectMapper mapper,
+            ContextService contextService) {
         this.jdbc = jdbc;
         this.mapper = mapper;
+        this.contextService = contextService;
     }
 
     @PostMapping("/session/start")
@@ -42,6 +46,14 @@ public class SessionController {
                 "WHERE conversation_id = :id::uuid",
                 Map.of("id", conversationId));
         if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/north-star")
+    public Map<String, Object> writeNorthStar(@RequestBody Map<String, Object> req) {
+        String content = req.get("content") != null ? req.get("content").toString() : "";
+        if (content.isBlank()) return Map.of("ok", false, "error", "content is required");
+        contextService.writeNorthStar(content, "user");
         return Map.of("ok", true);
     }
 }

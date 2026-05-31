@@ -46,9 +46,23 @@ class ScoreRequest(BaseModel):
     prompt: str
 
 
+class EmbedTextRequest(BaseModel):
+    text: str
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/embed_text")
+def embed_text(req: EmbedTextRequest) -> dict[str, Any]:
+    text = tokenizer([req.text]).to(_device)
+    with torch.no_grad():
+        text_features = model.encode_text(text)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        embedding = text_features.squeeze().tolist()
+    return {"embedding": embedding}
 
 
 @app.post("/score")

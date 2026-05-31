@@ -11,6 +11,7 @@ import base64
 import json
 import sys
 import threading
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -70,9 +71,45 @@ class ScoreRequest(BaseModel):
     prompt: str
 
 
+class AnalyzeRequest(BaseModel):
+    image_url: str
+    question: str
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/analyze")
+def analyze(req: AnalyzeRequest) -> dict[str, Any]:
+    if req.image_url.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(req.image_url) as resp:
+                image_bytes = resp.read()
+                content_type = resp.headers.get("Content-Type", "image/png").split(";")[0].strip()
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+        url = f"data:{content_type};base64,{base64.b64encode(image_bytes).decode()}"
+    else:
+        url = req.image_url
+
+    with _infer_lock:
+        response = llm.create_chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": url}},
+                        {"type": "text", "text": req.question},
+                    ],
+                }
+            ],
+            max_tokens=512,
+            temperature=0.0,
+            stream=False,
+        )
+    return {"answer": response["choices"][0]["message"]["content"]}
 
 
 @app.post("/score")
