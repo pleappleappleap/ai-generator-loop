@@ -8,7 +8,28 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config \
         prereqs prereqs-system prereqs-python models models-pick setup \
-        k8s-install comfyui-nodes
+        k8s-install comfyui-nodes targets
+
+targets:
+	@printf "%-20s %s\n" "all"            "Install venvs, then lint, type-check, test, and compile."
+	@printf "%-20s %s\n" "lint"           "Lint loop/ and loop/tactical-llm/ with ruff."
+	@printf "%-20s %s\n" "typecheck"      "Type-check loop/ and loop/tactical-llm/ with mypy."
+	@printf "%-20s %s\n" "test"           "Run all tests: pytest on loop/ and tactical-llm/, plus Maven on pipeline/."
+	@printf "%-20s %s\n" "build"          "Compile the Java pipeline (mvn compile in pipeline/)."
+	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
+	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
+	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
+	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, and downloaded models."
+	@printf "%-20s %s\n" "config"         "Generate config.yaml via the interactive menuconfig.py TUI."
+	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config, models, then build."
+	@printf "%-20s %s\n" "prereqs"        "Run prereqs-system and prereqs-python."
+	@printf "%-20s %s\n" "prereqs-system" "Install Python 3.11, yq, Java 21, and the HuggingFace CLI."
+	@printf "%-20s %s\n" "prereqs-python" "Create all Python venvs: root, scorers, ComfyUI, and tactical-llm."
+	@printf "%-20s %s\n" "k8s-install"    "Install Colima, K3s, or Rancher Desktop if no cluster is present."
+	@printf "%-20s %s\n" "comfyui-nodes"  "Clone inpaint-nodes and segment_anything into ComfyUI/custom_nodes/."
+	@printf "%-20s %s\n" "models"         "Download all models via scripts/download_models.py."
+	@printf "%-20s %s\n" "models-pick"    "Launch the interactive HuggingFace model browser."
+	@printf "%-20s %s\n" "targets"        "Show this list."
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
@@ -162,8 +183,8 @@ setup: prereqs-system prereqs-python config models build
 prereqs: prereqs-system prereqs-python
 
 # Install system-level packages using the detected package manager.
-# Installs: wget (Linux), Python 3.11, yq, Docker, Rust (via rustup), protoc.
-# LaTeX is optional and only needed for `make doc`.
+# Installs: wget (Linux), Python 3.11, yq, Java 21, HuggingFace CLI.
+# LaTeX is optional and only needed for `make docs`.
 prereqs-system: k8s-install
 	@PKG=""; \
 	if   command -v brew    >/dev/null 2>&1; then PKG=homebrew; \
