@@ -19,20 +19,20 @@ spec:
           imagePullPolicy: Never
           ports:
             - name: http
-              containerPort: 8090
+              containerPort: 12000
           envFrom:
             - configMapRef:
                 name: pipeline-config
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
-              port: 8090
+              port: 12000
             initialDelaySeconds: 20
             periodSeconds: 10
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
-              port: 8090
+              port: 12000
             initialDelaySeconds: 30
             periodSeconds: 15
           resources:

@@ -8,5 +8,5 @@ spec:
     app: pipeline
   ports:
     - name: http
-      port: 8090
-      targetPort: 8090
+      port: 12000
+      targetPort: 12000

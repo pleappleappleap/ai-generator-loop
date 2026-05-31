@@ -234,7 +234,7 @@ Protocol: newline-delimited JSON (request → response per connection).
 ## UI Server REST and WebSocket API
 
 The UI server (`loop/ui/server.py`) exposes the following endpoints on the
-configured port (default 7860):
+configured port (default 12000):
 
 | Method | Path | Description |
 |--------|------|-------------|

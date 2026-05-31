@@ -71,7 +71,7 @@ Once installed (see `INSTALL.md`):
 ~/soxhlet/loop/start_loop.sh
 
 # Open the browser UI
-open http://localhost:7860
+open http://localhost:12000
 ```
 
 Create a conversation, start a workflow, and submit a prompt from the UI.
@@ -117,7 +117,7 @@ The gallery updates in real time as images are generated and scored.
 │   ├── start_broker.sh
 │   ├── start_loop.sh
 │   ├── ui/
-│   │   ├── server.py       FastAPI UI backend (port 7860)
+│   │   ├── server.py       FastAPI UI backend (port 12000)
 │   │   ├── static/         HTML/CSS/JS served by server.py
 │   │   └── pyrightconfig.json
 │   └── scorers/
@@ -141,8 +141,8 @@ The gallery updates in real time as images are generated and scored.
 
 ## Monitoring
 
-- **Browser UI**: `http://localhost:7860` — real-time image gallery and session control
-- **Artemis console**: `http://localhost:8161` (admin / admin by default)
+- **Browser UI**: `http://localhost:12000` — real-time image gallery and session control
+- **Artemis console**: `http://localhost:12009` (admin / admin by default)
 - **Dead-letter queue**: `python loop/monitor.py` streams all failed messages
 - **Message contracts**: `MESSAGES.md` documents every address, routing type,
   protocol, and payload schema

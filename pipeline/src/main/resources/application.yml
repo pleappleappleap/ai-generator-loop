@@ -1,12 +1,12 @@
 server:
-  port: 8090
+  port: 12000
 
 spring:
   application:
     name: pipeline
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/pipeline
+    url: jdbc:postgresql://localhost:12007/pipeline
     username: pipeline
     password: pipeline
 
@@ -19,7 +19,7 @@ spring:
     open-in-view: false
 
   artemis:
-    broker-url: tcp://localhost:61616
+    broker-url: tcp://localhost:12008
     user: admin
     password: admin
 
@@ -39,15 +39,15 @@ management:
 
 sidecars:
   clip-scorer:
-    url: http://localhost:8081
+    url: http://localhost:12002
   artifact-scorer:
-    url: http://localhost:8082
+    url: http://localhost:12003
   vlm-scorer:
-    url: http://localhost:8083
+    url: http://localhost:12004
 
 tactical-llm:
   system-prompt-file: loop/tactical-llm/system_prompt.md
-  url: http://localhost:8080/v1
+  url: http://localhost:12001/v1
   model: default
   temperature: 0.1
   max-tokens: 128
@@ -60,8 +60,8 @@ tactical-llm:
     accept-clip-min: 0.30
 
 comfyui:
-  url: http://localhost:8188
-  ws: ws://localhost:8188/ws
+  url: http://localhost:12006
+  ws: ws://localhost:12006/ws
 
 models:
   sdxl:
@@ -79,9 +79,14 @@ taste:
   synthesis-threshold: 5
 
 ui:
-  llm-url: http://localhost:8080/v1
+  llm-url: http://localhost:12001/v1
   llm-model: default
   workflows-dir: loop/workflows
+
+strategic-llm:
+  url: http://localhost:12005/v1
+  model: default
+  system-prompt-file: strategic-llm/system_prompt.md
 
 scoring:
   clip-threshold: 0.25

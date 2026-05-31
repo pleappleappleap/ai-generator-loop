@@ -34,7 +34,7 @@ generated images in real time.
 4. Sleep 1 s
 5. Rust workers (router, aggregator, lancedb_manager), Python scorers,
    comfyui_worker, tactical_llm
-6. UI server (port 7860)
+6. UI served by pipeline (port 12000)
 7. Monitor
 
 ## Stopping the Loop
@@ -57,8 +57,8 @@ pkill -f "llama.server"
 
 ## Monitoring
 
-- **Browser UI**: http://localhost:7860 — real-time image gallery
-- **Artemis management console**: http://localhost:8161
+- **Browser UI**: http://localhost:12000 — real-time image gallery
+- **Artemis management console**: http://localhost:12009
 - **Dead-letter monitor**: `python ~/soxhlet/loop/monitor.py`
 
 ## Address Topology

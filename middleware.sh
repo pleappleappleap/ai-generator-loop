@@ -34,15 +34,34 @@ _wait_pod_ready() {
     echo " ready (${elapsed}s)"
 }
 
+_start_port_forwards() {
+    mkdir -p "$PIDDIR"
+    kubectl port-forward svc/postgres 12007:5432 -n "$NS" \
+        >"$PIDDIR/pf-postgres.log" 2>&1 &
+    echo $! > "$PIDDIR/pf-postgres.pid"
+    kubectl port-forward svc/artemis 12008:61616 12009:8161 -n "$NS" \
+        >"$PIDDIR/pf-artemis.log" 2>&1 &
+    echo $! > "$PIDDIR/pf-artemis.pid"
+    printf "==> Port-forwards started (postgres→12007, artemis→12008/12009)\n"
+}
+
+_stop_port_forwards() {
+    for f in "$PIDDIR/pf-postgres.pid" "$PIDDIR/pf-artemis.pid"; do
+        [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && rm -f "$f"
+    done
+}
+
 _start() {
     _require_kubectl
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
     _wait_pod_ready "app=postgres" "PostgreSQL" 120
     _wait_pod_ready "app=artemis"  "Artemis"    120
+    _start_port_forwards
     _status
 }
 
 _stop() {
+    _stop_port_forwards
     _require_kubectl
     kubectl scale deployment artemis --replicas=0 -n "$NS" 2>/dev/null || true
     echo "==> Artemis scaled to 0"
@@ -50,6 +69,7 @@ _stop() {
 }
 
 _stop_all() {
+    _stop_port_forwards
     _require_kubectl
     kubectl delete -k "$SOXHLET_ROOT/middleware/k8s/" 2>/dev/null || true
     echo "==> All middleware resources deleted"
@@ -70,10 +90,9 @@ _status() {
         -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' \
         2>/dev/null || echo "localhost")
     echo "==> Endpoints:"
-    echo "  Artemis OpenWire: tcp://${_HOST}:30616"
-    echo "  Artemis AMQP:     ${_HOST}:30672"
-    echo "  Artemis console:  http://${_HOST}:30161  (admin / admin)"
-    echo "  PostgreSQL:       ${_HOST}:5432  (pipeline / pipeline)"
+    echo "  PostgreSQL:       localhost:12007  (pipeline / pipeline)"
+    echo "  Artemis OpenWire: localhost:12008"
+    echo "  Artemis console:  http://localhost:12009  (admin / admin)"
 }
 
 _health() {

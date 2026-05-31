@@ -1,6 +1,6 @@
 #!/bin/sh
 # Strategic super-component manager.
-# Manages the strategic review session: Strategic LLM + strategic UI.
+# Manages the strategic review session: Strategic LLM + pipeline (REST API) + strategic UI.
 # Loop and Strategic are mutually exclusive — Loop must be stopped before starting Strategic.
 # Middleware (Artemis + PostgreSQL) must be running.
 #
@@ -8,15 +8,18 @@
 
 SOXHLET_ROOT="$(cd "$(dirname "$0")" && pwd)"
 STRATEGIC_DIR="$SOXHLET_ROOT/strategic-llm"
+LOOP_DIR="$SOXHLET_ROOT/loop"
 export SOXHLET_ROOT
-. "$SOXHLET_ROOT/loop/lib/component.sh"
+. "$LOOP_DIR/lib/component.sh"
 
-_LLM_SERVER_URL=$(yq '.strategic.model.server_url // "http://localhost:8081/v1"' "$CFG" 2>/dev/null)
-: "${_LLM_SERVER_URL:=http://localhost:8081/v1}"
+_LLM_SERVER_URL=$(yq '.strategic.model.server_url // "http://localhost:12005/v1"' "$CFG" 2>/dev/null)
+: "${_LLM_SERVER_URL:=http://localhost:12005/v1}"
 _LLM_BASE=$(echo "$_LLM_SERVER_URL" | sed 's|/v1.*||')
 
-_UI_PORT=$(yq '.ui.port // 7860' "$CFG" 2>/dev/null)
-: "${_UI_PORT:=7860}"
+_UI_PORT=$(yq '.ui.port // 12000' "$CFG" 2>/dev/null)
+: "${_UI_PORT:=12000}"
+
+_PIPELINE_HEALTH="http://localhost:12000/actuator/health"
 
 _stop_loop_if_running() {
     local pid_file="$PIDDIR/pipeline.pid"
@@ -42,6 +45,11 @@ _start() {
     component_wait_healthy "${_LLM_BASE}/v1/models" "strategic_llm" 300
 
     echo ""
+    echo "==> Starting pipeline (REST API + strategic session handler)..."
+    "$LOOP_DIR/pipeline.sh" start
+    component_wait_healthy "$_PIPELINE_HEALTH" "pipeline" 120 '"UP"'
+
+    echo ""
     echo "==> Starting strategic UI..."
     "$STRATEGIC_DIR/ui.sh" start
     component_wait_healthy "http://localhost:${_UI_PORT}/" "strategic_ui" 60
@@ -53,6 +61,8 @@ _start() {
 _stop() {
     echo "==> Stopping strategic UI..."
     "$STRATEGIC_DIR/ui.sh" stop
+    echo "==> Stopping pipeline..."
+    "$LOOP_DIR/pipeline.sh" stop
     echo "==> Stopping strategic LLM server..."
     "$STRATEGIC_DIR/strategic_llm.sh" stop
     echo "==> Strategic super-component stopped."
@@ -61,6 +71,7 @@ _stop() {
 _status() {
     echo "┌─ Strategic ───────────────────────────────────────────┐"
     "$STRATEGIC_DIR/strategic_llm.sh" status
+    "$LOOP_DIR/pipeline.sh" status
     "$STRATEGIC_DIR/ui.sh" status
     echo "└───────────────────────────────────────────────────────┘"
 }
@@ -70,6 +81,9 @@ _health() {
     component_check_healthy "${_LLM_BASE}/v1/models" \
         && printf "%-22s %s\n" "strategic_llm" "healthy" \
         || { printf "%-22s %s\n" "strategic_llm" "not ready"; ok=1; }
+    component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
+        && printf "%-22s %s\n" "pipeline" "healthy" \
+        || { printf "%-22s %s\n" "pipeline" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_UI_PORT}/" \
         && printf "%-22s %s\n" "strategic_ui" "healthy" \
         || { printf "%-22s %s\n" "strategic_ui" "not ready"; ok=1; }

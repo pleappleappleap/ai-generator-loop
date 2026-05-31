@@ -6,8 +6,8 @@ metadata:
 spec:
   selector:
     app: artemis
-  # NodePort so start_loop.sh and native macOS processes can reach the broker
-  # on fixed host ports (5672/61613/8161) without needing Ingress.
+  # NodePort retained for optional direct access; middleware.sh uses kubectl
+  # port-forward to expose services on the 12000 range instead.
   type: NodePort
   ports:
     - name: openwire

@@ -14,6 +14,6 @@ data:
   TACTICAL_LLM_SYSTEM_PROMPT_FILE: /app/loop/tactical-llm/system_prompt.md
   SPRING_ARTEMIS_USER: admin
   SPRING_ARTEMIS_PASSWORD: admin
-  SIDECARS_CLIP_SCORER_URL: http://clip-scorer:8081
-  SIDECARS_ARTIFACT_SCORER_URL: http://artifact-scorer:8082
-  SIDECARS_VLM_SCORER_URL: http://vlm-scorer:8083
+  SIDECARS_CLIP_SCORER_URL: http://clip-scorer:12002
+  SIDECARS_ARTIFACT_SCORER_URL: http://artifact-scorer:12003
+  SIDECARS_VLM_SCORER_URL: http://vlm-scorer:12004

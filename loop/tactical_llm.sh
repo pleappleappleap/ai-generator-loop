@@ -11,11 +11,11 @@ export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
 
 _resolve() {
-    LLM_SERVER_URL=$(yq '.tactical.model.server_url // "http://localhost:8080/v1"' "$CFG" 2>/dev/null)
-    : "${LLM_SERVER_URL:=http://localhost:8080/v1}"
+    LLM_SERVER_URL=$(yq '.tactical.model.server_url // "http://localhost:12001/v1"' "$CFG" 2>/dev/null)
+    : "${LLM_SERVER_URL:=http://localhost:12001/v1}"
     # Extract port: strip scheme, host, and path leaving just the number.
     LLM_PORT=$(echo "$LLM_SERVER_URL" | sed 's|.*://[^:/]*:||; s|/.*||')
-    : "${LLM_PORT:=8080}"
+    : "${LLM_PORT:=12001}"
 
     LLM_DIR=$(yq '.tactical.model.dir' "$CFG" 2>/dev/null)
     [ "$LLM_DIR" = "auto" ] || [ -z "$LLM_DIR" ] && LLM_DIR="$SCORERS/models/tactical"

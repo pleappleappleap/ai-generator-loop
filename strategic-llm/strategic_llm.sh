@@ -11,10 +11,10 @@ export SOXHLET_ROOT
 . "$SOXHLET_ROOT/loop/lib/component.sh"
 
 _resolve() {
-    LLM_SERVER_URL=$(yq '.strategic.model.server_url // "http://localhost:8081/v1"' "$CFG" 2>/dev/null)
-    : "${LLM_SERVER_URL:=http://localhost:8081/v1}"
+    LLM_SERVER_URL=$(yq '.strategic.model.server_url // "http://localhost:12005/v1"' "$CFG" 2>/dev/null)
+    : "${LLM_SERVER_URL:=http://localhost:12005/v1}"
     LLM_PORT=$(echo "$LLM_SERVER_URL" | sed 's|.*://[^:/]*:||; s|/.*||')
-    : "${LLM_PORT:=8081}"
+    : "${LLM_PORT:=12005}"
 
     LLM_DIR=$(yq '.strategic.model.dir' "$CFG" 2>/dev/null)
     [ "$LLM_DIR" = "auto" ] || [ -z "$LLM_DIR" ] && LLM_DIR="$SCORERS/models/strategic"

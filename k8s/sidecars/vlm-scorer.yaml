@@ -1,5 +1,4 @@
-# ExternalName service for the native VLM scorer FastAPI sidecar (Phase 2).
-# Port 8083 assigned in Phase 2 when vlm_scorer.py is refactored to FastAPI.
+# ExternalName service for the native VLM scorer FastAPI sidecar.
 apiVersion: v1
 kind: Service
 metadata:
@@ -9,5 +8,5 @@ spec:
   type: ExternalName
   externalName: host.lima.internal
   ports:
-    - port: 8083
-      targetPort: 8083
+    - port: 12004
+      targetPort: 12004

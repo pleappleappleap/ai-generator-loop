@@ -1,4 +1,4 @@
-# ExternalName service pointing to the native llama.cpp server on the macOS host.
+# ExternalName service pointing to the native tactical LLM server on the macOS host.
 # On Colima/Lima: host is reachable at host.lima.internal.
 # On other platforms: replace host.lima.internal with the appropriate host address.
 # When Metal containerisation supports GPU pass-through: replace with a Deployment.
@@ -11,5 +11,5 @@ spec:
   type: ExternalName
   externalName: host.lima.internal
   ports:
-    - port: 8080
-      targetPort: 8080
+    - port: 12001
+      targetPort: 12001

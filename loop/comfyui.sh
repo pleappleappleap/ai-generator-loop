@@ -6,8 +6,8 @@ export SOXHLET_ROOT
 
 _health_url() {
     local url
-    url=$(yq '.broker.comfyui_url // "http://127.0.0.1:8188"' "$CFG" 2>/dev/null)
-    echo "${url:-http://127.0.0.1:8188}/system_stats"
+    url=$(yq '.broker.comfyui_url // "http://127.0.0.1:12006"' "$CFG" 2>/dev/null)
+    echo "${url:-http://127.0.0.1:12006}/system_stats"
 }
 
 case "${1:-status}" in

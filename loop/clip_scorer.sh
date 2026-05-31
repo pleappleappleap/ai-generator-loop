@@ -5,8 +5,8 @@ export SOXHLET_ROOT PYTHONPATH="$SOXHLET_ROOT"
 . "$LOOP_DIR/lib/component.sh"
 
 CFG="$SOXHLET_ROOT/config.yaml"
-PORT=$(yq '.sidecars.clip_scorer.port // 8081' "$CFG" 2>/dev/null)
-: "${PORT:=8081}"
+PORT=$(yq '.sidecars.clip_scorer.port // 12002' "$CFG" 2>/dev/null)
+: "${PORT:=12002}"
 
 case "${1:-status}" in
     start)

@@ -11,9 +11,11 @@ COMFYUI=$(yq '.paths.comfyui' "$CFG")
 
 BACKEND=$(yq '.compute.comfyui.backend' "$CFG")
 LISTEN=$(yq '.compute.comfyui.listen' "$CFG")
+PORT=$(yq '.compute.comfyui.port // 12006' "$CFG")
 DEVICE_ID=$(yq '.compute.comfyui.device_id' "$CFG")
 # yq emits "null" for absent keys; normalise to empty
 [ "$LISTEN"    = "null" ] && LISTEN="0.0.0.0"
+[ "$PORT"      = "null" ] && PORT="12006"
 [ "$DEVICE_ID" = "null" ] && DEVICE_ID=""
 
 # Resolve auto to a concrete backend
@@ -45,8 +47,8 @@ esac
 # When binding to all interfaces, print the real hostname so the URL is useful.
 if [ "$LISTEN" = "0.0.0.0" ]; then
     _HOST=$(hostname 2>/dev/null || echo "localhost")
-    echo "==> ComfyUI available at: http://${_HOST}:8188"
+    echo "==> ComfyUI available at: http://${_HOST}:${PORT}"
 fi
 
 # shellcheck disable=SC2086
-exec python main.py --listen "$LISTEN" $EXTRA_ARGS
+exec python main.py --listen "$LISTEN" --port "$PORT" $EXTRA_ARGS

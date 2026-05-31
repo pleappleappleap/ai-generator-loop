@@ -22,24 +22,24 @@ export SOXHLET_ROOT
 
 # ── Config resolution ──────────────────────────────────────────────────────────
 
-_COMFYUI_URL=$(yq '.broker.comfyui_url // "http://127.0.0.1:8188"' "$CFG" 2>/dev/null)
-: "${_COMFYUI_URL:=http://127.0.0.1:8188}"
+_COMFYUI_URL=$(yq '.broker.comfyui_url // "http://127.0.0.1:12006"' "$CFG" 2>/dev/null)
+: "${_COMFYUI_URL:=http://127.0.0.1:12006}"
 
-_LLM_URL=$(yq '.tactical.model.server_url // "http://localhost:8080/v1"' "$CFG" 2>/dev/null)
-: "${_LLM_URL:=http://localhost:8080/v1}"
+_LLM_URL=$(yq '.tactical.model.server_url // "http://localhost:12001/v1"' "$CFG" 2>/dev/null)
+: "${_LLM_URL:=http://localhost:12001/v1}"
 # Strip path to get base URL; mlx_lm.server health check is GET /v1/models
 _LLM_BASE=$(echo "$_LLM_URL" | sed 's|/v1.*||')
 
-_CLIP_PORT=$(yq '.sidecars.clip_scorer.port // 8081' "$CFG" 2>/dev/null)
-: "${_CLIP_PORT:=8081}"
+_CLIP_PORT=$(yq '.sidecars.clip_scorer.port // 12002' "$CFG" 2>/dev/null)
+: "${_CLIP_PORT:=12002}"
 
-_ARTIFACT_PORT=$(yq '.sidecars.artifact_scorer.port // 8082' "$CFG" 2>/dev/null)
-: "${_ARTIFACT_PORT:=8082}"
+_ARTIFACT_PORT=$(yq '.sidecars.artifact_scorer.port // 12003' "$CFG" 2>/dev/null)
+: "${_ARTIFACT_PORT:=12003}"
 
-_VLM_PORT=$(yq '.sidecars.vlm_scorer.port // 8083' "$CFG" 2>/dev/null)
-: "${_VLM_PORT:=8083}"
+_VLM_PORT=$(yq '.sidecars.vlm_scorer.port // 12004' "$CFG" 2>/dev/null)
+: "${_VLM_PORT:=12004}"
 
-_PIPELINE_HEALTH="http://localhost:8090/actuator/health"
+_PIPELINE_HEALTH="http://localhost:12000/actuator/health"
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 
@@ -127,7 +127,7 @@ _status() {
     echo "└───────────────────────────────────────────────────────┘"
     echo ""
     echo "Logs: /tmp/ai-loop/<component>.log"
-    echo "UI:   http://localhost:8090"
+    echo "UI:   http://localhost:12000"
 }
 
 # ── Health ─────────────────────────────────────────────────────────────────────

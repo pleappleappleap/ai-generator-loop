@@ -126,13 +126,13 @@ def _build_defaults() -> dict:
             "artifact": 0.50,
         },
         "broker": {
-            "url":             "tcp://localhost:61616",
-            "artemis_console": "http://localhost:8161",
-            "comfyui_url":     "http://127.0.0.1:8188",
-            "comfyui_ws":      "ws://127.0.0.1:8188/ws",
+            "url":             "tcp://localhost:12008",
+            "artemis_console": "http://localhost:12009",
+            "comfyui_url":     "http://127.0.0.1:12006",
+            "comfyui_ws":      "ws://127.0.0.1:12006/ws",
         },
         "database": {
-            "postgres_url":      "jdbc:postgresql://localhost:5432/pipeline",
+            "postgres_url":      "jdbc:postgresql://localhost:12007/pipeline",
             "postgres_user":     "pipeline",
             "postgres_password": "pipeline",
         },
@@ -164,9 +164,9 @@ def _build_defaults() -> dict:
             "tactical_llm":    {"backend": gpu_backend, "n_gpu_layers": -1, "expert_offload": False},
         },
         "sidecars": {
-            "clip_scorer":     {"url": "http://localhost:8081", "port": 8081},
-            "artifact_scorer": {"url": "http://localhost:8082", "port": 8082},
-            "vlm_scorer":      {"url": "http://localhost:8083", "port": 8083},
+            "clip_scorer":     {"url": "http://localhost:12002", "port": 12002},
+            "artifact_scorer": {"url": "http://localhost:12003", "port": 12003},
+            "vlm_scorer":      {"url": "http://localhost:12004", "port": 12004},
         },
     }
 
@@ -275,8 +275,8 @@ MENU_SCHEMA = [
         "children": [
             {"label": "Artemis URL (OpenWire)", "key": "url",             "type": "string",
              "help": "Artemis OpenWire TCP URL used by the Java pipeline. "
-                     "Local: tcp://localhost:61616. K3s NodePort: tcp://<node-ip>:30616. "
-                     "Remote/virt cluster: set to the broker's external address."},
+                     "Forwarded by middleware.sh to localhost:12008. "
+                     "Remote cluster: set to the broker's external address."},
             {"label": "Artemis console",        "key": "artemis_console", "type": "string",
              "help": "Hawtio management console URL"},
             {"label": "ComfyUI URL",            "key": "comfyui_url",     "type": "string",
@@ -332,7 +332,7 @@ MENU_SCHEMA = [
         "help": "PostgreSQL connection parameters (consumed by Spring Boot application.yml)",
         "children": [
             {"label": "PostgreSQL URL",      "key": "postgres_url",      "type": "string",
-             "help": "JDBC URL, e.g. jdbc:postgresql://localhost:5432/pipeline"},
+             "help": "JDBC URL, e.g. jdbc:postgresql://localhost:12007/pipeline"},
             {"label": "PostgreSQL user",     "key": "postgres_user",     "type": "string",
              "help": "PostgreSQL username"},
             {"label": "PostgreSQL password", "key": "postgres_password", "type": "string",

@@ -119,7 +119,7 @@ TeX is **not** installed automatically. It is only needed to regenerate
 
 The pipeline runs Artemis via the official Docker image. No manual broker
 instance creation or `broker.xml` editing is required — AMQP (5672), STOMP
-(61613), and the management console (8161) are pre-enabled in the image.
+(61613), and the management console (8161 → forwarded to 12009) are pre-enabled in the image.
 
 ### Install Docker
 
@@ -154,7 +154,7 @@ container), so queue state survives container restarts.
 
 ### Management console
 
-`http://localhost:8161` — credentials: **admin / admin**
+`http://localhost:12009` — credentials: **admin / admin**
 
 ---
 
@@ -376,12 +376,12 @@ models:
 tactical:
   model:
     filename:   Qwen3-72B-abliterated-Q4_K_M.gguf
-    server_url: http://localhost:8080/v1
+    server_url: http://localhost:12001/v1
     model_name: qwen3-72b
 
 ui:
   host: 0.0.0.0
-  port: 7860
+  port: 12000
 ```
 
 The `backend: auto` setting detects the platform at startup: macOS → MPS;
@@ -425,7 +425,7 @@ $SOXHLET_ROOT/loop/start_broker.sh
 $SOXHLET_ROOT/loop/start_loop.sh
 
 # Terminal 3: Open the browser UI
-open http://localhost:7860
+open http://localhost:12000
 ```
 
 `start_loop.sh` starts components in this order:
@@ -438,7 +438,7 @@ open http://localhost:7860
 6. UI server (`server.py`)
 7. Monitor
 
-From the browser UI at `http://localhost:7860`:
+From the browser UI at `http://localhost:12000`:
 1. Create a **conversation** (a named project).
 2. Create a **workflow** (choose a workflow JSON and parameters).
 3. Click **Start** to submit a prompt — images appear in the gallery as they
@@ -450,12 +450,12 @@ From the browser UI at `http://localhost:7860`:
 
 ### Browser UI
 
-Open `http://localhost:7860`. The gallery section should be visible. Creating
+Open `http://localhost:12000`. The gallery section should be visible. Creating
 a conversation and workflow exercises the coordinator socket API end-to-end.
 
 ### Broker console
 
-Open `http://localhost:8161` (default credentials: admin / admin). Confirm
+Open `http://localhost:12009` (default credentials: admin / admin). Confirm
 the following addresses appear under **Addresses**:
 
 - `loop.request` (anycast)

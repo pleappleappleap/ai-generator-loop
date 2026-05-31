@@ -84,6 +84,7 @@ compute:
     backend: auto
     listen: 0.0.0.0       # address ComfyUI binds to; 0.0.0.0 = all interfaces
                           # set to 127.0.0.1 to restrict to localhost only
+    port: 12006
     device_id:            # optional: integer device index passed as --default-device
                           # useful when multiple GPUs are present (e.g. eGPU via Thunderbolt)
                           # omit or leave blank to use the default device
@@ -108,15 +109,13 @@ thresholds:
   score_timeout_secs: 60
 
 broker:
-  url: tcp://localhost:61616            # Artemis OpenWire — Java pipeline connects here
-                                        # K3s NodePort: tcp://<node-ip>:30616
-                                        # Remote/virt cluster: set to the broker's external address
-  artemis_console: http://localhost:8161
-  comfyui_url: http://127.0.0.1:8188
-  comfyui_ws: ws://127.0.0.1:8188/ws
+  url: tcp://localhost:12008            # Artemis OpenWire — forwarded by middleware.sh port-forward
+  artemis_console: http://localhost:12009
+  comfyui_url: http://127.0.0.1:12006
+  comfyui_ws: ws://127.0.0.1:12006/ws
 
 database:
-  postgres_url: jdbc:postgresql://localhost:5432/pipeline   # override for K8s: jdbc:postgresql://postgres:5432/pipeline
+  postgres_url: jdbc:postgresql://localhost:12007/pipeline   # override for K8s: jdbc:postgresql://postgres:5432/pipeline
   username: pipeline
   password: pipeline
 
@@ -134,7 +133,7 @@ tactical:
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 128              # SD 1.5 generates in 3–8s; decisions must be concise
     max_tokens_thinking: 512     # thinking budget for borderline/escalate re-queries only
-    server_url: http://localhost:8080/v1   # mlx_lm.server OpenAI-compatible endpoint
+    server_url: http://localhost:12001/v1   # mlx_lm.server OpenAI-compatible endpoint
     model_name: default
   decisions:
     max_retries: 3    # retry budget per session
@@ -153,15 +152,13 @@ strategic:
     source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
     context_length: 32768
     temperature: 0.6  # higher than tactical; strategic review benefits from exploration
-    server_url: http://localhost:8081/v1   # separate port — Loop and Strategic never run together
+    server_url: http://localhost:12005/v1
     model_name: default
 
 ui:
-  port: 7860           # port the browser UI listens on
-  host: 0.0.0.0        # bind address; set to 127.0.0.1 to restrict to localhost
   # chat_backend: override which LLM server the chat panel talks to.
   # Defaults to tactical.model.server_url / model_name when omitted.
   # Set this to the strategic LLM server when running a strategic session.
   # chat_backend:
-  #   server_url: http://localhost:8081/v1
+  #   server_url: http://localhost:12005/v1
   #   model_name: default

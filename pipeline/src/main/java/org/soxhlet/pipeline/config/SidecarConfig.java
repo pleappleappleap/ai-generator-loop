@@ -31,4 +31,10 @@ public class SidecarConfig {
             @Value("${tactical-llm.url}") String url) {
         return RestClient.builder().baseUrl(url).build();
     }
+
+    @Bean("strategicLlmClient")
+    public RestClient strategicLlmClient(
+            @Value("${strategic-llm.url}") String url) {
+        return RestClient.builder().baseUrl(url).build();
+    }
 }

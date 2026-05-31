@@ -36,7 +36,7 @@ case "${1:-status}" in
         ;;
     status)  component_status pipeline ;;
     health)
-        if component_check_healthy "http://localhost:8090/actuator/health" '"UP"'; then
+        if component_check_healthy "http://localhost:12000/actuator/health" '"UP"'; then
             printf "%-22s %s\n" "pipeline" "healthy"
         else
             printf "%-22s %s\n" "pipeline" "not ready"
