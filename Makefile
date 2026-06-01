@@ -19,7 +19,7 @@ targets:
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
 	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
-	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, and downloaded models."
+	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
 	@printf "%-20s %s\n" "config"         "Generate config.yaml via the interactive menuconfig.py TUI."
 	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config, models, then build."
 	@printf "%-20s %s\n" "prereqs"        "Run prereqs-system and prereqs-python."
@@ -101,6 +101,8 @@ distclean: clean
 	@echo "==> Removing ComfyUI clone (including models)..."
 	rm -rf loop/ComfyUI
 	git checkout -- loop/ComfyUI/
+	@echo "==> Removing generated config..."
+	rm -f config.yaml
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 
 # Interactive configuration TUI (menuconfig-style).
