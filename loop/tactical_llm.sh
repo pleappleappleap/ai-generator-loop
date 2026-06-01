@@ -51,7 +51,8 @@ _start() {
             --model "$LLM_MODEL" \
             --port "$LLM_PORT" \
             --host 0.0.0.0 \
-            --max-tokens 128
+            --max-tokens 128 \
+            --chat-template-args '{"enable_thinking":false}'
     else
         if [ ! -f "$LLM_MODEL" ]; then
             echo "==> tactical_llm: GGUF model not found at $LLM_MODEL — run 'make models'" >&2

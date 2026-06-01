@@ -200,7 +200,7 @@ public class ChatWsHandler extends TextWebSocketHandler {
         body.set("messages", messages);
         body.put("stream", true);
         body.put("temperature", 0.7);
-        body.put("max_tokens", 2048);
+        body.put("max_tokens", 1024);
 
         String requestJson = mapper.writeValueAsString(body);
 
