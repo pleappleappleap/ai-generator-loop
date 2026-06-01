@@ -216,7 +216,7 @@ can reach them on the 12000 port range.
 
 \begin{lstlisting}[style=shell]
 # Apply the K3s manifests (once)
-kubectl apply -f middleware/k8s/
+make middleware-apply
 
 # Start middleware and establish port-forwards
 $SOXHLET_ROOT/middleware.sh start
@@ -294,8 +294,18 @@ EOF
 
 \subsubsection{VLM scorer (Qwen3-VL-8B)}
 
+\textbf{macOS} --- safetensors (mlx-vlm loads HuggingFace format directly;
+quantized to Q8 on first startup):
+
 \begin{lstlisting}[style=shell]
-# ~9 GB download (Q8 GGUF + multimodal projector)
+huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2 \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm/\
+Qwen3-VL-8B-Instruct-abliterated-v2
+\end{lstlisting}
+
+\textbf{Linux / Windows} --- Q8 GGUF + multimodal projector ($\sim$9\,GB):
+
+\begin{lstlisting}[style=shell]
 huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
   Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
   Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
@@ -975,7 +985,7 @@ LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 \begin{center}
 \begin{tabular}{lll}
 \toprule
-\textbf{Property (\texttt{application.yml})} & \textbf{Default} & \textbf{Semantics} \\
+\textbf{Property (\texttt{config.yaml})} & \textbf{Default} & \textbf{Semantics} \\
 \midrule
 \texttt{scoring.clip-threshold}     & 0.25 & Reject in Scorer if CLIP score $< 0.25$ \\
 \texttt{scoring.artifact-threshold} & 0.50 & Reject in Scorer if AI confidence $> 0.50$ \\
