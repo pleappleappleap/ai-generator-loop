@@ -219,40 +219,68 @@ EOF
 
 ### VLM scorer (Qwen3-VL-8B)
 
+Platform-dependent format. `make models` selects the correct download automatically.
+
+**macOS** — safetensors (mlx-vlm loads HuggingFace format directly; quantized to Q8
+on first startup):
 ```bash
 mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
-# ~9 GB download (Q8 GGUF + mmproj)
+huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2 \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen3-VL-8B-Instruct-abliterated-v2
+```
+
+**Linux / Windows** — Q8 GGUF + mmproj (~9 GB):
+```bash
+mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
 huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
   Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
   Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
   --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm
 ```
 
-### Tactical LLM (Qwen3-Next-80B-A3B, MLX 4-bit)
+### Tactical LLM (Qwen3-Next-80B-A3B)
 
-The tactical LLM is an ultra-sparse MoE model: 80B total parameters, ~3B active
-per forward pass. It runs as an **mlx\_lm.server** (started automatically by
-`loop.sh`) and exposes an OpenAI-compatible API on port 12001.
+Ultra-sparse MoE: 80B total parameters, ~3B active per forward pass. Served by
+`mlx_lm.server` (macOS) or `llama_cpp.server` (Linux/Windows), started automatically
+by `loop.sh`. Exposes an OpenAI-compatible API on port 12001.
 
+**macOS** — MLX 4-bit (~45 GB):
 ```bash
-# ~45 GB download (pre-converted MLX 4-bit)
 source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
 huggingface-cli download \
   huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit \
   --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
 ```
 
-### Strategic LLM (Qwen3-Next-80B-A3B-Thinking, bf16)
-
-Same base architecture as tactical. Full bf16 precision; `mlx_lm.server`
-streams expert arrays from SSD. Extended chain-of-thought for strategic review.
-
+**Linux / Windows** — Q4_K_M GGUF (~45 GB):
 ```bash
-# ~160 GB download (bf16 safetensors)
+source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
+huggingface-cli download \
+  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-GGUF \
+  Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical
+```
+
+### Strategic LLM (Qwen3-Next-80B-A3B-Thinking)
+
+Same base architecture as tactical. Thinking variant; extended chain-of-thought for
+strategic review. Served by `mlx_lm.server` (macOS) or `llama_cpp.server` (Linux/Windows).
+
+**macOS** — bf16 safetensors (~160 GB; MLX streams expert arrays from SSD):
+```bash
 source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
 huggingface-cli download \
   huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated \
   --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+```
+
+**Linux / Windows** — Q4_K_M GGUF (~45 GB):
+```bash
+source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
+huggingface-cli download \
+  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated-GGUF \
+  Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf \
+  --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic
 ```
 
 Model names and paths are configured in `config.yaml` under `tactical.model`

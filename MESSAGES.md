@@ -24,13 +24,16 @@ All addresses below use anycast routing.
   "sequence_number": "integer",
   "workflow_path":   "string",
   "prompt":          "string",
+  "model_type":      "string (optional: 'sdxl' | 'flux')",
   "workflow_params": {
     "checkpoint": "string",
     "steps":      "integer",
     "cfg":        "float",
     "sampler":    "string",
     "seed":       "integer (optional)"
-  }
+  },
+  "graph_ops": "array (optional — workflow graph patch operations)",
+  "loras":     "array (optional — LoRA entries to inject)"
 }
 ```
 
@@ -39,16 +42,17 @@ All addresses below use anycast routing.
 **Consumer:** `ComfyUiWorker`
 **Protocol:** AMQP 1.0
 
-Same schema as `loop.generate`. Carries revised prompt and/or workflow params from the
-tactical LLM.
+Same schema as `loop.generate` (including `graph_ops` and `loras`). Carries revised
+prompt, workflow params, and optional LoRA/graph changes from the tactical LLM.
 
 ### `loop.inpaint`
-**Publisher:** `TacticalLlmCaller` (inpaint decision)
-**Consumer:** `ComfyUiWorker`
+**Publisher:** none (not yet implemented)
+**Consumer:** `ComfyUiWorker` (listener registered; queue is currently dead)
 **Protocol:** AMQP 1.0
 
-Same schema as `loop.generate`. The workflow params carry inpainting region and prompt
-information derived from the tactical LLM decision.
+`TacticalLlmCaller` currently downgrades `inpaint` decisions to `retry` and publishes
+to `loop.retry` instead. `loop.inpaint` has a registered JMS listener in
+`ComfyUiWorker` but receives no messages in the current implementation.
 
 ### `loop.generated`
 **Publisher:** `ComfyUiWorker` (after ComfyUI generation completes)
@@ -78,6 +82,7 @@ information derived from the tactical LLM decision.
 ```json
 {
   "image_uuid":      "string",
+  "verdict":         "string (always 'candidate')",
   "session_uuid":    "string",
   "workflow_id":     "string",
   "conversation_id": "string",
@@ -86,20 +91,19 @@ information derived from the tactical LLM decision.
   "workflow_path":   "string",
   "image_path":      "string",
   "scores": {
-    "clip":     {"image_uuid": "string", "clip_score": "float", "image_embedding": "array[float] 512-dim"},
-    "artifact": {"image_uuid": "string", "ai_confidence": "float"},
-    "vlm":      {
-      "image_uuid":               "string",
+    "clip_score":           "float 0.0-1.0",
+    "artifact_score":       "float 0.0-1.0",
+    "vlm_scores": {
       "photorealism":             "float 0-10",
       "anatomical_coherence":     "float 0-10",
       "interaction_plausibility": "float 0-10",
       "lighting_consistency":     "float 0-10",
-      "prompt_adherence":         "float 0-10",
-      "issues":                   ["string"],
-      "recommendations":          ["string"]
-    }
+      "prompt_adherence":         "float 0-10"
+    },
+    "north_star_similarity": "float 0.0-1.0 (omitted if no active north star)"
   },
-  "north_star_similarity": "float 0.0-1.0 (null if no active north star)"
+  "vlm_issues":  ["string"],
+  "vlm_recs":    ["string"]
 }
 ```
 
@@ -128,7 +132,8 @@ by the `Scorer` Java class (not via the broker).
 ```
 POST /score
 { "image_uuid": "string", "image_path": "string", "prompt": "string" }
-→ { "image_uuid": "string", "clip_score": "float 0.0-1.0", "image_embedding": "array[float] 512-dim" }
+→ { "image_uuid": "string", "clip_score": "float 0.0-1.0",
+    "image_embedding": "array[float] 512-dim", "prompt_embedding": "array[float] 512-dim" }
 
 POST /embed_text
 { "text": "string" }
@@ -173,6 +178,7 @@ The Spring Boot pipeline exposes the following endpoints on port 12000:
 | `POST` | `/workflow/new` | Create a new workflow and start a run |
 | `POST` | `/workflow/{id}/resume` | Resume an existing workflow with new budget |
 | `POST` | `/workflow/{id}/start-run` | Publish a `loop.generate` message to start generation |
+| `POST` | `/conversations/{id}/cancel` | Cancel all pending work for a conversation |
 | `POST` | `/feedback` | Submit a thumbs rating |
 | `GET` | `/history` | Fetch conversation context (chat + feedback) |
 | `GET` | `/image/{uuid}` | Serve a generated image (local file) |

@@ -100,8 +100,8 @@ The gallery updates in real time as images are generated and scored.
 | `clip_scorer.py` | Python / FastAPI | ViT-L-14 CLIP semantic similarity; `/score` + `/embed_text` |
 | `artifact_scorer.py` | Python / FastAPI | AI-image-detector artifact confidence; `/score` |
 | `vlm_scorer.py` | Python / FastAPI | Qwen3-VL-8B holistic image evaluation; `/score` + `/analyze` |
-| `tactical LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B (MLX 4-bit) on port 12001 |
-| `strategic LLM server` | Python / mlx_lm | Serves Qwen3-Next-80B-A3B-Thinking (bf16) on port 12005 |
+| `tactical LLM server` | Python / mlx_lm (macOS) or llama_cpp (Linux) | Serves Qwen3-Next-80B-A3B on port 12001 |
+| `strategic LLM server` | Python / mlx_lm (macOS) or llama_cpp (Linux) | Serves Qwen3-Next-80B-A3B-Thinking on port 12005 |
 
 ---
 

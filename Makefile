@@ -270,7 +270,7 @@ prereqs-system: k8s-install
 	  esac; \
 	fi; \
 	\
-	echo "==> LaTeX (optional — needed for 'make doc')"; \
+	echo "==> LaTeX (optional — needed for 'make docs')"; \
 	if command -v latexmk >/dev/null 2>&1; then \
 	  echo "    already installed."; \
 	else \
