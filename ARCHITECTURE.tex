@@ -744,9 +744,9 @@ transactions, preventing message loss across restarts:
         default~5) is reached.
   \item[\texttt{pipeline\_events}] Mode switch signalling. Written by
         \texttt{TacticalLlmCaller} on \texttt{escalate} decision
-        (\texttt{type = 'mode\_switch\_requested'}). Read by
-        \texttt{StrategicLlmCaller.checkPendingEscalation()} (\texttt{@Scheduled}
-        every 10\,s) to trigger strategic session execution.
+        (\texttt{type = 'mode\_switch\_requested'}). Read by the
+        orchestration layer (\texttt{loop.sh} monitor or the operator) to
+        decide when to start the Strategic super-component.
 \end{description}
 
 \subsection{Conversation and Workflow Hierarchy}
@@ -793,9 +793,6 @@ pipeline at \texttt{http://localhost:12000}.
 \texttt{POST} & \texttt{/feedback}                    & Record thumbs up/down for an image \\
 \texttt{GET}  & \texttt{/history}                     & Recent chat and feedback for a workflow \\
 \texttt{GET}  & \texttt{/image/\{uuid\}}              & Serve a generated image from disk \\
-\texttt{GET}  & \texttt{/strategic/}                  & Strategic review UI \\
-\texttt{POST} & \texttt{/strategic/run}               & Trigger a strategic session manually \\
-\texttt{GET}  & \texttt{/strategic/status}            & Current strategic session state \\
 \texttt{POST} & \texttt{/north-star}                  & Write a new north star directly \\
 \bottomrule
 \end{tabular}
