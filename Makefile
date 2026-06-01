@@ -8,40 +8,31 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config-default menuconfig \
         prereqs prereqs-system prereqs-python models models-pick setup \
-        k8s-install comfyui-nodes targets check-docs \
-        middleware-apply start stop stop-all status health \
-        start-strategic stop-strategic
+        k8s-install middleware-apply comfyui-nodes targets check-docs
 
 targets:
-	@printf "%-24s %s\n" "all"              "Install venvs, then lint, type-check, test, and compile."
-	@printf "%-24s %s\n" "lint"             "Lint loop/ and loop/tactical-llm/ with ruff."
-	@printf "%-24s %s\n" "typecheck"        "Type-check loop/ and loop/tactical-llm/ with mypy."
-	@printf "%-24s %s\n" "test"             "Run all tests: pytest on loop/ and tactical-llm/, plus JUnit on pipeline/."
-	@printf "%-24s %s\n" "build"            "Compile the Java pipeline with Ivy and javac."
-	@printf "%-24s %s\n" "format"           "Format loop/ with ruff."
-	@printf "%-24s %s\n" "docs"             "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
-	@printf "%-24s %s\n" "clean"            "Remove build artifacts and caches."
-	@printf "%-24s %s\n" "distclean"        "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
-	@printf "%-24s %s\n" "config-default"   "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
-	@printf "%-24s %s\n" "menuconfig"       "Generate config.yaml via the interactive menuconfig.py TUI."
-	@printf "%-24s %s\n" "setup"            "Full first-time setup: prereqs, config-default, models, middleware-apply, then build."
-	@printf "%-24s %s\n" "prereqs"          "Run prereqs-system and prereqs-python."
-	@printf "%-24s %s\n" "prereqs-system"   "Install Python 3.11, yq, Java 21, and the HuggingFace CLI."
-	@printf "%-24s %s\n" "prereqs-python"   "Create all Python venvs: root, scorers, ComfyUI, and tactical-llm."
-	@printf "%-24s %s\n" "k8s-install"      "Install Colima, K3s, or Rancher Desktop if no cluster is present."
-	@printf "%-24s %s\n" "middleware-apply" "Apply K3s manifests for Artemis and PostgreSQL (idempotent)."
-	@printf "%-24s %s\n" "comfyui-nodes"    "Clone inpaint-nodes and segment_anything into ComfyUI/custom_nodes/."
-	@printf "%-24s %s\n" "models"           "Download all models via scripts/download_models.py."
-	@printf "%-24s %s\n" "models-pick"      "Launch the interactive HuggingFace model browser."
-	@printf "%-24s %s\n" "check-docs"       "Verify key factual claims in MESSAGES.md and ARCHITECTURE.tex against source code."
-	@printf "%-24s %s\n" "start"            "Start middleware + the full Loop super-component."
-	@printf "%-24s %s\n" "stop"             "Stop the Loop super-component (middleware stays running)."
-	@printf "%-24s %s\n" "stop-all"         "Stop Loop and middleware."
-	@printf "%-24s %s\n" "status"           "Show status of all components."
-	@printf "%-24s %s\n" "health"           "Check health of all Loop components."
-	@printf "%-24s %s\n" "start-strategic"  "Start the Strategic super-component (Loop must be stopped first)."
-	@printf "%-24s %s\n" "stop-strategic"   "Stop the Strategic super-component."
-	@printf "%-24s %s\n" "targets"          "Show this list."
+	@printf "%-20s %s\n" "all"            "Install venvs, then lint, type-check, test, and compile."
+	@printf "%-20s %s\n" "lint"           "Lint loop/ and loop/tactical-llm/ with ruff."
+	@printf "%-20s %s\n" "typecheck"      "Type-check loop/ and loop/tactical-llm/ with mypy."
+	@printf "%-20s %s\n" "test"           "Run all tests: pytest on loop/ and tactical-llm/, plus JUnit on pipeline/."
+	@printf "%-20s %s\n" "build"          "Compile the Java pipeline with Ivy and javac."
+	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
+	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
+	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
+	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
+	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
+	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
+	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, middleware-apply, then build."
+	@printf "%-20s %s\n" "prereqs"        "Run prereqs-system and prereqs-python."
+	@printf "%-20s %s\n" "prereqs-system" "Install Python 3.11, yq, Java 21, and the HuggingFace CLI."
+	@printf "%-20s %s\n" "prereqs-python" "Create all Python venvs: root, scorers, ComfyUI, and tactical-llm."
+	@printf "%-20s %s\n" "k8s-install"    "Install Colima, K3s, or Rancher Desktop if no cluster is present."
+	@printf "%-20s %s\n" "middleware-apply" "Apply K3s manifests for Artemis and PostgreSQL (idempotent)."
+	@printf "%-20s %s\n" "comfyui-nodes"  "Clone inpaint-nodes and segment_anything into ComfyUI/custom_nodes/."
+	@printf "%-20s %s\n" "models"         "Download all models via scripts/download_models.py."
+	@printf "%-20s %s\n" "models-pick"    "Launch the interactive HuggingFace model browser."
+	@printf "%-20s %s\n" "check-docs"     "Verify key factual claims in MESSAGES.md and ARCHITECTURE.tex against source code."
+	@printf "%-20s %s\n" "targets"        "Show this list."
 
 # Use generated config.yaml if present, otherwise fall back to the template.
 CFG := $(or $(wildcard config.yaml),config.yaml.default)
@@ -391,38 +382,3 @@ models: venv/.installed
 models-pick: venv/.installed
 	venv/bin/python model_picker.py
 
-# ── Runtime ───────────────────────────────────────────────────────────────────
-
-# Start the full Loop super-component (starts middleware first if needed).
-# Pass AUTO_ESCALATE=1 to enable autonomous escalation handoff to strategic.sh:
-#   make start AUTO_ESCALATE=1
-start:
-	@if [ "$(AUTO_ESCALATE)" = "1" ]; then \
-	  ./loop.sh start --auto-escalate; \
-	else \
-	  ./loop.sh start; \
-	fi
-
-# Stop the Loop super-component. Middleware (Artemis + PostgreSQL) keeps running.
-stop:
-	./loop.sh stop
-
-# Stop Loop and middleware.
-stop-all:
-	./loop.sh stop --all
-
-# Show status of all components.
-status:
-	./loop.sh status
-
-# Check health of all Loop components. Exits 0 if all healthy.
-health:
-	./loop.sh health
-
-# Start the Strategic super-component. Loop must be stopped first.
-start-strategic:
-	./strategic.sh start
-
-# Stop the Strategic super-component.
-stop-strategic:
-	./strategic.sh stop

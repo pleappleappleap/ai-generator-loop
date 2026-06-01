@@ -410,10 +410,10 @@ This runs Ivy dependency resolution and `javac --release 21` against the pipelin
 ## 10. First Run
 
 ```bash
-make start
+$SOXHLET_ROOT/loop.sh start
 ```
 
-`make start` starts middleware first, then all Loop components in dependency
+`loop.sh start` starts middleware first, then all Loop components in dependency
 order, blocking until each tier is healthy:
 
 1. Middleware (Artemis on 12008, PostgreSQL on 12007)
@@ -435,18 +435,18 @@ To enable autonomous mode switching — where a tactical `escalate` decision
 automatically hands off to the strategic session without operator intervention:
 
 ```bash
-make start AUTO_ESCALATE=1
+$SOXHLET_ROOT/loop.sh start --auto-escalate
 ```
 
-Without `AUTO_ESCALATE=1`, the pipeline shuts down on escalation but the
+Without `--auto-escalate`, the pipeline shuts down on escalation but the
 operator starts the strategic session manually:
 
 ```bash
-make start-strategic
+$SOXHLET_ROOT/strategic.sh start
 ```
 
-The `AUTO_ESCALATE` flag is per-invocation and not persisted, which prevents
-runaway mode-switch cycles if the pipeline exits unexpectedly.
+The flag is per-invocation and not persisted, which prevents runaway
+mode-switch cycles if the pipeline exits unexpectedly.
 
 ---
 
@@ -460,7 +460,7 @@ a conversation and workflow exercises the coordinator socket API end-to-end.
 ### Component health
 
 ```bash
-make health
+$SOXHLET_ROOT/loop.sh health
 ```
 
 ### Broker console
@@ -492,6 +492,6 @@ make test
 ## Stopping the Pipeline
 
 ```bash
-make stop        # stop Loop; middleware keeps running
-make stop-all    # stop Loop and middleware
+$SOXHLET_ROOT/loop.sh stop        # stop Loop; middleware keeps running
+$SOXHLET_ROOT/loop.sh stop --all  # stop Loop and middleware
 ```
