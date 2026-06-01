@@ -347,11 +347,11 @@ loop/scorers/venv/.installed: loop/scorers/requirements.txt
 	python3.11 -m venv loop/scorers/venv
 	loop/scorers/venv/bin/pip install --upgrade pip
 	loop/scorers/venv/bin/pip install -r loop/scorers/requirements.txt
-	@echo "==> Installing mlx-lm (Apple Silicon — required for tactical/strategic LLM serving)..."; \
+	@echo "==> Installing MLX packages (Apple Silicon — mlx-lm + mlx-vlm)..."; \
 	if [ "$$(uname)" = "Darwin" ]; then \
-	  loop/scorers/venv/bin/pip install mlx-lm; \
+	  loop/scorers/venv/bin/pip install mlx-lm mlx-vlm; \
 	else \
-	  echo "    NOTE: mlx-lm is Apple Silicon only — LLM serving unavailable on this platform." >&2; \
+	  echo "    NOTE: mlx-lm and mlx-vlm are Apple Silicon only — skipping." >&2; \
 	fi
 	@touch loop/scorers/venv/.installed
 	@echo "==> Scorers venv ready."

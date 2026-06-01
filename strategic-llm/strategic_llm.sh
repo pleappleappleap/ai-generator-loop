@@ -1,7 +1,11 @@
 #!/bin/sh
 # Strategic LLM component manager.
-# Serves the strategic review model via mlx_lm.server (OpenAI-compatible API).
-# Health check: GET /v1/models (mlx_lm.server has no /health endpoint).
+#
+# macOS:          mlx_lm.server (MLX native, loads MLX model directory)
+# Linux/Windows:  llama_cpp.server (GGUF, CUDA or CPU)
+#
+# Both backends expose an OpenAI-compatible API.
+# Health check: GET /v1/models (neither server has a /health endpoint).
 #
 # Usage: strategic_llm.sh {start|stop|restart|status|health}
 
@@ -18,25 +22,47 @@ _resolve() {
 
     LLM_DIR=$(yq '.strategic.model.dir' "$CFG" 2>/dev/null)
     [ "$LLM_DIR" = "auto" ] || [ -z "$LLM_DIR" ] && LLM_DIR="$SCORERS/models/strategic"
-    LLM_NAME=$(yq '.strategic.model.name' "$CFG" 2>/dev/null)
-    : "${LLM_NAME:=}"
-    LLM_MODEL="$LLM_DIR/$LLM_NAME"
 
     LLM_CTX=$(yq '.strategic.model.context_length // 32768' "$CFG" 2>/dev/null)
     : "${LLM_CTX:=32768}"
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        LLM_NAME=$(yq '.strategic.model.name' "$CFG" 2>/dev/null)
+        : "${LLM_NAME:=}"
+        LLM_BACKEND=mlx
+    else
+        LLM_NAME=$(yq '.strategic.model.linux.name' "$CFG" 2>/dev/null)
+        : "${LLM_NAME:=}"
+        LLM_BACKEND=llama_cpp
+    fi
+
+    LLM_MODEL="$LLM_DIR/$LLM_NAME"
 }
 
 _start() {
     _resolve
-    if [ ! -d "$LLM_MODEL" ]; then
-        echo "==> strategic_llm: model not found at $LLM_MODEL — run 'make models'" >&2
-        return 1
+    if [ "$LLM_BACKEND" = "mlx" ]; then
+        if [ ! -d "$LLM_MODEL" ]; then
+            echo "==> strategic_llm: MLX model not found at $LLM_MODEL — run 'make models'" >&2
+            return 1
+        fi
+        component_start strategic_llm \
+            "$SVENV/bin/python" -m mlx_lm.server \
+            --model "$LLM_MODEL" \
+            --port "$LLM_PORT" \
+            --host 0.0.0.0
+    else
+        if [ ! -f "$LLM_MODEL" ]; then
+            echo "==> strategic_llm: GGUF model not found at $LLM_MODEL — run 'make models'" >&2
+            return 1
+        fi
+        component_start strategic_llm \
+            "$SVENV/bin/python" -m llama_cpp.server \
+            --model "$LLM_MODEL" \
+            --port "$LLM_PORT" \
+            --host 0.0.0.0 \
+            --n_ctx "$LLM_CTX"
     fi
-    component_start strategic_llm \
-        "$SVENV/bin/python" -m mlx_lm.server \
-        --model "$LLM_MODEL" \
-        --port "$LLM_PORT" \
-        --host 0.0.0.0
 }
 
 case "${1:-status}" in

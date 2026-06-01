@@ -20,11 +20,14 @@ Sources supported per model/LoRA entry in config.yaml:
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
+
+_IS_MACOS = platform.system() == "Darwin"
 
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
@@ -147,44 +150,75 @@ def _download_artifact_detector() -> None:
 
 def _download_vlm() -> None:
     vlm_cfg = _cfg.models.get("vlm", {})
-    filename = vlm_cfg.get("filename", "")
     local_dir = vlm_cfg.get("dir", "")
-    source = vlm_cfg.get("source", "")
-    mmproj_filename = vlm_cfg.get("mmproj_filename", "")
-    mmproj_source = vlm_cfg.get("mmproj_source", "")
-    if not filename or not local_dir or not source:
-        print("==> VLM scorer: no filename/source configured — skipping.")
-        return
-    print(f"==> VLM scorer: {filename}")
     Path(local_dir).mkdir(parents=True, exist_ok=True)
-    _resolve_source(source, local_dir, filename)
-    if mmproj_filename and mmproj_source:
-        print(f"==> VLM mmproj: {mmproj_filename}")
-        _resolve_source(mmproj_source, local_dir, mmproj_filename)
+
+    if _IS_MACOS:
+        mlx_name = vlm_cfg.get("mlx_model_name", "")
+        mlx_source = vlm_cfg.get("mlx_source", "")
+        if not mlx_name or not mlx_source:
+            print("==> VLM scorer (macOS/mlx): mlx_model_name/mlx_source not configured — skipping.")
+            print("    Set vlm.mlx_model_name and vlm.mlx_source in config.yaml.")
+            return
+        print(f"==> VLM scorer (macOS/mlx): {mlx_name}")
+        _resolve_source(mlx_source, str(Path(local_dir) / mlx_name), mlx_name)
+    else:
+        filename = vlm_cfg.get("filename", "")
+        source = vlm_cfg.get("source", "")
+        mmproj_filename = vlm_cfg.get("mmproj_filename", "")
+        mmproj_source = vlm_cfg.get("mmproj_source", "")
+        if not filename or not source:
+            print("==> VLM scorer (Linux/llama.cpp): filename/source not configured — skipping.")
+            return
+        print(f"==> VLM scorer (Linux/llama.cpp): {filename}")
+        _resolve_source(source, local_dir, filename)
+        if mmproj_filename and mmproj_source:
+            print(f"==> VLM mmproj: {mmproj_filename}")
+            _resolve_source(mmproj_source, local_dir, mmproj_filename)
 
 
 def _download_tactical() -> None:
     tac = _cfg.tactical.get("model", {})
-    name = tac.get("name") or tac.get("filename", "")  # MLX: directory name; GGUF: filename
     local_dir = tac.get("dir", "")
-    source = tac.get("source", "")
-    if not name or not local_dir or not source:
-        print("==> Tactical LLM: no name/source configured — skipping.")
-        return
-    print(f"==> Tactical LLM: {name}")
-    _resolve_source(source, str(Path(local_dir) / name), name)
+    if _IS_MACOS:
+        name = tac.get("name", "")
+        source = tac.get("source", "")
+        if not name or not source:
+            print("==> Tactical LLM (macOS/mlx): name/source not configured — skipping.")
+            return
+        print(f"==> Tactical LLM (macOS/mlx): {name}")
+        _resolve_source(source, str(Path(local_dir) / name), name)
+    else:
+        linux = tac.get("linux", {})
+        name = linux.get("name", "")
+        source = linux.get("source", "")
+        if not name or not source:
+            print("==> Tactical LLM (Linux/llama.cpp): tactical.model.linux.name/source not configured — skipping.")
+            return
+        print(f"==> Tactical LLM (Linux/llama.cpp): {name}")
+        _resolve_source(source, local_dir, name)
 
 
 def _download_strategic() -> None:
     strat = _cfg.strategic.get("model", {})
-    name = strat.get("name", "")
     local_dir = strat.get("dir", "")
-    source = strat.get("source", "")
-    if not name or not local_dir or not source:
-        print("==> Strategic LLM: no name/source configured — skipping.")
-        return
-    print(f"==> Strategic LLM: {name}")
-    _resolve_source(source, str(Path(local_dir) / name), name)
+    if _IS_MACOS:
+        name = strat.get("name", "")
+        source = strat.get("source", "")
+        if not name or not source:
+            print("==> Strategic LLM (macOS/mlx): name/source not configured — skipping.")
+            return
+        print(f"==> Strategic LLM (macOS/mlx): {name}")
+        _resolve_source(source, str(Path(local_dir) / name), name)
+    else:
+        linux = strat.get("linux", {})
+        name = linux.get("name", "")
+        source = linux.get("source", "")
+        if not name or not source:
+            print("==> Strategic LLM (Linux/llama.cpp): strategic.model.linux.name/source not configured — skipping.")
+            return
+        print(f"==> Strategic LLM (Linux/llama.cpp): {name}")
+        _resolve_source(source, local_dir, name)
 
 
 def _download_loras() -> None:

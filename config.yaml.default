@@ -11,11 +11,19 @@ paths:
 models:
   vlm:
     dir: auto                                      # auto: {scorers}/models/vlm
+    # ── macOS: mlx-vlm (MLX native) ──────────────────────────────────────────
+    # mlx_model_name is the subdirectory within dir/ that mlx_vlm.load() receives.
+    # Use an abliterated Qwen3-VL-8B model converted to MLX format.
+    # Example: mlx-community/Qwen2.5-VL-7B-Instruct-4bit (non-abliterated fallback)
+    mlx_model_name: ""                             # required on macOS — set via make config
+    mlx_source: ""                                 # hf:<repo> snapshot, downloaded to dir/mlx_model_name/
+    # ── Linux / Windows: llama.cpp (GGUF) ────────────────────────────────────
     filename: Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
     source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
     mmproj_filename: Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
     mmproj_source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
     context_length: 4096
+    n_gpu_layers: -1                               # -1 = all layers on GPU
   artifact_detector:
     dir: auto          # auto: {scorers}/models/artifact-detector
     source: hf:umm-maybe/AI-image-detector        # public repo, no token required
@@ -94,14 +102,15 @@ compute:
     backend: auto
   vlm_scorer:
     backend: auto
-  # tactical_llm and strategic_llm are served by mlx_lm.server (Apple Silicon only).
-  # MLX handles device placement and MoE expert streaming natively — no manual layer
-  # offload flags. The models below are MoE; inactive expert arrays are demand-paged
-  # from SSD by the MLX runtime as needed.
+  # tactical_llm and strategic_llm backend is platform-determined:
+  #   macOS:          mlx_lm.server (MLX native; MoE expert arrays demand-paged by MLX)
+  #   Linux/Windows:  llama_cpp.server (GGUF; CUDA or CPU)
+  # The backend key is informational only — the shell scripts detect the platform
+  # via uname and choose the appropriate server automatically.
   tactical_llm:
-    backend: mlx
+    backend: auto
   strategic_llm:
-    backend: mlx
+    backend: auto
 
 thresholds:
   clip: 0.25
@@ -126,15 +135,20 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    # MLX models are directories, not single files. `name` is the subdirectory within dir.
-    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
-    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
     context_length: 8192
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 128              # SD 1.5 generates in 3–8s; decisions must be concise
     max_tokens_thinking: 512     # thinking budget for borderline/escalate re-queries only
-    server_url: http://localhost:12001/v1   # mlx_lm.server OpenAI-compatible endpoint
+    server_url: http://localhost:12001/v1
     model_name: default
+    # ── macOS: MLX model directory (served by mlx_lm.server) ─────────────────
+    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
+    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
+    # ── Linux / Windows: GGUF file (served by llama_cpp.server) ──────────────
+    # Update name/source when a GGUF release is available for this model.
+    linux:
+      name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf
+      source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-GGUF/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf
   decisions:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session
@@ -145,15 +159,20 @@ tactical:
 strategic:
   model:
     dir: auto         # auto: {paths.scorers}/models/strategic
-    # Raw HuggingFace bf16 safetensors — no conversion needed. mlx_lm.server loads
-    # arrays lazily; inactive expert weights are demand-paged from SSD by the MLX
-    # runtime. Working set ~40–50 GB; full model ~160 GB on disk.
-    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
-    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
     context_length: 32768
     temperature: 0.6  # higher than tactical; strategic review benefits from exploration
     server_url: http://localhost:12005/v1
     model_name: default
+    # ── macOS: MLX model directory (bf16 safetensors, mlx_lm.server) ─────────
+    # MLX demand-pages inactive expert weights from SSD. Working set ~40–50 GB;
+    # full model ~160 GB on disk.
+    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    # ── Linux / Windows: GGUF file (served by llama_cpp.server) ──────────────
+    # Update name/source when a GGUF release is available for this model.
+    linux:
+      name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf
+      source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated-GGUF/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf
 
 ui:
   # chat_backend: override which LLM server the chat panel talks to.
