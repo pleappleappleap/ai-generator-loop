@@ -11,10 +11,10 @@ Civitai LoRAs still require CIVITAI_TOKEN:
   CIVITAI_TOKEN=... make models
 
 Sources supported per model/LoRA entry in config.yaml:
-  hf:<repo_id>/<filename>      HuggingFace Hub single file
-  hf:<repo_id>                 HuggingFace Hub repo snapshot
-  civitai:<model_version_id>   Civitai model version
-  local:<filename>             Already on disk — no download
+  hf:<owner>/<repo>/<filename>  HuggingFace Hub single file
+  hf:<owner>/<repo>             HuggingFace Hub repo snapshot
+  civitai:<model_version_id>    Civitai model version
+  local:<filename>              Already on disk — no download
 """
 
 from __future__ import annotations
@@ -112,11 +112,13 @@ def _resolve_source(source: str, dest_dir: str, dest_filename: str) -> None:
     if source.startswith("hf:"):
         rest = source[3:]
         parts = rest.split("/")
-        if len(parts) >= 2 and "." in parts[-1]:
+        if len(parts) >= 3:
+            # hf:owner/repo/filename  →  single-file download
             repo_id = "/".join(parts[:-1])
             filename = parts[-1]
             _hf_download_file(repo_id, filename, dest_dir)
         else:
+            # hf:owner/repo  →  snapshot (model names can contain dots)
             _hf_snapshot(rest, dest_dir)
 
     elif source.startswith("civitai:"):
