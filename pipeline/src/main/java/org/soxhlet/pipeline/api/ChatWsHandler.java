@@ -59,18 +59,42 @@ public class ChatWsHandler extends TextWebSocketHandler {
             JmsTemplate jmsTemplate,
             ObjectMapper mapper,
             @Value("${ui.llm-url:http://localhost:8080/v1}") String llmUrl,
-            @Value("${ui.llm-model:default}") String llmModel,
+            @Value("${ui.llm-model:}") String llmModel,
             @Value("${ui.workflows-dir:loop/workflows}") String workflowsDir) {
         this.jdbc = jdbc;
         this.jmsTemplate = jmsTemplate;
         this.mapper = mapper;
         this.llmUrl = llmUrl;
-        this.llmModel = llmModel;
         this.workflowsDir = workflowsDir;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
+        this.llmModel = resolveModelId(llmUrl, llmModel);
         this.systemPrompt = buildSystemPrompt();
+    }
+
+    private String resolveModelId(String baseUrl, String configured) {
+        if (configured != null && !configured.isBlank()
+                && !"default".equals(configured) && !"auto".equals(configured)) {
+            return configured;
+        }
+        try {
+            HttpRequest req = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + "/models"))
+                    .header("Authorization", "Bearer none")
+                    .GET().build();
+            HttpResponse<String> resp = HttpClient.newHttpClient()
+                    .send(req, HttpResponse.BodyHandlers.ofString());
+            JsonNode root = mapper.readTree(resp.body());
+            String id = root.path("data").path(0).path("id").asText("");
+            if (!id.isBlank()) {
+                log.info("Resolved LLM model ID: " + id);
+                return id;
+            }
+        } catch (Exception e) {
+            log.warning("Could not resolve LLM model ID from " + baseUrl + "/models: " + e.getMessage());
+        }
+        return "default";
     }
 
     @Override

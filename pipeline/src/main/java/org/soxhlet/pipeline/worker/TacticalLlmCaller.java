@@ -48,6 +48,7 @@ public class TacticalLlmCaller {
     private final GalleryBroadcastService galleryBroadcast;
     private final ApplicationContext applicationContext;
     private final String systemPrompt;
+    private final String resolvedModelId;
 
     public TacticalLlmCaller(
             PlatformTransactionManager txManager,
@@ -73,6 +74,27 @@ public class TacticalLlmCaller {
         this.llmClient = llmClient;
         this.vlmClient = vlmClient;
         this.systemPrompt = loadSystemPrompt(systemPromptFile);
+        this.resolvedModelId = resolveModelId(cfg.getModel(), llmClient, mapper);
+    }
+
+    private static String resolveModelId(String configured, RestClient llmClient, ObjectMapper mapper) {
+        if (configured != null && !configured.isBlank()
+                && !"default".equals(configured) && !"auto".equals(configured)) {
+            return configured;
+        }
+        try {
+            JsonNode resp = llmClient.get().uri("/models")
+                    .header("Authorization", "Bearer none")
+                    .retrieve().body(JsonNode.class);
+            String id = resp.path("data").path(0).path("id").asText("");
+            if (!id.isBlank()) {
+                log.info("Resolved tactical LLM model ID: " + id);
+                return id;
+            }
+        } catch (Exception e) {
+            log.warning("Could not resolve tactical LLM model ID: " + e.getMessage());
+        }
+        return configured != null ? configured : "default";
     }
 
     // ── JMS listener — stage only, return immediately ──────────────────────────
@@ -298,7 +320,7 @@ public class TacticalLlmCaller {
 
         for (int i = 0; i < cfg.getMaxToolIterations(); i++) {
             ObjectNode body = mapper.createObjectNode();
-            body.put("model", cfg.getModel());
+            body.put("model", resolvedModelId);
             body.put("temperature", cfg.getTemperature());
             body.put("max_tokens", maxTokens);
             body.set("tools", tools);
