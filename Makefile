@@ -99,7 +99,7 @@ distclean: clean
 	    keep=0; [ -f "$$d/.gitkeep" ] && keep=1; \
 	    rm -rf "$$d"; \
 	    mkdir -p "$$d"; \
-	    [ "$$keep" = "1" ] && touch "$$d/.gitkeep"; \
+	    if [ "$$keep" = "1" ]; then touch "$$d/.gitkeep"; fi; \
 	  fi; \
 	done
 	@echo "==> Removing ComfyUI clone (including models)..."
