@@ -22,7 +22,7 @@ targets:
 	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
 	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
 	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
-	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, middleware-apply, then build."
+	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, comfyui-nodes, middleware-apply, then build."
 	@printf "%-20s %s\n" "prereqs"        "Run prereqs-system and prereqs-python."
 	@printf "%-20s %s\n" "prereqs-system" "Install Python 3.11, yq, Java 21, and the HuggingFace CLI."
 	@printf "%-20s %s\n" "prereqs-python" "Create all Python venvs: root, scorers, ComfyUI, and tactical-llm."
@@ -190,8 +190,8 @@ $(K8S_OK):
 middleware-apply: k8s-install
 	kubectl apply -f middleware/k8s/
 
-# Full first-time setup: system deps → Python venvs → config → models → apply k8s → build.
-setup: prereqs-system prereqs-python config-default models middleware-apply build
+# Full first-time setup: system deps → Python venvs → config → models → ComfyUI → apply k8s → build.
+setup: prereqs-system prereqs-python config-default models comfyui-nodes middleware-apply build
 
 prereqs: prereqs-system prereqs-python
 

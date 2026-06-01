@@ -141,13 +141,13 @@ tactical:
     server_url: http://localhost:12001/v1
     model_name: default
     # ── macOS: MLX model directory (served by mlx_lm.server) ─────────────────
-    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
-    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
+    # 35B total, 3B active (MoE A3B). 4.4-bit MSQ ≈ 22 GB — fits alongside loop.
+    name: Huihui-Qwen3.6-35B-A3B-abliterated-4.4bit-msq
+    source: hf:mlx-community/Huihui-Qwen3.6-35B-A3B-abliterated-4.4bit-msq
     # ── Linux / Windows: GGUF file (served by llama_cpp.server) ──────────────
-    # Update name/source when a GGUF release is available for this model.
     linux:
-      name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf
-      source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-GGUF/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf
+      name: Huihui-Qwen3.6-35B-A3B-abliterated-MTP.Q4_K_M.gguf
+      source: hf:huihui-ai/Huihui-Qwen3.6-35B-A3B-abliterated-MTP-GGUF
   decisions:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session
@@ -162,16 +162,17 @@ strategic:
     temperature: 0.6  # higher than tactical; strategic review benefits from exploration
     server_url: http://localhost:12005/v1
     model_name: default
-    # ── macOS: MLX model directory (bf16 safetensors, mlx_lm.server) ─────────
-    # MLX demand-pages inactive expert weights from SSD. Working set ~40–50 GB;
-    # full model ~160 GB on disk.
-    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
-    source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
+    # ── macOS: bf16 safetensors (mlx_lm.server loads HF format directly) ──────
+    # 122B total, 10B active (MoE A10B). bf16 = ~244 GB on disk; MLX caches
+    # active expert weights in the available unified RAM (~39% hot at 96 GB).
+    # Theoretical ~40 tok/s from RAM; practical ~15–25 tok/s after warmup.
+    # Thinking always on for strategic sessions (/think prefix).
+    name: Qwen3.5-122B-A10B-abliterated
+    source: hf:Chompa1422/Qwen3.5-122B-A10B-abliterated
     # ── Linux / Windows: GGUF file (served by llama_cpp.server) ──────────────
-    # Update name/source when a GGUF release is available for this model.
     linux:
-      name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf
-      source: hf:huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated-GGUF/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf
+      name: Huihui-Qwen3.5-122B-A10B-abliterated.Q4_K_M.gguf
+      source: hf:huihui-ai/Huihui-Qwen3.5-122B-A10B-abliterated-GGUF
 
 ui:
   # chat_backend: override which LLM server the chat panel talks to.

@@ -292,56 +292,28 @@ snapshot_download(
 EOF
 \end{lstlisting}
 
-\subsubsection{VLM scorer (Qwen3-VL-8B)}
+\subsubsection{VLM scorer}
 
-\textbf{macOS} --- safetensors (mlx-vlm loads HuggingFace format directly;
-quantized to Q8 on first startup):
+Model selection is configured in \texttt{config.yaml} under \texttt{models.vlm}.
+\texttt{make models} downloads the configured model automatically.
 
-\begin{lstlisting}[style=shell]
-huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2 \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm/\
-Qwen3-VL-8B-Instruct-abliterated-v2
-\end{lstlisting}
+\subsubsection{Tactical LLM}
 
-\textbf{Linux / Windows} --- Q8 GGUF + multimodal projector ($\sim$9\,GB):
+Ultra-sparse MoE, served by \texttt{mlx\_lm.server} on port 12001
+(OpenAI-compatible API). Model selection is configured in \texttt{config.yaml}
+under \texttt{tactical.model}. Must fit in unified memory alongside the rest of
+the Loop super-component ($\approx$50\,GB headroom on 96\,GB). Thinking mode is
+controlled per-request via \texttt{/think} / \texttt{/no\_think} system prompt
+prefix --- off by default, enabled only for borderline decisions.
 
-\begin{lstlisting}[style=shell]
-huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
-  Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
-  Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm
-\end{lstlisting}
+\subsubsection{Strategic LLM}
 
-\subsubsection{Tactical LLM (Qwen3-Next-80B-A3B, MLX 4-bit)}
-
-Ultra-sparse MoE: 80B total parameters, $\sim$3B active per forward pass.
-Served by \texttt{mlx\_lm.server} on port 12001 (OpenAI-compatible API).
-Thinking mode is controlled per-request via \texttt{/think} / \texttt{/no\_think}
-system prompt prefix --- off by default, enabled only for borderline decisions.
-
-\begin{lstlisting}[style=shell]
-source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical/\
-Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
-\end{lstlisting}
-
-Approximately 45\,GB download.
-
-\subsubsection{Strategic LLM (Qwen3-Next-80B-A3B-Thinking, bf16)}
-
-Same base architecture as tactical. Full bf16 precision; \texttt{mlx\_lm.server}
-demand-pages inactive expert arrays from SSD. Served on port 12005.
-
-\begin{lstlisting}[style=shell]
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic/\
-Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
-\end{lstlisting}
-
-Approximately 160\,GB download.
+Ultra-sparse MoE, full bf16 precision; \texttt{mlx\_lm.server} demand-pages
+inactive expert arrays from SSD. Served on port 12005. Model selection is
+configured in \texttt{config.yaml} under \texttt{strategic.model}. Runs only
+while the Loop super-component is stopped, so the full unified memory is
+available. Thinking mode always on (\texttt{/think} prefix). \texttt{make
+models} downloads the configured model automatically.
 
 \subsection{ComfyUI}
 
@@ -446,9 +418,9 @@ against the pipeline sources.
 Message broker    & ActiveMQ Artemis (AMQP~1.0)             & Native AMQP~1.0; K3s deployment \\
 Operational state & PostgreSQL + pgvector (K3s)             & Relational + vector queries; Flyway migrations \\
 Image generation  & ComfyUI (any checkpoint)                & Workflow-based; SD~1.5/SDXL/Flux; LoRA injection \\
-Holistic scoring  & Qwen3-VL-8B mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; thinking always suppressed \\
-Tactical LLM      & Qwen3-Next-80B-A3B mlx\_lm (macOS) / llama.cpp (Linux) & Ultra-sparse MoE; 3B active; thinking largely off \\
-Strategic LLM     & Qwen3-Next-80B-A3B-Thinking mlx\_lm (macOS) / llama.cpp (Linux) & Same architecture; thinking always on \\
+Holistic scoring  & VLM scorer --- mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; thinking always suppressed \\
+Tactical LLM      & mlx\_lm.server (macOS) / llama.cpp (Linux)          & Ultra-sparse MoE; fits alongside loop; thinking largely off \\
+Strategic LLM     & mlx\_lm.server (macOS) / llama.cpp (Linux)          & Larger MoE; bf16; thinking always on \\
 Pipeline / UI     & Spring Boot + JMS + WebSocket           & All pipeline logic; REST + WebSocket UI \\
 Scorer sidecars   & Python (FastAPI + uvicorn)              & HTTP services; no broker dependency \\
 \bottomrule
@@ -948,8 +920,8 @@ The \texttt{\_AMQ\_ORIG\_ADDRESS} header records the source address.
 % ============================================================
 
 The figures below reflect full-resident operation on Apple Silicon.
-The tactical and strategic LLMs are ultra-sparse MoE (80B total, \textasciitilde3B
-active per forward pass). Only one of the two LLM servers runs at a time;
+The tactical and strategic LLMs are ultra-sparse MoE models (configured in
+\texttt{config.yaml}). Only one of the two LLM servers runs at a time;
 Loop and Strategic are mutually exclusive.
 
 \begin{center}
@@ -961,7 +933,7 @@ ComfyUI + checkpoint     & Image generation                     & $\sim$7--14\,G
 clip\_scorer (Python)    & Prompt adherence + embedding         & $\sim$1.7\,GB \\
 artifact\_scorer (Python)& Photorealism scoring                 & $\sim$500\,MB \\
 vlm\_scorer (Python)     & Holistic image evaluation            & $\sim$6\,GB \\
-mlx\_lm server (Qwen3-Next-80B-A3B, 4-bit) & Tactical LLM    & $\sim$45\,GB \\
+mlx\_lm server (tactical LLM)              & Tactical LLM    & model-dependent \\
 Spring Boot pipeline     & REST + WebSocket + JMS workers       & $\sim$200\,MB \\
 ActiveMQ Artemis (K3s)   & Message broker                       & $\sim$300\,MB \\
 PostgreSQL (K3s)         & Operational state                    & $\sim$200\,MB \\

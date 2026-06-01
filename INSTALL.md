@@ -1,13 +1,10 @@
 # Installation Guide
 
-Step-by-step setup for the AI image generation pipeline.
 For architecture and design documentation see `ARCHITECTURE.pdf` (`make docs`).
 
 ---
 
 ## 1. Hardware Requirements
-
-Choose the platform that matches your hardware:
 
 | Platform | Requirement | Minimum | Recommended |
 |----------|-------------|---------|-------------|
@@ -19,17 +16,16 @@ Choose the platform that matches your hardware:
 | CPU only | System RAM | 64 GB | 128 GB+ |
 | All platforms | Free disk | 100 GB | 200 GB |
 
-CPU-only mode is supported but very slow. Expect hours per image rather than
-minutes. On discrete-GPU systems with insufficient VRAM, the tactical LLM can
-be partially offloaded to CPU via `tactical.model.n_gpu_layers` in
-`config.yaml`.
+CPU-only mode is supported but very slow. On discrete-GPU systems with
+insufficient VRAM, the tactical LLM can be partially offloaded to CPU via
+`tactical.model.n_gpu_layers` in `config.yaml`.
 
 ---
 
 ## 2. Bootstrap Prerequisites
 
-These must be in place **before** you can run `make`. Everything else
-(`make prereqs-system`) installs automatically from here.
+These must be in place **before** you can run `make`. Everything else is
+handled automatically by `make setup`.
 
 ### macOS
 
@@ -75,8 +71,9 @@ git clone <repo-url> ~/soxhlet
 cd ~/soxhlet
 ```
 
-Add `SOXHLET_ROOT` to your shell profile so the pipeline scripts can locate
-`config.yaml` from any working directory:
+The pipeline scripts detect `SOXHLET_ROOT` automatically from their own
+location. Adding it to your shell profile is optional but convenient when
+running scripts from other directories:
 
 ```bash
 export SOXHLET_ROOT=~/soxhlet
@@ -84,28 +81,34 @@ export SOXHLET_ROOT=~/soxhlet
 
 ---
 
-## 3. System Prerequisites
+## 3. Setup
 
-With the bootstrap in place, run:
+With the bootstrap in place, a single command handles everything:
 
 ```bash
-make prereqs-system
+make setup
 ```
 
-This installs automatically, per platform:
+This runs in order: system prerequisites, Python environments, default
+configuration, model downloads (~220 GB total), ComfyUI and custom nodes,
+K3s middleware manifests, and the Java pipeline build. It is safe to re-run.
 
-| Tool | macOS | Linux | Notes |
-|------|-------|-------|-------|
-| wget |  -  | Yes | macOS uses curl (system native) |
-| Python 3.11 | Yes | Yes | via Homebrew / distro package manager |
-| yq | Yes | Yes | YAML query tool used by shell scripts |
-| K3s | Yes | Yes | K3s hosts Artemis and PostgreSQL |
-| kubectl | Yes | Yes | for port-forwards managed by `middleware.sh` |
-| Java 21+ | Yes | Yes | for the Spring Boot pipeline |
-| HuggingFace CLI | Yes | Yes | `huggingface-cli` for model downloads |
+### What `make setup` installs
 
-TeX is **not** installed automatically. It is only needed to regenerate
-`ARCHITECTURE.pdf`:
+| Step | What it does |
+|------|-------------|
+| `make prereqs-system` | Python 3.11, yq, Java 21, HuggingFace CLI, K3s / Colima |
+| `make prereqs-python` | Root venv, scorers venv, ComfyUI venv, tactical-llm venv |
+| `make config-default` | Creates `config.yaml` from defaults |
+| `make models` | Artifact detector, VLM scorer, tactical LLM (~45 GB), strategic LLM (~160 GB) |
+| `make comfyui-nodes` | ComfyUI clone + venv, ComfyUI-Manager, inpaint and SAM custom nodes |
+| `make middleware-apply` | Applies K3s manifests for Artemis and PostgreSQL |
+| `make build` | Ivy dependency resolution and `javac --release 21` |
+
+### TeX (optional)
+
+TeX is not installed by `make setup`. It is only needed to regenerate
+`ARCHITECTURE.pdf` via `make docs`:
 
 | Platform | Command |
 |----------|---------|
@@ -113,210 +116,24 @@ TeX is **not** installed automatically. It is only needed to regenerate
 | Linux | `sudo apt install texlive-full latexmk` (or equivalent) |
 | Windows | Install MiKTeX from https://miktex.org/download |
 
----
-
-## 4. Middleware (Artemis + PostgreSQL via K3s)
-
-Artemis and PostgreSQL run as K3s workloads. `middleware.sh` manages them
-and establishes `kubectl port-forward` tunnels so local processes can reach
-them on the 12000 range.
-
-### Install K3s and apply manifests
-
-K3s installation and manifest application are both handled by `make`:
-
-```bash
-make middleware-apply
-```
-
-This ensures a cluster is present (installing Colima on macOS, K3s on Linux,
-or Rancher Desktop on Windows if needed), then applies the manifests in
-`middleware/k8s/`. The command is idempotent — safe to re-run. It is also
-run automatically by `make setup`.
-
-`make middleware-apply` provisions the workloads but does not start
-port-forwards. Port-forwards are established by `make start` as part of the
-Loop startup sequence.
-
-`make start` starts or resumes the K3s workloads and establishes:
-
-| Service | Local port | K3s target |
-|---------|-----------|------------|
-| PostgreSQL | 12007 | `svc/postgres:5432` |
-| Artemis AMQP | 12008 | `svc/artemis:61616` |
-| Artemis console | 12009 | `svc/artemis:8161` |
-
-### Management console
-
-`http://localhost:12009`  -  credentials: **admin / admin**
-
----
-
-## 5. Python Environments
-
-There are **four** separate virtual environments:
-
-| Venv | Path | Contents |
-|------|------|----------|
-| Root | `venv/` | pyyaml — used by config utilities and `model_picker.py` |
-| Scorers | `loop/scorers/venv/` | PyTorch, FastAPI, transformers, mlx-vlm + mlx-lm (macOS) or llama-cpp-python (Linux/Windows) |
-| ComfyUI | `loop/ComfyUI/venv/` | ComfyUI runtime and custom node dependencies |
-| Tactical-LLM | `loop/tactical-llm/venv/` | ruff, pyright, pytest — development tools only |
-
-Create all four with:
-
-```bash
-make prereqs-python
-```
-
-To activate the scorers environment in a shell:
-
-```bash
-. $SOXHLET_ROOT/loop/scorers/activate.sh
-```
-
----
-
-## 6. Model Downloads
-
-Run `make models` to download everything automatically. The manual steps
-below are for reference or if you need to download individual models.
-
-All models are stored under `loop/scorers/models/`.
-
 ### Image generation checkpoint (ComfyUI)
 
-Download your preferred checkpoint (SD 1.5, SDXL, Flux, or any
-ComfyUI-compatible model; e.g., Absolute Reality for SD 1.5) and place it in:
+`make setup` does not download a generation checkpoint — there are too many
+options. Download your preferred checkpoint (SD 1.5, SDXL, Flux, or any
+ComfyUI-compatible model) and place it in:
 
 ```
 loop/ComfyUI/models/checkpoints/
 ```
 
 The workflow JSON files under `loop/workflows/` reference the checkpoint by
-filename. Update `config.yaml` -> `models.checkpoint` if you use a
+filename. Update `config.yaml` → `models.checkpoint` if you use a
 non-default filename.
 
-### AI artifact detector
+### Optional inpainting models
 
-```bash
-cd $SOXHLET_ROOT/loop/scorers
-source venv/bin/activate
-python - <<'EOF'
-from huggingface_hub import snapshot_download
-snapshot_download(
-    repo_id="umm-maybe/AI-image-detector",
-    local_dir="models/artifact-detector"
-)
-EOF
-```
-
-### VLM scorer (Qwen3-VL-8B)
-
-Platform-dependent format. `make models` selects the correct download automatically.
-
-**macOS** — safetensors (mlx-vlm loads HuggingFace format directly; quantized to Q8
-on first startup):
-```bash
-mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
-huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2 \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm/Qwen3-VL-8B-Instruct-abliterated-v2
-```
-
-**Linux / Windows** — Q8 GGUF + mmproj (~9 GB):
-```bash
-mkdir -p $SOXHLET_ROOT/loop/scorers/models/vlm
-huggingface-cli download prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF \
-  Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf \
-  Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/vlm
-```
-
-### Tactical LLM (Qwen3-Next-80B-A3B)
-
-Ultra-sparse MoE: 80B total parameters, ~3B active per forward pass. Served by
-`mlx_lm.server` (macOS) or `llama_cpp.server` (Linux/Windows), started automatically
-by `loop.sh`. Exposes an OpenAI-compatible API on port 12001.
-
-**macOS** — MLX 4-bit (~45 GB):
-```bash
-source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
-```
-
-**Linux / Windows** — Q4_K_M GGUF (~45 GB):
-```bash
-source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-GGUF \
-  Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/tactical
-```
-
-### Strategic LLM (Qwen3-Next-80B-A3B-Thinking)
-
-Same base architecture as tactical. Thinking variant; extended chain-of-thought for
-strategic review. Served by `mlx_lm.server` (macOS) or `llama_cpp.server` (Linux/Windows).
-
-**macOS** — bf16 safetensors (~160 GB; MLX streams expert arrays from SSD):
-```bash
-source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
-```
-
-**Linux / Windows** — Q4_K_M GGUF (~45 GB):
-```bash
-source $SOXHLET_ROOT/loop/scorers/venv/bin/activate
-huggingface-cli download \
-  huihui-ai/Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated-GGUF \
-  Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf \
-  --local-dir $SOXHLET_ROOT/loop/scorers/models/strategic
-```
-
-Model names and paths are configured in `config.yaml` under `tactical.model`
-and `strategic.model`.
-
-### Automated download
-
-`make models` downloads all models using paths from `config.yaml`:
-
-```bash
-make models
-```
-
----
-
-## 7. ComfyUI
-
-`make all` handles ComfyUI setup fully automatically:
-
-- Clones ComfyUI into `loop/ComfyUI/` and installs its venv
-- Bootstraps ComfyUI-Manager via `cm-cli.py`
-- Installs custom nodes: **ComfyUI-Inpaint-Nodes** (`inpaint-nodes`) and
-  **comfyui_segment_anything** (`sam`)
-
-Custom nodes are installed by cloning their repos directly into
-`loop/ComfyUI/custom_nodes/`:
-
-| Node | Source |
-|------|--------|
-| `comfyui-inpaint-nodes` | github.com/Acly/comfyui-inpaint-nodes |
-| `comfyui_segment_anything` | github.com/storyicon/comfyui_segment_anything |
-
-To run just the custom node step on its own:
-
-```bash
-make comfyui-nodes
-```
-
-### Optional vision models (for inpainting)
-
-The SAM and Grounding DINO model weights are not downloaded automatically
-(large files, inpainting-only). Download them if you intend to use inpainting:
+The SAM and Grounding DINO weights are not downloaded automatically (large
+files, inpainting-only). Download them if you intend to use inpainting:
 
 ```bash
 # Segment Anything (SAM)  -  ~2.5 GB
@@ -332,21 +149,16 @@ wget -q -O loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
 
 ---
 
-## 8. Configuration
+## 4. Configuration
 
-`config.yaml` is the single source of truth for all components — shell scripts,
-Python scorers, and the Java pipeline. You do not need to edit
+`config.yaml` is the single source of truth for all components — shell
+scripts, Python scorers, and the Java pipeline. You do not need to edit
 `pipeline/src/main/resources/application.yml`; `loop.sh` reads `config.yaml`
-and exports the corresponding Spring Boot environment variables before starting
-the Java pipeline.
+and exports the corresponding Spring Boot environment variables before
+starting the Java pipeline.
 
-Copy the defaults into `config.yaml`:
-
-```bash
-make config-default
-```
-
-To customise values interactively (requires `yq`):
+`make setup` creates `config.yaml` from defaults. To customise values
+interactively (requires `yq`):
 
 ```bash
 make menuconfig
@@ -384,10 +196,9 @@ strategic:
     server_url: http://localhost:12005/v1
 ```
 
-The `backend: auto` setting detects the platform at startup: macOS -> MPS;
-NVIDIA present -> CUDA; AMD ROCm present -> ROCm; otherwise CPU. Set
-`device_id` to an integer device index when multiple GPUs are present (e.g.
-an eGPU over Thunderbolt).
+The `backend: auto` setting detects the platform at startup: macOS → MPS;
+NVIDIA present → CUDA; AMD ROCm present → ROCm; otherwise CPU. Set
+`device_id` to an integer device index when multiple GPUs are present.
 
 Run the environment checker to verify all dependencies are resolvable:
 
@@ -397,24 +208,14 @@ python check_env.py
 
 ---
 
-## 9. Build Pipeline
+## 5. First Run
 
 ```bash
-make build
+./loop.sh start
 ```
 
-This runs Ivy dependency resolution and `javac --release 21` against the pipeline sources.
-
----
-
-## 10. First Run
-
-```bash
-$SOXHLET_ROOT/loop.sh start
-```
-
-`loop.sh start` starts middleware first, then all Loop components in dependency
-order, blocking until each tier is healthy:
+`loop.sh start` starts middleware first, then all Loop components in
+dependency order, blocking until each tier is healthy:
 
 1. Middleware (Artemis on 12008, PostgreSQL on 12007)
 2. **Parallel**: ComfyUI (12006) and tactical LLM server (mlx_lm.server on 12001)
@@ -435,14 +236,14 @@ To enable autonomous mode switching — where a tactical `escalate` decision
 automatically hands off to the strategic session without operator intervention:
 
 ```bash
-$SOXHLET_ROOT/loop.sh start --auto-escalate
+./loop.sh start --auto-escalate
 ```
 
-Without `--auto-escalate`, the pipeline shuts down on escalation but the
+Without `--auto-escalate`, the pipeline shuts down on escalation and the
 operator starts the strategic session manually:
 
 ```bash
-$SOXHLET_ROOT/strategic.sh start
+./strategic.sh start
 ```
 
 The flag is per-invocation and not persisted, which prevents runaway
@@ -450,7 +251,7 @@ mode-switch cycles if the pipeline exits unexpectedly.
 
 ---
 
-## 11. Verification
+## 6. Verification
 
 ### Browser UI
 
@@ -460,13 +261,13 @@ a conversation and workflow exercises the coordinator socket API end-to-end.
 ### Component health
 
 ```bash
-$SOXHLET_ROOT/loop.sh health
+./loop.sh health
 ```
 
 ### Broker console
 
-Open `http://localhost:12009` (default credentials: admin / admin). Confirm
-the following addresses appear under **Addresses**:
+Open `http://localhost:12009` (credentials: **admin / admin**). Confirm the
+following addresses appear under **Addresses**:
 
 - `loop.request` (anycast)
 - `loop.events` (multicast)
@@ -478,8 +279,7 @@ the following addresses appear under **Addresses**:
 ### Dead-letter queue
 
 Failed messages land in the `pipeline.dead` queue. Inspect them via the
-Artemis management console at `http://localhost:12009` under **Queues ->
-pipeline.dead**.
+Artemis console at `http://localhost:12009` under **Queues → pipeline.dead**.
 
 ### Tests
 
@@ -492,6 +292,6 @@ make test
 ## Stopping the Pipeline
 
 ```bash
-$SOXHLET_ROOT/loop.sh stop        # stop Loop; middleware keeps running
-$SOXHLET_ROOT/loop.sh stop --all  # stop Loop and middleware
+./loop.sh stop        # stop Loop; middleware keeps running
+./loop.sh stop --all  # stop Loop and middleware
 ```
