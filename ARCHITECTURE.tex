@@ -436,9 +436,9 @@ against the pipeline sources.
 Message broker    & ActiveMQ Artemis (AMQP~1.0)             & Native AMQP~1.0; K3s deployment \\
 Operational state & PostgreSQL + pgvector (K3s)             & Relational + vector queries; Flyway migrations \\
 Image generation  & ComfyUI (any checkpoint)                & Workflow-based; SD~1.5/SDXL/Flux; LoRA injection \\
-Holistic scoring  & Qwen3-VL-8B mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; no API dependency \\
-Tactical LLM      & Qwen3-Next-80B-A3B mlx\_lm (macOS) / llama.cpp (Linux) & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
-Strategic LLM     & Qwen3-Next-80B-A3B-Thinking mlx\_lm (macOS) / llama.cpp (Linux) & Same architecture; thinking variant \\
+Holistic scoring  & Qwen3-VL-8B mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; thinking always suppressed \\
+Tactical LLM      & Qwen3-Next-80B-A3B mlx\_lm (macOS) / llama.cpp (Linux) & Ultra-sparse MoE; 3B active; thinking largely off \\
+Strategic LLM     & Qwen3-Next-80B-A3B-Thinking mlx\_lm (macOS) / llama.cpp (Linux) & Same architecture; thinking always on \\
 Pipeline / UI     & Spring Boot + JMS + WebSocket           & All pipeline logic; REST + WebSocket UI \\
 Scorer sidecars   & Python (FastAPI + uvicorn)              & HTTP services; no broker dependency \\
 \bottomrule
@@ -622,13 +622,15 @@ The \texttt{loop.retry} address carries the same JSON schema as
     \begin{enumerate}
       \item Builds system prompt (context + north star + taste synthesis).
       \item Calls \texttt{mlx\_lm.server} at port 12001 with tool definitions
-            (\texttt{analyze\_image}). Thinking is off by default
-            (\texttt{/no\_think}).
+            (\texttt{analyze\_image}). Thinking mode is \textbf{off by default}
+            (\texttt{/no\_think}); it is enabled only for genuinely borderline
+            images (VLM mean 4.5--7.5 \textit{and} CLIP $\geq$ 0.20) where
+            extended reasoning could change the outcome.
       \item If the LLM emits \texttt{analyze\_image} tool calls: executes
             \texttt{POST http://localhost:12004/analyze} and appends results.
       \item Re-prompts until the LLM emits a final decision JSON or the tool
-            iteration cap is reached. For borderline cases or a first-pass
-            \texttt{escalate} signal, re-queries with thinking budget enabled.
+            iteration cap is reached. A first-pass \texttt{escalate} with
+            thinking off triggers a second pass with thinking enabled.
     \end{enumerate}
 
   \item Decision handling in \texttt{TacticalLlmCaller}:

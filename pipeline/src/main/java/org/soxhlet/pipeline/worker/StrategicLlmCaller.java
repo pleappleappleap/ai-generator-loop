@@ -283,6 +283,7 @@ public class StrategicLlmCaller {
             sb.append(taste.get(0)).append("\n\n");
         }
 
+        sb.append("/think");
         return sb.toString();
     }
 

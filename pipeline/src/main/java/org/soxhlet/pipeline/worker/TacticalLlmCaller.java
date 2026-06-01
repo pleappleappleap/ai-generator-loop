@@ -606,7 +606,10 @@ public class TacticalLlmCaller {
         JsonNode vlmScores = msg.path("scores").path("vlm_scores");
         double clipScore   = msg.path("scores").path("clip_score").asDouble(0.0);
         double vlmMean     = computeVlmMean(vlmScores);
-        return !(vlmMean >= 8.0 && clipScore >= 0.35);
+        // Thinking on only for the genuinely uncertain middle range where
+        // reasoning could change the outcome. Clearly bad or clearly good
+        // images don't benefit from the extra latency.
+        return vlmMean >= 4.5 && vlmMean < 7.5 && clipScore >= 0.20;
     }
 
     // ── System prompt ──────────────────────────────────────────────────────────

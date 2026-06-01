@@ -145,6 +145,7 @@ def _call_vlm(image_source: str, prompt: str, max_tokens: int) -> str:
     Raises:
         OSError: On I/O failure (unreadable file, unreachable URL).
     """
+    prompt = "/no_think\n" + prompt
     if _IS_MACOS:
         try:
             img = _to_mlx_image(image_source)
