@@ -188,7 +188,7 @@ $(K8S_OK):
 # Apply K3s manifests for Artemis and PostgreSQL. Idempotent — safe to re-run.
 # Depends on k8s-install so the cluster is present before kubectl apply runs.
 middleware-apply: k8s-install
-	kubectl apply -f middleware/k8s/
+	kubectl apply -k middleware/k8s/
 
 # Full first-time setup: system deps → Python venvs → config → models → ComfyUI → apply k8s → build.
 setup: prereqs-system prereqs-python config-default models comfyui-nodes middleware-apply build
