@@ -422,12 +422,11 @@
 <!-- Sidebar -->
 <aside id="sidebar">
   <div id="sidebar-header">
-    <h2>Workflows</h2>
-    <button id="btn-new-session">+ Conversation</button>
+    <h2>Conversations</h2>
+    <button id="btn-new-session">+ New</button>
   </div>
   <div id="workflow-list"></div>
   <div id="sidebar-footer">
-    <button id="btn-new-workflow">New Workflow</button>
     <button id="btn-resume-workflow">Resume</button>
   </div>
 </aside>
@@ -436,7 +435,7 @@
 <!-- Gallery -->
 <main id="gallery-panel">
   <div id="gallery-header">
-    <h1 id="gallery-title">Select a workflow</h1>
+    <h1 id="gallery-title">Select a conversation</h1>
     <button id="btn-start-run" disabled>Generate</button>
   </div>
   <div id="gallery-grid"></div>
@@ -470,58 +469,6 @@
   </div>
 </div>
 
-<!-- New Workflow Modal -->
-<div class="modal-backdrop hidden" id="modal-workflow">
-  <div class="modal">
-    <h3>New Workflow</h3>
-    <div class="form-row">
-      <label>Workflow name</label>
-      <input type="text" id="wf-name" placeholder="e.g. Dark fantasy female portrait">
-    </div>
-    <div class="form-row">
-      <label>ComfyUI workflow JSON path</label>
-      <input type="text" id="wf-path" placeholder="/path/to/workflow.json">
-    </div>
-    <div class="form-row">
-      <label>Description (optional)</label>
-      <textarea id="wf-desc" placeholder="Describe the aesthetic, subject, or goal…"></textarea>
-    </div>
-    <div class="form-row">
-      <label>Budget policy on resume</label>
-      <select id="wf-budget-policy">
-        <option value="fresh">fresh (reset counters)</option>
-        <option value="accumulated">accumulated (continue counters)</option>
-      </select>
-    </div>
-    <div class="form-row">
-      <label>Max retries</label>
-      <input type="number" id="wf-max-retries" value="3" min="0" max="20">
-    </div>
-    <div class="form-row">
-      <label>Max inpaints</label>
-      <input type="number" id="wf-max-inpaints" value="2" min="0" max="10">
-    </div>
-    <div class="modal-actions">
-      <button class="btn-cancel" id="modal-wf-cancel">Cancel</button>
-      <button class="btn-primary" id="modal-wf-ok">Create</button>
-    </div>
-  </div>
-</div>
-
-<!-- Generate Modal -->
-<div class="modal-backdrop hidden" id="modal-generate">
-  <div class="modal">
-    <h3 id="modal-gen-title">Generate Images</h3>
-    <div class="form-row">
-      <label>Prompt</label>
-      <textarea id="gen-prompt" rows="4" placeholder="Describe the image…"></textarea>
-    </div>
-    <div class="modal-actions">
-      <button class="btn-cancel" id="modal-gen-cancel">Cancel</button>
-      <button class="btn-primary" id="modal-gen-ok">Start</button>
-    </div>
-  </div>
-</div>
 
 <div id="status-bar"></div>
 
@@ -649,7 +596,8 @@ function activateWorkflowFromChat(wf) {
     name:            wf.name || 'Chat generation',
     conversation_id: wf.conversation_id,
   };
-  document.getElementById('gallery-title').textContent = state.activeWorkflow.name;
+  const conv = state.conversations.find(c => c.conversation_id === state.activeConvId);
+  document.getElementById('gallery-title').textContent = conv?.name || state.activeWorkflow.name;
   document.getElementById('btn-start-run').disabled = false;
   renderSidebar();
   saveState();
@@ -784,40 +732,17 @@ async function submitFeedback(img, rating, card) {
   status('Feedback recorded');
 }
 
-// ── Sidebar (conversations + workflows) ───────────────────────────────────────
+// ── Sidebar (conversations) ───────────────────────────────────────────────────
 function renderSidebar() {
   const list = document.getElementById('workflow-list');
   list.innerHTML = '';
   state.conversations.forEach(conv => {
     const isActive = conv.conversation_id === state.activeConvId;
-    const expanded = conv.expanded !== false;
-
-    const header = document.createElement('div');
-    header.className = 'conv-header' + (isActive ? ' active-conv' : '') + (expanded ? '' : ' collapsed');
-    header.innerHTML = `<span class="conv-arrow">▼</span><span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>`;
-    header.onclick = () => {
-      if (isActive) {
-        conv.expanded = !expanded;
-        saveState();
-        renderSidebar();
-      } else {
-        switchConversation(conv.conversation_id);
-      }
-    };
-    list.appendChild(header);
-
-    if (expanded) {
-      const wfContainer = document.createElement('div');
-      wfContainer.className = 'conv-workflows';
-      (conv.workflows || []).forEach(wf => {
-        const item = document.createElement('div');
-        item.className = 'wf-item' + (state.activeWorkflow?.workflow_id === wf.workflow_id ? ' active' : '');
-        item.innerHTML = `<div class="wf-name">${escHtml(wf.name)}</div><div class="wf-meta">${wf.workflow_id.slice(0, 8)}…</div>`;
-        item.onclick = (e) => { e.stopPropagation(); selectWorkflow(wf); };
-        wfContainer.appendChild(item);
-      });
-      list.appendChild(wfContainer);
-    }
+    const item = document.createElement('div');
+    item.className = 'conv-header' + (isActive ? ' active-conv' : '');
+    item.innerHTML = `<span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>`;
+    item.onclick = () => switchConversation(conv.conversation_id);
+    list.appendChild(item);
   });
 }
 
@@ -825,11 +750,13 @@ function switchConversation(convId) {
   const conv = state.conversations.find(c => c.conversation_id === convId);
   if (!conv) return;
   state.activeConvId = convId;
-  conv.expanded = true;
-  // Clear active workflow if it belongs to a different conversation.
-  if (state.activeWorkflow?.conversation_id !== convId) {
+  // Auto-select the conversation's workflow if available.
+  const wf = (conv.workflows || [])[0] || null;
+  if (wf && state.activeWorkflow?.workflow_id !== wf.workflow_id) {
+    selectWorkflow(wf);
+  } else if (!wf) {
     state.activeWorkflow = null;
-    document.getElementById('gallery-title').textContent = 'Select a workflow';
+    document.getElementById('gallery-title').textContent = conv.name || 'Untitled';
     document.getElementById('btn-start-run').disabled = true;
     document.getElementById('gallery-grid').innerHTML = '';
   }
@@ -849,7 +776,8 @@ async function selectWorkflow(wf) {
   }
 
   state.activeWorkflow = { ...wf };
-  document.getElementById('gallery-title').textContent = wf.name;
+  const _selConv = state.conversations.find(c => c.conversation_id === (wf.conversation_id || state.activeConvId));
+  document.getElementById('gallery-title').textContent = _selConv?.name || wf.name;
   document.getElementById('btn-start-run').disabled = true;
   renderSidebar();
   renderGallery();
@@ -1014,21 +942,42 @@ async function createConversation(convName) {
   const resp = await api('POST', '/session/start', { name: convName });
   if (resp.ok === false) throw new Error(resp.error || 'could not create conversation');
   state.conversations.forEach(c => { c.expanded = false; });
-  state.conversations.unshift({
+  const conv = {
     conversation_id: resp.conversation_id,
     name:            convName,
     expanded:        true,
     workflows:       [],
-  });
+  };
+  state.conversations.unshift(conv);
   state.activeConvId   = resp.conversation_id;
   state.activeWorkflow = null;
+
+  // Auto-create the workflow — user never needs to see this.
+  try {
+    const wfResp = await api('POST', '/workflow/new', {
+      conversation_id: resp.conversation_id,
+      name:            convName,
+    });
+    if (wfResp.workflow_id) {
+      const wf = {
+        workflow_id:     wfResp.workflow_id,
+        run_id:          wfResp.run_id,
+        name:            convName,
+        conversation_id: resp.conversation_id,
+        workflow_path:   wfResp.workflow_path || '',
+      };
+      conv.workflows.push(wf);
+      state.activeWorkflow = wf;
+    }
+  } catch {}
+
   saveState();
   renderSidebar();
   renderGallery();
-  document.getElementById('gallery-title').textContent = 'Select a workflow';
-  document.getElementById('btn-start-run').disabled = true;
+  document.getElementById('gallery-title').textContent = convName;
+  document.getElementById('btn-start-run').disabled = !state.activeWorkflow;
   document.getElementById('chat-messages').innerHTML =
-    '<div class="chat-msg system">New conversation started. What would you like to create?</div>';
+    '<div class="chat-msg system">New conversation started. Describe your creative vision…</div>';
   updateChatEnabled();
   return resp.conversation_id;
 }
@@ -1053,97 +1002,36 @@ document.getElementById('modal-session-ok').onclick = async () => {
   }
 };
 
-// Workflow modal
-document.getElementById('btn-new-workflow').onclick = () => {
-  if (!state.activeConvId) { status('Create a conversation first'); return; }
-  document.getElementById('wf-name').value = '';
-  document.getElementById('wf-path').value = `loop/workflows/workflow-${Date.now()}.json`;
-  document.getElementById('wf-desc').value = '';
-  showModal('modal-workflow');
-};
-document.getElementById('modal-wf-cancel').onclick = () => hideModal('modal-workflow');
-document.getElementById('modal-wf-ok').onclick = async () => {
-  const wfName = document.getElementById('wf-name').value.trim() || 'Untitled Workflow';
-  const wfPath = document.getElementById('wf-path').value.trim();
-  setLoading('modal-wf-ok', true, 'Create');
-  try {
-    const resp = await api('POST', '/workflow/new', {
-      conversation_id: state.activeConvId,
-      name:            wfName,
-      workflow_path:   wfPath,
-      description:     document.getElementById('wf-desc').value.trim() || undefined,
-      budget_policy:   document.getElementById('wf-budget-policy').value,
-      max_retries:     parseInt(document.getElementById('wf-max-retries').value),
-      max_inpaints:    parseInt(document.getElementById('wf-max-inpaints').value),
-    });
-    if (resp.ok !== false && resp.workflow_id) {
-      const wf = {
-        workflow_id:     resp.workflow_id,
-        name:            wfName,
-        conversation_id: state.activeConvId,
-        workflow_path:   wfPath,
-        run_id:          resp.run_id,
-      };
-      const conv = activeConv();
-      if (conv) conv.workflows.unshift(wf);
-      saveState();
-      renderSidebar();
-      selectWorkflow(wf);
-      status('Workflow created');
-    } else {
-      status(`Error: ${resp.error || 'could not create workflow'}`);
-    }
-  } catch (e) {
-    status('Error creating workflow');
-  } finally {
-    setLoading('modal-wf-ok', false, 'Create');
-    hideModal('modal-workflow');
-  }
-};
-
 // Resume button — manual resume with optional budget override
 document.getElementById('btn-resume-workflow').onclick = async () => {
-  if (!state.activeWorkflow) { status('Select a workflow first'); return; }
+  if (!state.activeWorkflow) { status('Select a conversation first'); return; }
   await _resumeActiveWorkflow();
 };
 
-// Generate modal
-document.getElementById('btn-start-run').onclick = () => {
-  if (!state.activeWorkflow) return;
-  document.getElementById('modal-gen-title').textContent =
-    `Generate — ${state.activeWorkflow.name}`;
-  document.getElementById('gen-prompt').value = '';
-  showModal('modal-generate');
-};
-document.getElementById('modal-gen-cancel').onclick = () => hideModal('modal-generate');
-document.getElementById('modal-gen-ok').onclick = async () => {
-  const prompt = document.getElementById('gen-prompt').value.trim();
-  if (!prompt) { status('Enter a prompt'); return; }
+// Generate — start the autonomous loop directly (no user prompt needed)
+document.getElementById('btn-start-run').onclick = async () => {
   const wf = state.activeWorkflow;
   if (!wf?.run_id) { status('No active run — click Resume first'); return; }
-  setLoading('modal-gen-ok', true, 'Start');
+  setLoading('btn-start-run', true, 'Generate');
   try {
     const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
-      prompt,
       run_id:          wf.run_id,
       conversation_id: wf.conversation_id || state.activeConvId || '',
       workflow_path:   wf.workflow_path   || '',
     });
     if (resp.ok) {
-      status(`Generation queued (${(resp.image_uuid || '').slice(0, 8)}…)`);
-      // Optimistic placeholder — verdict updated when image_ready arrives.
+      status('Generation queued');
       const pending = { image_uuid: resp.image_uuid, verdict: 'queued', run_id: wf.run_id, rating: null };
       if (!state.images[wf.workflow_id]) state.images[wf.workflow_id] = [];
       state.images[wf.workflow_id].unshift(pending);
       prependImageCard(pending);
-      hideModal('modal-generate');
     } else {
       status(`Error: ${resp.error || 'unknown'}`);
     }
   } catch (e) {
     status('Error starting generation');
   } finally {
-    setLoading('modal-gen-ok', false, 'Start');
+    setLoading('btn-start-run', false, 'Generate');
   }
 };
 
@@ -1212,10 +1100,12 @@ renderSidebar();
 updateChatEnabled();
 
 if (state.activeWorkflow) {
-  document.getElementById('gallery-title').textContent = state.activeWorkflow.name;
+  const _initConv = state.conversations.find(c => c.conversation_id === state.activeConvId);
+  document.getElementById('gallery-title').textContent = _initConv?.name || state.activeWorkflow.name;
   selectWorkflow(state.activeWorkflow);
 } else if (state.activeConvId) {
-  // No active workflow but there is a conversation — restore chat history directly.
+  const _initConv = state.conversations.find(c => c.conversation_id === state.activeConvId);
+  if (_initConv) document.getElementById('gallery-title').textContent = _initConv.name;
   api('GET', `/history?conversation_id=${state.activeConvId}&workflow_id=&limit=30`)
     .then(hist => {
       if (hist.chat?.length) {

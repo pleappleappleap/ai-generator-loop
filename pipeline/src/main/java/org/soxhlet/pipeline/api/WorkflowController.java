@@ -2,6 +2,7 @@ package org.soxhlet.pipeline.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.jms.core.JmsTemplate;
@@ -21,6 +22,9 @@ public class WorkflowController {
     private final JmsTemplate jmsTemplate;
     private final ObjectMapper mapper;
 
+    @Value("${ui.default-workflow-path:loop/workflows/sdxl_base.json}")
+    private String defaultWorkflowPath;
+
     public WorkflowController(NamedParameterJdbcTemplate jdbc,
                                JmsTemplate jmsTemplate,
                                ObjectMapper mapper) {
@@ -36,13 +40,14 @@ public class WorkflowController {
         String conversationId = (String) req.get("conversation_id");
         String name = req.getOrDefault("name", "Untitled Workflow").toString();
         String workflowPath = (String) req.get("workflow_path");
+        if (workflowPath == null || workflowPath.isBlank()) workflowPath = defaultWorkflowPath;
         String description = req.get("description") != null ? req.get("description").toString() : null;
         String budgetPolicy = req.getOrDefault("budget_policy", "fresh").toString();
         int maxRetries = req.get("max_retries") != null ? ((Number) req.get("max_retries")).intValue() : 3;
         int maxInpaints = req.get("max_inpaints") != null ? ((Number) req.get("max_inpaints")).intValue() : 2;
 
-        if (conversationId == null || workflowPath == null) {
-            return Map.of("ok", false, "error", "conversation_id and workflow_path required");
+        if (conversationId == null) {
+            return Map.of("ok", false, "error", "conversation_id required");
         }
 
         // Create workflow
@@ -145,9 +150,10 @@ public class WorkflowController {
         String conversationId = (String) req.get("conversation_id");
         String workflowPath = (String) req.get("workflow_path");
 
-        if (prompt == null || runId == null) {
-            return Map.of("ok", false, "error", "prompt and run_id required");
+        if (runId == null) {
+            return Map.of("ok", false, "error", "run_id required");
         }
+        if (prompt == null) prompt = "";
 
         String imageUuid = UUID.randomUUID().toString();
 

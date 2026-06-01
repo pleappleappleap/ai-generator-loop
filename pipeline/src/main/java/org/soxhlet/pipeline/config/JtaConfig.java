@@ -30,8 +30,10 @@ public class JtaConfig {
 
     @Bean
     public XAConnectionFactory xaConnectionFactory(
-            @Value("${spring.artemis.broker-url}") String brokerUrl) {
-        return new ActiveMQXAConnectionFactory(brokerUrl);
+            @Value("${spring.artemis.broker-url}") String brokerUrl,
+            @Value("${spring.artemis.user}") String user,
+            @Value("${spring.artemis.password}") String password) {
+        return new ActiveMQXAConnectionFactory(brokerUrl, user, password);
     }
 
     /**

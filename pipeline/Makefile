@@ -49,7 +49,7 @@ resolve: $(LIB)/.resolved
 compile: $(LIB)/.resolved
 	mkdir -p $(OUT) build
 	find $(SRC) -name '*.java' > build/sources.txt
-	$(JAVAC) --release 21 -cp "$(LIB)/*" -d $(OUT) @build/sources.txt
+	$(JAVAC) --release 21 -parameters -cp "$(LIB)/*" -d $(OUT) @build/sources.txt
 	cp -r $(RES)/. $(OUT)/
 
 package: compile
@@ -59,7 +59,7 @@ package: compile
 test: compile $(TEST_LIB)/.resolved $(JUNIT_JAR)
 	mkdir -p $(TEST_OUT) build
 	find $(TEST_SRC) -name '*.java' > build/test-sources.txt
-	$(JAVAC) --release 21 -cp "$(LIB)/*:$(TEST_LIB)/*:$(OUT)" -d $(TEST_OUT) @build/test-sources.txt
+	$(JAVAC) --release 21 -parameters -cp "$(LIB)/*:$(TEST_LIB)/*:$(OUT)" -d $(TEST_OUT) @build/test-sources.txt
 	$(JAVA) -cp "$(OUT):$(TEST_OUT):$(LIB)/*:$(TEST_LIB)/*:$(JUNIT_JAR)" \
 		org.junit.platform.console.ConsoleLauncher execute --scan-classpath=$(TEST_OUT)
 

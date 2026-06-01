@@ -82,6 +82,7 @@ ui:
   llm-url: http://localhost:12001/v1
   llm-model: default
   workflows-dir: loop/workflows
+  default-workflow-path: loop/workflows/sdxl_base.json
 
 strategic-llm:
   url: http://localhost:12005/v1
