@@ -121,30 +121,24 @@ Artemis and PostgreSQL run as K3s workloads. `middleware.sh` manages them
 and establishes `kubectl port-forward` tunnels so local processes can reach
 them on the 12000 range.
 
-### Install K3s
+### Install K3s and apply manifests
+
+K3s installation and manifest application are both handled by `make`:
 
 ```bash
-# macOS  -  via Homebrew (uses Rancher Desktop or k3d)
-# Linux
-curl -sfL https://get.k3s.io | sh -
-
-# Verify
-kubectl get nodes
+make middleware-apply
 ```
 
-### Apply the middleware manifests
+This ensures a cluster is present (installing Colima on macOS, K3s on Linux,
+or Rancher Desktop on Windows if needed), then applies the manifests in
+`middleware/k8s/`. The command is idempotent — safe to re-run. It is also
+run automatically by `make setup`.
 
-```bash
-kubectl apply -f middleware/k8s/
-```
+`make middleware-apply` provisions the workloads but does not start
+port-forwards. Port-forwards are established by `make start` as part of the
+Loop startup sequence.
 
-### Start middleware (and port-forwards)
-
-```bash
-~/soxhlet/middleware.sh start
-```
-
-This starts or resumes the K3s workloads and establishes:
+`make start` starts or resumes the K3s workloads and establishes:
 
 | Service | Local port | K3s target |
 |---------|-----------|------------|
@@ -416,51 +410,43 @@ This runs Ivy dependency resolution and `javac --release 21` against the pipelin
 ## 10. First Run
 
 ```bash
-# Start middleware (Artemis + PostgreSQL via K3s; port-forwards 12007/12008/12009)
-$SOXHLET_ROOT/middleware.sh start
-
-# Start the Loop super-component
-$SOXHLET_ROOT/loop.sh start
-
-# Open the browser UI
-open http://localhost:12000
+make start
 ```
 
-`loop.sh start` waits for each tier before starting the next:
-1. Middleware (Artemis on 12008, PostgreSQL on 12007) must be healthy
+`make start` starts middleware first, then all Loop components in dependency
+order, blocking until each tier is healthy:
+
+1. Middleware (Artemis on 12008, PostgreSQL on 12007)
 2. **Parallel**: ComfyUI (12006) and tactical LLM server (mlx_lm.server on 12001)
 3. Scorers: clip (12002), artifact (12003), vlm (12004)
 4. Spring Boot pipeline (12000)
 
-### Autonomous escalation handoff
+Open the browser UI at `http://localhost:12000`.
 
-Pass `--auto-escalate` to enable autonomous mode switching:
-
-```bash
-$SOXHLET_ROOT/loop.sh start --auto-escalate
-```
-
-With this flag, `loop.sh` forks a background monitor after startup. If the
-tactical LLM emits an `escalate` decision, the pipeline writes a
-`pipeline_events` row and shuts down. The monitor detects the exit, finds the
-pending escalation, and starts `strategic.sh` automatically — no operator
-action required.
-
-Without `--auto-escalate`, the pipeline still shuts down on escalation but
-the operator decides when (and whether) to start the strategic session:
-
-```bash
-$SOXHLET_ROOT/strategic.sh start
-```
-
-The flag is per-invocation and not persisted, which prevents runaway
-mode-switch cycles if the pipeline exits unexpectedly for any other reason.
-
-From the browser UI at `http://localhost:12000`:
+From the browser UI:
 1. Create a **conversation** (a named project).
 2. Create a **workflow** (choose a workflow JSON and parameters).
 3. Click **Start** to submit a prompt  -  images appear in the gallery as they
    are generated and scored.
+
+### Autonomous escalation handoff
+
+To enable autonomous mode switching — where a tactical `escalate` decision
+automatically hands off to the strategic session without operator intervention:
+
+```bash
+make start AUTO_ESCALATE=1
+```
+
+Without `AUTO_ESCALATE=1`, the pipeline shuts down on escalation but the
+operator starts the strategic session manually:
+
+```bash
+make start-strategic
+```
+
+The `AUTO_ESCALATE` flag is per-invocation and not persisted, which prevents
+runaway mode-switch cycles if the pipeline exits unexpectedly.
 
 ---
 
@@ -470,6 +456,12 @@ From the browser UI at `http://localhost:12000`:
 
 Open `http://localhost:12000`. The gallery section should be visible. Creating
 a conversation and workflow exercises the coordinator socket API end-to-end.
+
+### Component health
+
+```bash
+make health
+```
 
 ### Broker console
 
@@ -492,8 +484,7 @@ pipeline.dead**.
 ### Tests
 
 ```bash
-cd $SOXHLET_ROOT
-make test      # pytest (scorers + tactical-llm) + JUnit (pipeline)
+make test
 ```
 
 ---
@@ -501,9 +492,6 @@ make test      # pytest (scorers + tactical-llm) + JUnit (pipeline)
 ## Stopping the Pipeline
 
 ```bash
-# Stop the Loop super-component
-$SOXHLET_ROOT/loop.sh stop
-
-# Stop middleware (and port-forwards)
-$SOXHLET_ROOT/middleware.sh stop
+make stop        # stop Loop; middleware keeps running
+make stop-all    # stop Loop and middleware
 ```
