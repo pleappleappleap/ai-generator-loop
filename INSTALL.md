@@ -1,7 +1,7 @@
 # Installation Guide
 
 Step-by-step setup for the AI image generation pipeline.
-For architecture and design documentation see `ARCHITECTURE.pdf` (`make doc`).
+For architecture and design documentation see `ARCHITECTURE.pdf` (`make docs`).
 
 ---
 
@@ -160,41 +160,22 @@ This starts or resumes the K3s workloads and establishes:
 
 ## 5. Python Environments
 
-There are **three** separate virtual environments:
+There are **four** separate virtual environments:
 
-- **Root venv** (`venv/`): used by utilities such as `check_env.py` and `model_picker.py`.
-- **Scorers venv** (`loop/scorers/venv/`): used by all scorer processes.
-  Also provides `mlx_lm` for the tactical and strategic LLM servers.
-- **ComfyUI venv** (`loop/ComfyUI/venv/`): used exclusively by ComfyUI,
-  managed by `make prereqs`.
+| Venv | Path | Contents |
+|------|------|----------|
+| Root | `venv/` | pyyaml — used by config utilities and `model_picker.py` |
+| Scorers | `loop/scorers/venv/` | PyTorch, FastAPI, transformers, mlx-vlm + mlx-lm (macOS) or llama-cpp-python (Linux/Windows) |
+| ComfyUI | `loop/ComfyUI/venv/` | ComfyUI runtime and custom node dependencies |
+| Tactical-LLM | `loop/tactical-llm/venv/` | ruff, pyright, pytest — development tools only |
 
-### Root environment
-
-```bash
-cd $SOXHLET_ROOT
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-deactivate
-```
-
-### Scorers environment
+Create all four with:
 
 ```bash
-cd $SOXHLET_ROOT/loop/scorers
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-deactivate
+make prereqs-python
 ```
 
-The scorers `requirements.txt` includes `mlx-lm` (for the tactical and
-strategic LLM servers), `fastapi`, `uvicorn`, `httpx`, `transformers`, and
-`huggingface_hub`.
-
-To activate the scorers environment in a shell, use the provided script:
+To activate the scorers environment in a shell:
 
 ```bash
 . $SOXHLET_ROOT/loop/scorers/activate.sh
@@ -331,12 +312,16 @@ wget -q -O loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
 
 ## 8. Configuration
 
-Copy the default template and open the interactive editor:
+Copy the defaults into `config.yaml`:
 
 ```bash
-cd $SOXHLET_ROOT
-cp config.yaml.default config.yaml
-python menuconfig.py
+make config-default
+```
+
+To customise values interactively (requires `yq`):
+
+```bash
+make menuconfig
 ```
 
 At minimum, verify these settings in `config.yaml`:
@@ -378,9 +363,10 @@ python check_env.py
 ## 9. Build Pipeline
 
 ```bash
-cd $SOXHLET_ROOT/pipeline
-mvn package -DskipTests
+make build
 ```
+
+This runs Ivy dependency resolution and `javac --release 21` against the pipeline sources.
 
 ---
 
@@ -440,7 +426,7 @@ pipeline.dead**.
 
 ```bash
 cd $SOXHLET_ROOT
-make test      # all Rust + Python tests
+make test      # pytest (scorers + tactical-llm) + JUnit (pipeline)
 ```
 
 ---

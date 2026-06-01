@@ -51,10 +51,16 @@ make all
 ```
 models/
 +-- artifact-detector/    umm-maybe/AI-image-detector (HuggingFace snapshot)
-+-- vlm/                  Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
-                          + Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
-+-- tactical/             Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit/
-\-- strategic/            Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated/
++-- vlm/                  macOS: Qwen3-VL-8B-Instruct-abliterated-v2/ (safetensors snapshot;
+|                                quantized to Q8 on first startup → vlm/…-q8/)
+|                         Linux: Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
+|                                + Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
++-- tactical/             macOS: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit/
+|                                (MLX 4-bit directory, served by mlx_lm.server)
+|                         Linux: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated.Q4_K_M.gguf
+|                                (GGUF, served by llama_cpp.server)
+\-- strategic/            macOS: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated/
+                                 (bf16 safetensors, served by mlx_lm.server)
+                          Linux: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated.Q4_K_M.gguf
+                                 (GGUF, served by llama_cpp.server)
 ```
-
-`tactical/` and `strategic/` are MLX model directories served by `mlx_lm.server`.

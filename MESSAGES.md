@@ -127,7 +127,7 @@ by the `Scorer` Java class (not via the broker).
 
 ```
 POST /score
-{ "image_path": "string" }
+{ "image_uuid": "string", "image_path": "string", "prompt": "string" }
 → { "image_uuid": "string", "clip_score": "float 0.0-1.0", "image_embedding": "array[float] 512-dim" }
 
 POST /embed_text
@@ -139,7 +139,7 @@ POST /embed_text
 
 ```
 POST /score
-{ "image_path": "string" }
+{ "image_uuid": "string", "image_path": "string" }
 → { "image_uuid": "string", "ai_confidence": "float 0.0-1.0" }
 ```
 
@@ -147,7 +147,7 @@ POST /score
 
 ```
 POST /score
-{ "image_path": "string", "prompt": "string" }
+{ "image_uuid": "string", "image_path": "string", "prompt": "string" }
 → { "image_uuid": "string", "photorealism": float, "anatomical_coherence": float,
     "interaction_plausibility": float, "lighting_consistency": float,
     "prompt_adherence": float, "issues": [...], "recommendations": [...] }

@@ -60,10 +60,13 @@ Thresholds are set in `config.yaml`  -  no rebuild required:
 
 ```yaml
 thresholds:
-  clip:               0.25   # reject if CLIP score < this
-  artifact:           0.50   # reject if AI confidence > this
-  accept_vlm_mean_min: 7.0   # minimum mean VLM score to pass a candidate to TacticalLlmCaller
-  score_timeout_secs: 60
+  clip:                0.25   # reject if CLIP score < this
+  artifact:            0.50   # reject if AI confidence > this
+  score_timeout_secs:  60
+
+tactical:
+  decisions:
+    accept_vlm_mean_min: 7.0  # minimum mean VLM score to pass to TacticalLlmCaller
 ```
 
 See ARCHITECTURE.pdf for calibration procedure.

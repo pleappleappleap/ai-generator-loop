@@ -40,7 +40,7 @@ memory budget, threshold calibration procedure, and scale-out path.
 Generate it from source:
 
 ```bash
-make doc          # requires a TeX distribution (MacTeX, TeX Live, MiKTeX)
+make docs         # requires a TeX distribution (MacTeX, TeX Live, MiKTeX)
 open ARCHITECTURE.pdf
 ```
 
@@ -56,17 +56,16 @@ Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 1. **Hardware**: 64 GB+ GPU memory (Apple unified memory, CUDA VRAM, or system RAM for CPU), ~100 GB free disk.
 2. **System software**: Python 3.11, Java 21+, yq, K3s (or any K8s),
    `kubectl`. Run `make prereqs-system` to install automatically.
-3. **Three Python venvs**: root (CLIP, pgvector client), scorers
-   (transformers, mlx-lm, fastapi, uvicorn, httpx), and
-   ComfyUI. Run `make prereqs-python` to create all three.
+3. **Four Python venvs**: root (config utilities), scorers (PyTorch, mlx-vlm/llama-cpp,
+   FastAPI, transformers), ComfyUI, and tactical-llm (ruff, pyright, pytest).
+   Run `make prereqs-python` to create all four.
 4. **Models**: SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
    (Qwen3-VL-8B-Instruct Q8 GGUF), tactical LLM (Qwen3-Next-80B-A3B MLX 4-bit), and
    strategic LLM (Qwen3-Next-80B-A3B-Thinking bf16) via `make models`.
 5. **Middleware**: `middleware.sh start`  -  starts Artemis and PostgreSQL in K3s
    and establishes port-forwards (12007/12008/12009).
-6. **Configuration**: `cp config.yaml.default config.yaml`, then
-   `python menuconfig.py`.
-7. **Build**: `mvn package` in `pipeline/`.
+6. **Configuration**: `make config-default` (copies defaults); `make menuconfig` to customise.
+7. **Build**: `make build`.
 
 ---
 
@@ -114,7 +113,7 @@ The gallery updates in real time as images are generated and scored.
 +-- middleware.sh           Middleware manager (Artemis + PostgreSQL via K3s + port-forwards)
 +-- strategic.sh            Strategic super-component manager
 +-- INSTALL.md              Full installation guide
-+-- ARCHITECTURE.tex        LaTeX source -> ARCHITECTURE.pdf (make doc)
++-- ARCHITECTURE.tex        LaTeX source -> ARCHITECTURE.pdf (make docs)
 +-- MESSAGES.md             Message schema contracts for all addresses
 +-- config.yaml.default     Configuration template (cp to config.yaml, then edit)
 +-- config.py               Python config loader
@@ -151,6 +150,6 @@ The gallery updates in real time as images are generated and scored.
 ## Tests
 
 ```bash
-make test     # all Python tests
-make all      # tests + lint + typecheck + build
+make test     # pytest (scorers + tactical-llm) + JUnit (pipeline)
+make all      # venvs + ComfyUI + lint + typecheck + test + build
 ```
