@@ -8,7 +8,7 @@ endif
 
 .PHONY: all lint typecheck test build format docs clean distclean config-default menuconfig \
         prereqs prereqs-system prereqs-python models models-pick setup \
-        k8s-install comfyui-nodes targets
+        k8s-install comfyui-nodes targets check-docs
 
 targets:
 	@printf "%-20s %s\n" "all"            "Install venvs, then lint, type-check, test, and compile."
@@ -30,6 +30,7 @@ targets:
 	@printf "%-20s %s\n" "comfyui-nodes"  "Clone inpaint-nodes and segment_anything into ComfyUI/custom_nodes/."
 	@printf "%-20s %s\n" "models"         "Download all models via scripts/download_models.py."
 	@printf "%-20s %s\n" "models-pick"    "Launch the interactive HuggingFace model browser."
+	@printf "%-20s %s\n" "check-docs"     "Verify key factual claims in MESSAGES.md and ARCHITECTURE.tex against source code."
 	@printf "%-20s %s\n" "targets"        "Show this list."
 
 # Use generated config.yaml if present, otherwise fall back to the template.
@@ -53,6 +54,9 @@ test: config.yaml
 	$(MAKE) -C loop test
 	$(MAKE) -C loop/tactical-llm test
 	$(MAKE) -C pipeline test
+
+check-docs:
+	python3 check_docs.py
 
 build:
 	$(MAKE) -C pipeline compile
