@@ -374,36 +374,31 @@ To customise values interactively (requires \texttt{yq}):
 make menuconfig
 \end{lstlisting}
 
-At minimum, verify these keys in \texttt{config.yaml}:
+At minimum, verify these keys in
+\texttt{pipeline/src/main/resources/application.yml}:
 
 \begin{lstlisting}[style=yaml]
-compute:
-  comfyui:
-    backend: auto      # auto | mps | cuda | rocm | cpu
-    port: 12006
-    device_id:         # optional: integer index for eGPU or multi-GPU systems
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:12007/pipeline
+  artemis:
+    broker-url: tcp://localhost:12008   # Artemis AMQP via port-forward
 
-broker:
-  url: tcp://localhost:12008   # Artemis AMQP via port-forward from middleware.sh
+comfyui:
+  url: http://localhost:12006
 
-database:
-  postgres_url: jdbc:postgresql://localhost:12007/pipeline
+tactical-llm:
+  url: http://localhost:12001/v1
+  model: default      # model name passed to mlx_lm.server
 
-tactical:
-  model:
-    name: Huihui-Qwen3-Next-80B-A3B-Instruct-abliterated-mlx-4bit
-    server_url: http://localhost:12001/v1
-
-strategic:
-  model:
-    name: Huihui-Qwen3-Next-80B-A3B-Thinking-abliterated
-    server_url: http://localhost:12005/v1
+strategic-llm:
+  url: http://localhost:12005/v1
+  model: default
 \end{lstlisting}
 
-The \texttt{backend: auto} setting detects the platform at startup:
-macOS~$\to$~MPS; NVIDIA present~$\to$~CUDA; AMD ROCm present~$\to$~ROCm;
-otherwise CPU. Set \texttt{device\_id} to an integer device index when
-multiple GPUs are present (e.g.\ an eGPU over Thunderbolt).
+Shell-script settings (ComfyUI backend selection, model paths, LoRA registry)
+live in \texttt{config.yaml} --- see \texttt{INSTALL.md} and
+\texttt{config.yaml.default} for those keys.
 
 Run the environment checker to verify all dependencies are resolvable before
 starting the pipeline:
@@ -458,10 +453,11 @@ four internal workers, each responsible for a distinct phase of the loop:
         \texttt{loop.generated} and fires an \texttt{image\_ready} WebSocket
         event via \texttt{GalleryBroadcastService}.
   \item[\texttt{Scorer}] Listens on \texttt{loop.generated}. Calls the three
-        scorer sidecars in parallel via HTTP. Applies cascade threshold logic
-        in Java. Records results in PostgreSQL. Publishes passing candidates to
-        \texttt{loop.verdicts}; rejected images are written to PostgreSQL but
-        not published.
+        scorer sidecars sequentially via HTTP. Applies two-level threshold logic
+        in Java (CLIP score, then artifact confidence). Records results in
+        PostgreSQL. Publishes passing candidates to \texttt{loop.verdicts} with
+        full VLM dimension scores, issues, and recommendations; rejected images
+        are written to PostgreSQL but not published.
   \item[\texttt{TacticalLlmCaller}] Listens on \texttt{loop.verdicts}. Runs
         a full agentic loop: builds context from PostgreSQL, calls the tactical
         LLM server with tool definitions (\texttt{analyze\_image} via VLM
@@ -590,7 +586,7 @@ The \texttt{loop.retry} address carries the same JSON schema as
         to push an \texttt{image\_ready} WebSocket event to the browser.
 
   \item \texttt{Scorer} receives from \texttt{loop.generated} and calls all
-        three scorer sidecars in parallel via HTTP:
+        three scorer sidecars sequentially via HTTP:
         \begin{itemize}
           \item \texttt{POST http://localhost:12002/score} (CLIP scorer)
           \item \texttt{POST http://localhost:12003/score} (artifact scorer)
@@ -602,13 +598,13 @@ The \texttt{loop.retry} address carries the same JSON schema as
 
   \item Threshold evaluation in \texttt{Scorer.java}:
     \begin{itemize}
-      \item CLIP score below \texttt{thresholds.clip}: write rejected record
-            to PostgreSQL; stop.
-      \item Artifact confidence above \texttt{thresholds.artifact}: same.
-      \item VLM mean score below \texttt{thresholds.accept\_vlm\_mean\_min}:
-            same.
-      \item All scores within bounds: write candidate record to PostgreSQL,
-            publish to \texttt{loop.verdicts} with full scorer results.
+      \item CLIP score below \texttt{scoring.clip-threshold}: write rejected
+            record to PostgreSQL with \texttt{rejection\_reason = clip\_threshold}; stop.
+      \item Artifact confidence above \texttt{scoring.artifact-threshold}: same,
+            \texttt{rejection\_reason = artifact\_threshold}; stop.
+      \item Both within bounds: write candidate record to PostgreSQL, publish
+            to \texttt{loop.verdicts} with full scorer results. VLM scores are
+            always forwarded --- the tactical LLM decides what to do with them.
     \end{itemize}
 
   \item \texttt{TacticalLlmCaller} receives the verdict from
@@ -655,22 +651,16 @@ The \texttt{loop.retry} address carries the same JSON schema as
   \node[component,below=of clip] (clipcheck) {$<$ threshold?};
   \node[component,right=2.2cm of clipcheck] (artifact) {Artifact score};
   \node[component,below=of artifact] (artcheck) {$>$ threshold?};
-  \node[component,right=2.2cm of artcheck] (vlm) {VLM score};
-  \node[component,below=of vlm] (vlmcheck) {mean $<$ min?};
-  \node[component,right=2.2cm of vlmcheck] (candidate) {candidate};
+  \node[component,right=2.2cm of artcheck] (candidate) {candidate};
   \node[component,left=1.6cm of clipcheck,yshift=-0.8cm] (r1) {rejected};
   \node[component,left=1.6cm of artcheck,yshift=-0.8cm] (r2) {rejected};
-  \node[component,below=0.8cm of vlmcheck,xshift=-1.4cm] (r3) {rejected};
 
   \draw[arrow] (clip) -- (clipcheck);
   \draw[arrow] (clipcheck) -- node[lbl,above] {no} (artifact);
   \draw[arrow] (clipcheck) -- node[lbl,left] {yes} (r1);
   \draw[arrow] (artifact) -- (artcheck);
-  \draw[arrow] (artcheck) -- node[lbl,above] {no} (vlm);
+  \draw[arrow] (artcheck) -- node[lbl,above] {no} (candidate);
   \draw[arrow] (artcheck) -- node[lbl,left] {yes} (r2);
-  \draw[arrow] (vlm) -- (vlmcheck);
-  \draw[arrow] (vlmcheck) -- node[lbl,above] {no} (candidate);
-  \draw[arrow] (vlmcheck) -- node[lbl,left] {yes} (r3);
 \end{tikzpicture}
 \end{center}
 
@@ -690,14 +680,17 @@ extension for CLIP embeddings. Schema is applied in migrations V1--V4 under
   \item[\texttt{conversations}] Named creative projects. Parent of all workflows.
   \item[\texttt{workflows}] A stable creative direction within a conversation.
         Carries \texttt{workflow\_path}, \texttt{max\_retries},
-        \texttt{max\_inpaints}, and \texttt{budget\_policy} (fresh $|$ carry).
+        \texttt{max\_inpaints}, and \texttt{budget\_policy} (fresh $|$ accumulated).
   \item[\texttt{images}] One row per generated image. Key columns:
-        \texttt{image\_uuid}, \texttt{session\_uuid}, \texttt{workflow\_id},
-        \texttt{conversation\_id}, \texttt{image\_path}, \texttt{status}
-        (pending $|$ scored $|$ accepted $|$ rejected), \texttt{embedding
-        vector(512)}, \texttt{north\_star\_similarity float},
-        \texttt{clip\_score}, \texttt{artifact\_confidence}, and VLM scorer
-        fields.
+        \texttt{image\_uuid}, \texttt{session\_uuid}, \texttt{sequence\_number},
+        \texttt{workflow\_id}, \texttt{conversation\_id}, \texttt{image\_path},
+        \texttt{verdict} (candidate $|$ rejected),
+        \texttt{rejection\_reason} (clip\_threshold $|$ artifact\_threshold),
+        \texttt{decision} (accepted $|$ retry $|$ inpaint $|$ give\_up),
+        \texttt{clip\_score}, \texttt{artifact\_score},
+        \texttt{vlm\_scores JSONB}, \texttt{vlm\_issues TEXT[]},
+        \texttt{vlm\_recs TEXT[]},
+        \texttt{embedding vector(512)}, \texttt{north\_star\_similarity float}.
   \item[\texttt{budget}] Per-run retry and inpaint budget counters keyed by
         \texttt{session\_uuid}.
   \item[\texttt{chat\_messages}] Chat history between the operator and the
@@ -732,11 +725,14 @@ transactions, preventing message loss across restarts:
   \item[\texttt{session\_direction}] Tactical guidance for the current
         workflow run, written by the strategic LLM.
   \item[\texttt{taste\_synthesis}] Accumulated aesthetic preferences derived
-        from user feedback across sessions, written by the strategic LLM.
+        from user feedback, written by the tactical LLM via \texttt{TasteService}
+        when the feedback count threshold (\texttt{taste.synthesis-threshold},
+        default~5) is reached.
   \item[\texttt{pipeline\_events}] Mode switch signalling. Written by
         \texttt{TacticalLlmCaller} on \texttt{escalate} decision
-        (\texttt{type = 'mode\_switch\_requested'}). Read by \texttt{loop.sh}
-        to trigger strategic session startup.
+        (\texttt{type = 'mode\_switch\_requested'}). Read by
+        \texttt{StrategicLlmCaller.checkPendingEscalation()} (\texttt{@Scheduled}
+        every 10\,s) to trigger strategic session execution.
 \end{description}
 
 \subsection{Conversation and Workflow Hierarchy}
@@ -774,9 +770,10 @@ pipeline at \texttt{http://localhost:12000}.
 \toprule
 \textbf{Method} & \textbf{Path} & \textbf{Description} \\
 \midrule
-\texttt{GET}  & \texttt{/}                           & Single-page application (index.html) \\
-\texttt{POST} & \texttt{/session/start}               & Create a conversation \\
-\texttt{POST} & \texttt{/workflow/new}                & Create a workflow and first run \\
+\texttt{GET}  & \texttt{/}                                    & Single-page application (index.html) \\
+\texttt{POST} & \texttt{/session/start}                        & Create a conversation \\
+\texttt{POST} & \texttt{/conversations/\{id\}/cancel}          & Cancel a conversation (stops new decisions) \\
+\texttt{POST} & \texttt{/workflow/new}                         & Create a workflow and first run \\
 \texttt{POST} & \texttt{/workflow/\{id\}/resume}      & Resume a workflow (new run) \\
 \texttt{POST} & \texttt{/workflow/\{id\}/start-run}   & Publish a \texttt{loop.generate} message \\
 \texttt{POST} & \texttt{/feedback}                    & Record thumbs up/down for an image \\
@@ -955,32 +952,36 @@ LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 \begin{center}
 \begin{tabular}{lll}
 \toprule
-\textbf{Threshold} & \textbf{Default} & \textbf{Semantics} \\
+\textbf{Property (\texttt{application.yml})} & \textbf{Default} & \textbf{Semantics} \\
 \midrule
-\texttt{thresholds.clip}              & 0.25 & Reject if CLIP score $< 0.25$ \\
-\texttt{thresholds.artifact}          & 0.50 & Reject if AI confidence $> 0.50$ \\
-\texttt{tactical.decisions.accept\_vlm\_mean\_min} & 7.0 & Reject if VLM mean score $< 7.0$ \\
+\texttt{scoring.clip-threshold}     & 0.25 & Reject in Scorer if CLIP score $< 0.25$ \\
+\texttt{scoring.artifact-threshold} & 0.50 & Reject in Scorer if AI confidence $> 0.50$ \\
 \bottomrule
 \end{tabular}
 \end{center}
 
+These are the only two Scorer-level gates. VLM dimension scores are not
+thresholded in the Scorer --- all CLIP- and artifact-passing candidates are
+forwarded to \texttt{TacticalLlmCaller} so the tactical LLM can diagnose
+specific failures and issue targeted retry or inpaint decisions.
+
 All values are placeholders. Calibration procedure:
 
 \begin{enumerate}
-  \item Run the loop permissively (\texttt{thresholds.clip: 0.0},
-        \texttt{thresholds.artifact: 1.0},
-        \texttt{tactical.decisions.accept\_vlm\_mean\_min: 0.0}).
+  \item Run the loop permissively (\texttt{scoring.clip-threshold: 0.0},
+        \texttt{scoring.artifact-threshold: 1.0}).
   \item Query the \texttt{images} PostgreSQL table and examine score
         distributions across accepted and rejected images.
-  \item Set \texttt{clip} at the point below which VLM scores are consistently poor.
-  \item Set \texttt{artifact} at the point above which photorealism scores are consistently poor.
-  \item Set \texttt{accept\_vlm\_mean\_min} at a mean VLM score that reliably
-        filters poor-quality candidates without discarding good ones.
+  \item Set \texttt{scoring.clip-threshold} at the point below which the
+        tactical LLM consistently retries without improvement.
+  \item Set \texttt{scoring.artifact-threshold} at the point above which
+        photorealism scores are consistently poor.
   \item Iterate: thresholds too aggressive waste good candidates; too permissive
         waste tactical LLM compute.
 \end{enumerate}
 
-All threshold values are read from \texttt{config.yaml} at process startup.
+Threshold values are injected via Spring Boot's \texttt{@Value} annotation from
+\texttt{application.yml} (or environment variable overrides).
 No code changes are required for recalibration.
 
 % ============================================================
