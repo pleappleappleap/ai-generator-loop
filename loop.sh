@@ -39,6 +39,68 @@ _ARTIFACT_PORT=$(yq '.sidecars.artifact_scorer.port // 12003' "$CFG" 2>/dev/null
 _VLM_PORT=$(yq '.sidecars.vlm_scorer.port // 12004' "$CFG" 2>/dev/null)
 : "${_VLM_PORT:=12004}"
 
+# Additional values used only as Spring Boot env overrides
+_ARTEMIS_URL=$(yq '.broker.url // "tcp://localhost:12008"' "$CFG" 2>/dev/null)
+: "${_ARTEMIS_URL:=tcp://localhost:12008}"
+_COMFYUI_WS=$(yq '.broker.comfyui_ws // "ws://127.0.0.1:12006/ws"' "$CFG" 2>/dev/null)
+: "${_COMFYUI_WS:=ws://127.0.0.1:12006/ws}"
+_PG_URL=$(yq '.database.postgres_url // "jdbc:postgresql://localhost:12007/pipeline"' "$CFG" 2>/dev/null)
+: "${_PG_URL:=jdbc:postgresql://localhost:12007/pipeline}"
+_PG_USER=$(yq '.database.username // "pipeline"' "$CFG" 2>/dev/null)
+: "${_PG_USER:=pipeline}"
+_PG_PASS=$(yq '.database.password // "pipeline"' "$CFG" 2>/dev/null)
+: "${_PG_PASS:=pipeline}"
+_TACTICAL_MODEL=$(yq '.tactical.model.model_name // "default"' "$CFG" 2>/dev/null)
+: "${_TACTICAL_MODEL:=default}"
+_TACTICAL_TEMP=$(yq '.tactical.model.temperature // 0.1' "$CFG" 2>/dev/null)
+: "${_TACTICAL_TEMP:=0.1}"
+_TACTICAL_MAX_TOKENS=$(yq '.tactical.model.max_tokens // 128' "$CFG" 2>/dev/null)
+: "${_TACTICAL_MAX_TOKENS:=128}"
+_TACTICAL_MAX_TOKENS_THINKING=$(yq '.tactical.model.max_tokens_thinking // 512' "$CFG" 2>/dev/null)
+: "${_TACTICAL_MAX_TOKENS_THINKING:=512}"
+_TACTICAL_MAX_RETRIES=$(yq '.tactical.decisions.max_retries // 3' "$CFG" 2>/dev/null)
+: "${_TACTICAL_MAX_RETRIES:=3}"
+_TACTICAL_MAX_INPAINTS=$(yq '.tactical.decisions.max_inpaints // 2' "$CFG" 2>/dev/null)
+: "${_TACTICAL_MAX_INPAINTS:=2}"
+_TACTICAL_ACCEPT_VLM_MEAN=$(yq '.tactical.decisions.accept_vlm_mean_min // 7.0' "$CFG" 2>/dev/null)
+: "${_TACTICAL_ACCEPT_VLM_MEAN:=7.0}"
+_TACTICAL_ACCEPT_CLIP=$(yq '.tactical.decisions.accept_clip_min // 0.30' "$CFG" 2>/dev/null)
+: "${_TACTICAL_ACCEPT_CLIP:=0.30}"
+_STRATEGIC_URL=$(yq '.strategic.model.server_url // "http://localhost:12005/v1"' "$CFG" 2>/dev/null)
+: "${_STRATEGIC_URL:=http://localhost:12005/v1}"
+_STRATEGIC_MODEL=$(yq '.strategic.model.model_name // "default"' "$CFG" 2>/dev/null)
+: "${_STRATEGIC_MODEL:=default}"
+_CLIP_THRESHOLD=$(yq '.thresholds.clip // 0.25' "$CFG" 2>/dev/null)
+: "${_CLIP_THRESHOLD:=0.25}"
+_ARTIFACT_THRESHOLD=$(yq '.thresholds.artifact // 0.50' "$CFG" 2>/dev/null)
+: "${_ARTIFACT_THRESHOLD:=0.50}"
+
+# ── Spring Boot environment overrides ─────────────────────────────────────────
+# Exported so the Java pipeline inherits config.yaml values at startup.
+# Spring's relaxed binding maps UPPER_SNAKE_CASE to the equivalent property name.
+export SPRING_ARTEMIS_BROKER_URL="$_ARTEMIS_URL"
+export SPRING_DATASOURCE_URL="$_PG_URL"
+export SPRING_DATASOURCE_USERNAME="$_PG_USER"
+export SPRING_DATASOURCE_PASSWORD="$_PG_PASS"
+export COMFYUI_URL="$_COMFYUI_URL"
+export COMFYUI_WS="$_COMFYUI_WS"
+export TACTICAL_LLM_URL="$_LLM_URL"
+export TACTICAL_LLM_MODEL="$_TACTICAL_MODEL"
+export TACTICAL_LLM_TEMPERATURE="$_TACTICAL_TEMP"
+export TACTICAL_LLM_MAX_TOKENS="$_TACTICAL_MAX_TOKENS"
+export TACTICAL_LLM_MAX_TOKENS_THINKING="$_TACTICAL_MAX_TOKENS_THINKING"
+export TACTICAL_LLM_DECISIONS_MAX_RETRIES="$_TACTICAL_MAX_RETRIES"
+export TACTICAL_LLM_DECISIONS_MAX_INPAINTS="$_TACTICAL_MAX_INPAINTS"
+export TACTICAL_LLM_DECISIONS_ACCEPT_VLM_MEAN_MIN="$_TACTICAL_ACCEPT_VLM_MEAN"
+export TACTICAL_LLM_DECISIONS_ACCEPT_CLIP_MIN="$_TACTICAL_ACCEPT_CLIP"
+export STRATEGIC_LLM_URL="$_STRATEGIC_URL"
+export STRATEGIC_LLM_MODEL="$_STRATEGIC_MODEL"
+export SIDECARS_CLIP_SCORER_URL="http://localhost:${_CLIP_PORT}"
+export SIDECARS_ARTIFACT_SCORER_URL="http://localhost:${_ARTIFACT_PORT}"
+export SIDECARS_VLM_SCORER_URL="http://localhost:${_VLM_PORT}"
+export SCORING_CLIP_THRESHOLD="$_CLIP_THRESHOLD"
+export SCORING_ARTIFACT_THRESHOLD="$_ARTIFACT_THRESHOLD"
+
 _PIPELINE_HEALTH="http://localhost:12000/actuator/health"
 
 # ── Start ──────────────────────────────────────────────────────────────────────

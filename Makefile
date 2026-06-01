@@ -52,7 +52,6 @@ typecheck:
 
 test: config.yaml
 	$(MAKE) -C loop test
-	$(MAKE) -C loop/tactical-llm test
 	$(MAKE) -C pipeline test
 
 check-docs:
@@ -67,7 +66,6 @@ format:
 docs:
 	latexmk -pdf -interaction=nonstopmode ARCHITECTURE.tex
 	$(MAKE) -C loop docs
-	$(MAKE) -C loop/tactical-llm docs
 
 clean:
 	latexmk -C ARCHITECTURE.tex

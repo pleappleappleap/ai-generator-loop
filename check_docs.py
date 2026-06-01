@@ -211,18 +211,34 @@ def check_workflow_params() -> None:
     ok("MESSAGES.md workflow_params schema")
 
 
-# ── prompts.py: no reference to non-existent tactical_llm.py ─────────────────
+# ── INSTALL.md: config.yaml as single source of truth ────────────────────────
 
-def check_prompts_docstring() -> None:
-    path = ROOT / "loop/tactical-llm/prompts.py"
-    if not path.exists():
-        ok("prompts.py (not present)")
-        return
-    text = path.read_text()
-    if "tactical_llm.py" in text:
-        fail("prompts.py: references tactical_llm.py which does not exist")
+def check_install_md() -> None:
+    install = read("INSTALL.md")
+
+    # config.yaml must be described as the source of truth
+    if "single source of truth" not in install:
+        fail("INSTALL.md: missing 'single source of truth' statement for config.yaml")
     else:
-        ok("prompts.py: no stale tactical_llm.py reference")
+        ok("INSTALL.md config.yaml source-of-truth statement")
+
+    # loop.sh propagation must be documented
+    if "loop.sh" not in install or "Spring Boot" not in install:
+        fail("INSTALL.md: missing explanation that loop.sh exports Spring Boot env vars")
+    else:
+        ok("INSTALL.md loop.sh Spring Boot export explanation")
+
+    # application.yml must be mentioned as not needing direct edits
+    if "application.yml" not in install:
+        fail("INSTALL.md: should mention application.yml (to say it need not be edited)")
+    else:
+        ok("INSTALL.md application.yml mention")
+
+    # config.yaml keys shown must be the actual config.yaml paths
+    for key in ("broker:", "database:", "thresholds:", "tactical:", "strategic:"):
+        if key not in install:
+            fail(f"INSTALL.md: config.yaml snippet missing top-level key '{key}'")
+    ok("INSTALL.md config.yaml snippet keys")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -235,7 +251,7 @@ def main() -> int:
     check_inpaint_publisher()
     check_ws_events()
     check_workflow_params()
-    check_prompts_docstring()
+    check_install_md()
 
     total = len(_passes) + len(_failures)
     print(f"\ncheck_docs: {len(_passes)}/{total} checks passed")

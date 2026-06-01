@@ -340,6 +340,12 @@ wget -q -O loop/ComfyUI/models/grounding-dino/groundingdino_swint_ogc.pth \
 
 ## 8. Configuration
 
+`config.yaml` is the single source of truth for all components — shell scripts,
+Python scorers, and the Java pipeline. You do not need to edit
+`pipeline/src/main/resources/application.yml`; `loop.sh` reads `config.yaml`
+and exports the corresponding Spring Boot environment variables before starting
+the Java pipeline.
+
 Copy the defaults into `config.yaml`:
 
 ```bash
@@ -363,6 +369,15 @@ compute:
 
 broker:
   url: tcp://localhost:12008   # Artemis via port-forward from middleware.sh
+
+database:
+  postgres_url: jdbc:postgresql://localhost:12007/pipeline
+  username: pipeline
+  password: pipeline
+
+thresholds:
+  clip: 0.25           # minimum CLIP score to pass the first gate
+  artifact: 0.50       # minimum artifact-detector confidence to pass the second gate
 
 tactical:
   model:

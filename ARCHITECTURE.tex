@@ -374,31 +374,39 @@ To customise values interactively (requires \texttt{yq}):
 make menuconfig
 \end{lstlisting}
 
-At minimum, verify these keys in
-\texttt{pipeline/src/main/resources/application.yml}:
+\texttt{config.yaml} is the single source of truth for all components.
+\texttt{loop.sh} reads \texttt{config.yaml} via \texttt{yq} and exports the
+corresponding Spring Boot environment variables before starting the Java pipeline,
+so \texttt{application.yml} never needs to be edited directly.
+
+At minimum, verify these keys in \texttt{config.yaml}:
 
 \begin{lstlisting}[style=yaml]
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:12007/pipeline
-  artemis:
-    broker-url: tcp://localhost:12008   # Artemis AMQP via port-forward
+broker:
+  url: tcp://localhost:12008   # Artemis AMQP via port-forward
 
-comfyui:
-  url: http://localhost:12006
+database:
+  postgres_url: jdbc:postgresql://localhost:12007/pipeline
+  username: pipeline
+  password: pipeline
 
-tactical-llm:
-  url: http://localhost:12001/v1
-  model: default      # model name passed to mlx_lm.server
+thresholds:
+  clip: 0.25
+  artifact: 0.50
 
-strategic-llm:
-  url: http://localhost:12005/v1
-  model: default
+tactical:
+  model:
+    server_url: http://localhost:12001/v1
+    model_name: default
+
+strategic:
+  model:
+    server_url: http://localhost:12005/v1
+    model_name: default
 \end{lstlisting}
 
-Shell-script settings (ComfyUI backend selection, model paths, LoRA registry)
-live in \texttt{config.yaml} --- see \texttt{INSTALL.md} and
-\texttt{config.yaml.default} for those keys.
+See \texttt{INSTALL.md} and \texttt{config.yaml.default} for the full key reference,
+including ComfyUI backend selection, model paths, and LoRA registry.
 
 Run the environment checker to verify all dependencies are resolvable before
 starting the pipeline:
