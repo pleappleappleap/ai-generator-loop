@@ -1057,7 +1057,7 @@ document.getElementById('modal-session-ok').onclick = async () => {
 document.getElementById('btn-new-workflow').onclick = () => {
   if (!state.activeConvId) { status('Create a conversation first'); return; }
   document.getElementById('wf-name').value = '';
-  document.getElementById('wf-path').value = '';
+  document.getElementById('wf-path').value = `loop/workflows/workflow-${Date.now()}.json`;
   document.getElementById('wf-desc').value = '';
   showModal('modal-workflow');
 };
