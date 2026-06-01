@@ -4,11 +4,16 @@
 # Python ML sidecars, and the Java pipeline.
 # Middleware (Artemis + PostgreSQL) is managed separately by middleware.sh at repo root.
 #
-# Usage: loop.sh {start|stop [--all]|restart|status|health}
+# Usage: loop.sh {start [--auto-escalate]|stop [--all]|restart|status|health}
 #
-#   start       Start middleware (if needed) then all loop components.
+#   start [--auto-escalate]
+#               Start middleware (if needed) then all loop components.
 #               Blocks until every component reports healthy. Does not return
 #               until the workflow is ready to accept generation requests.
+#               With --auto-escalate: forks a background monitor that hands off
+#               to strategic.sh automatically when the pipeline exits with a
+#               pending escalation in pipeline_events. Without this flag the
+#               operator controls when (and whether) to start strategic.sh.
 #   stop        Stop all loop components. Middleware is left running.
 #   stop --all  Stop loop components AND middleware.
 #   restart     stop then start (middleware stays up).
@@ -105,6 +110,50 @@ _PIPELINE_HEALTH="http://localhost:12000/actuator/health"
 
 # ── Start ──────────────────────────────────────────────────────────────────────
 
+# ── Escalation monitor ────────────────────────────────────────────────────────
+# Forked by _start when --auto-escalate is passed. Watches the pipeline PID;
+# when it exits, checks pipeline_events for a pending escalation and hands off
+# to strategic.sh if one is found.
+_monitor_escalation() {
+    local pid_file="$PIDDIR/pipeline.pid"
+    local pipeline_pid
+
+    # Wait for the PID file to appear (pipeline.sh start is async)
+    local waited=0
+    while [ ! -f "$pid_file" ] && [ "$waited" -lt 30 ]; do
+        sleep 1
+        waited=$((waited + 1))
+    done
+    pipeline_pid=$(cat "$pid_file" 2>/dev/null) || return
+
+    # Wait for the pipeline process to exit
+    while kill -0 "$pipeline_pid" 2>/dev/null; do
+        sleep 5
+    done
+
+    # Parse connection details from JDBC URL
+    # jdbc:postgresql://HOST:PORT/DBNAME
+    local pg_host pg_port pg_db
+    pg_host=$(printf '%s' "$_PG_URL" | sed 's|jdbc:postgresql://\([^:]*\).*|\1|')
+    pg_port=$(printf '%s' "$_PG_URL" | sed 's|jdbc:postgresql://[^:]*:\([0-9]*\).*|\1|')
+    pg_db=$(printf '%s' "$_PG_URL" | sed 's|jdbc:postgresql://[^/]*/\([^?]*\).*|\1|')
+
+    local pending
+    pending=$(PGPASSWORD="$_PG_PASS" psql \
+        -h "$pg_host" -p "$pg_port" -U "$_PG_USER" -d "$pg_db" \
+        -tAc "SELECT id FROM pipeline_events WHERE type='mode_switch_requested' AND handled_at IS NULL ORDER BY created_at DESC LIMIT 1" \
+        2>/dev/null)
+
+    if [ -n "$pending" ]; then
+        echo ""
+        echo "==> Escalation detected (pipeline_events id=$pending). Starting strategic..."
+        "$SOXHLET_ROOT/strategic.sh" start
+    else
+        echo ""
+        echo "==> Pipeline exited with no pending escalation. Loop stopped."
+    fi
+}
+
 _stop_strategic_if_running() {
     local pid_file="$PIDDIR/strategic_llm.pid"
     if [ -f "$pid_file" ]; then
@@ -146,6 +195,11 @@ _start() {
 
     echo ""
     _status
+
+    if [ "${_AUTO_ESCALATE:-0}" = "1" ]; then
+        echo "Auto-escalate enabled: monitoring pipeline for escalation handoff..."
+        _monitor_escalation &
+    fi
 }
 
 # ── Stop ───────────────────────────────────────────────────────────────────────
@@ -221,13 +275,18 @@ _health() {
 # ── Dispatch ───────────────────────────────────────────────────────────────────
 
 case "${1:-status}" in
-    start)   _start ;;
+    start)
+        case "${2:-}" in
+            --auto-escalate) _AUTO_ESCALATE=1 _start ;;
+            "")              _start ;;
+            *) echo "Usage: $0 start [--auto-escalate]" >&2; exit 1 ;;
+        esac ;;
     stop)
         case "${2:-}" in
             --all) _stop_all ;;
             *)     _stop ;;
         esac ;;
-    restart) _stop; echo ""; _start ;;
+    restart) _stop; echo ""; _AUTO_ESCALATE=0 _start ;;
     status)  _status ;;
     health)  _health ;;
     *)
