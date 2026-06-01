@@ -17,6 +17,7 @@ import json
 import subprocess
 import sys
 import threading
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -112,6 +113,8 @@ def _to_data_uri(image_source: str) -> str:
         return f"data:{content_type};base64,{base64.b64encode(image_bytes).decode()}"
     if image_source.startswith("data:"):
         return image_source
+    if image_source.startswith("file://"):
+        image_source = urllib.parse.urlparse(image_source).path
     with open(image_source, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode()
     ext = Path(image_source).suffix.lower().lstrip(".")
@@ -129,6 +132,8 @@ def _to_mlx_image(image_source: str):
         from PIL import Image as PILImage
         _, data = image_source.split(",", 1)
         return PILImage.open(io.BytesIO(base64.b64decode(data)))
+    if image_source.startswith("file://"):
+        return urllib.parse.urlparse(image_source).path
     return image_source  # local path or http(s) URL — mlx-vlm handles both
 
 

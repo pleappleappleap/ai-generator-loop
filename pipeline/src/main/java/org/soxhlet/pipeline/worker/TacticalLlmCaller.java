@@ -366,7 +366,7 @@ public class TacticalLlmCaller {
         ObjectNode props = mapper.createObjectNode();
         ObjectNode imageProp = mapper.createObjectNode();
         imageProp.put("type", "string");
-        imageProp.put("description", "Local file path of the image. Use the image_path value from your context.");
+        imageProp.put("description", "file:// URI of the image. Use the image_url value from your context.");
         ObjectNode questionProp = mapper.createObjectNode();
         questionProp.put("type", "string");
         questionProp.put("description", "Your specific question about the image.");
@@ -508,8 +508,9 @@ public class TacticalLlmCaller {
         StringBuilder sb = new StringBuilder();
 
         sb.append("── IMAGE UNDER EVALUATION ───────────────────────────────────\n");
+        String imageUrl = imagePath != null ? "file://" + imagePath : "(unknown)";
         sb.append("  image_uuid:        ").append(imageUuid).append("\n");
-        sb.append("  image_path:        ").append(imagePath != null ? imagePath : "(unknown)").append("\n");
+        sb.append("  image_url:         ").append(imageUrl).append("\n");
         sb.append("  verdict:           ").append(verdictType).append("\n");
         sb.append("  rejection_reason:  ").append(rejectionReason != null ? rejectionReason : "null").append("\n\n");
 
