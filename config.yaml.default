@@ -13,10 +13,9 @@ models:
     dir: auto                                      # auto: {scorers}/models/vlm
     # ── macOS: mlx-vlm (MLX native) ──────────────────────────────────────────
     # mlx_model_name is the subdirectory within dir/ that mlx_vlm.load() receives.
-    # Use an abliterated Qwen3-VL-8B model converted to MLX format.
-    # Example: mlx-community/Qwen2.5-VL-7B-Instruct-4bit (non-abliterated fallback)
-    mlx_model_name: ""                             # required on macOS — set via make config
-    mlx_source: ""                                 # hf:<repo> snapshot, downloaded to dir/mlx_model_name/
+    # mlx-vlm loads HuggingFace safetensors format directly — no MLX conversion needed.
+    mlx_model_name: Qwen3-VL-8B-Instruct-abliterated-v2
+    mlx_source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2
     # ── Linux / Windows: llama.cpp (GGUF) ────────────────────────────────────
     filename: Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf
     source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.Q8_0.gguf

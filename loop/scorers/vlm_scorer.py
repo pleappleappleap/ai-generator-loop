@@ -14,6 +14,7 @@ Both backends expose identical HTTP endpoints:
 import base64
 import io
 import json
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -35,13 +36,38 @@ _infer_lock = threading.Lock()
 
 # ── Backend initialisation ────────────────────────────────────────────────────
 
+def _ensure_quantized(base_path: str) -> str:
+    """Quantize the VLM model to Q8 on first run and save alongside the original.
+
+    Subsequent startups detect the saved q8 directory and skip quantization.
+    Returns base_path unchanged if the model directory does not exist (e.g. in tests).
+    """
+    base = Path(base_path)
+    if not base_path or not base.exists():
+        return base_path
+    q_path = Path(base_path + "-q8")
+    if q_path.exists() and any(q_path.glob("*.safetensors")):
+        return str(q_path)
+    print(f"[vlm_scorer] Quantizing VLM to Q8 (one-time) → {q_path}", flush=True)
+    subprocess.run(
+        [sys.executable, "-m", "mlx_vlm.convert",
+         "--hf-path", base_path,
+         "--mlx-path", str(q_path),
+         "--quantize", "--q-bits", "8"],
+        check=True,
+    )
+    return str(q_path)
+
+
 if _IS_MACOS:
     import mlx.core as mx  # noqa: F401  — ensure MLX is importable
     from mlx_vlm import generate as _mlx_generate
     from mlx_vlm import load as _mlx_load
     from mlx_vlm.utils import load_config as _mlx_load_config
 
-    _model_path = str(Path(_vlm_cfg["dir"]) / _vlm_cfg.get("mlx_model_name", ""))
+    _model_path = _ensure_quantized(
+        str(Path(_vlm_cfg["dir"]) / _vlm_cfg.get("mlx_model_name", ""))
+    )
     _mlx_model, _mlx_processor = _mlx_load(_model_path)
     _mlx_config = _mlx_load_config(_model_path)
 
