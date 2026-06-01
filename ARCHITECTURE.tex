@@ -206,7 +206,7 @@ HuggingFace CLI   & \checkmark & \checkmark & \texttt{huggingface-cli} for model
 \end{center}
 
 \LaTeX{} is \emph{not} installed automatically --- it is only needed to
-regenerate this document (\texttt{make doc}).
+regenerate this document (\texttt{make docs}).
 
 \subsection{ActiveMQ Artemis and PostgreSQL (K3s)}
 
@@ -241,34 +241,27 @@ The Artemis management console is available at \texttt{http://localhost:12009}
 
 \subsection{Python Environments}
 
-There are three separate virtual environments:
+There are four separate virtual environments:
 
 \begin{itemize}
-  \item \textbf{Root venv} (\texttt{venv/}): used by utilities such as
-        \texttt{check\_env.py} and \texttt{model\_picker.py}.
-  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): used by all
-        three scorer sidecars and the \texttt{mlx\_lm} tactical and strategic
-        LLM servers. Includes \texttt{fastapi}, \texttt{uvicorn},
-        \texttt{httpx}, \texttt{transformers}, and \texttt{mlx-lm}.
-  \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}): used
-        exclusively by ComfyUI and managed by \texttt{make prereqs}.
+  \item \textbf{Root venv} (\texttt{venv/}): \texttt{pyyaml} --- used by
+        config utilities and \texttt{model\_picker.py}.
+  \item \textbf{Scorers venv} (\texttt{loop/scorers/venv/}): PyTorch,
+        FastAPI, uvicorn, httpx, transformers; plus \texttt{mlx-vlm} and
+        \texttt{mlx-lm} on macOS or \texttt{llama-cpp-python} on
+        Linux/Windows.
+  \item \textbf{ComfyUI venv} (\texttt{loop/ComfyUI/venv/}): ComfyUI
+        runtime and custom node dependencies.
+  \item \textbf{Tactical-LLM venv} (\texttt{loop/tactical-llm/venv/}):
+        development tools only --- \texttt{ruff}, \texttt{pyright},
+        \texttt{pytest}.
 \end{itemize}
 
+Create all four with:
+
 \begin{lstlisting}[style=shell]
-# Root environment
-cd $SOXHLET_ROOT
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip && pip install -r requirements.txt && deactivate
-
-# Scorers environment
-cd $SOXHLET_ROOT/loop/scorers
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip && pip install -r requirements.txt && deactivate
+make prereqs-python
 \end{lstlisting}
-
-\texttt{make prereqs-python} runs all of the above automatically.
 
 \subsection{Model Downloads}
 
@@ -368,12 +361,16 @@ v0.1.0-alpha/groundingdino_swint_ogc.pth"
 
 \subsection{Configuration}
 
-Copy the default template and open the interactive editor:
+Copy the default template into \texttt{config.yaml}:
 
 \begin{lstlisting}[style=shell]
-cd $SOXHLET_ROOT
-cp config.yaml.default config.yaml
-python menuconfig.py
+make config-default
+\end{lstlisting}
+
+To customise values interactively (requires \texttt{yq}):
+
+\begin{lstlisting}[style=shell]
+make menuconfig
 \end{lstlisting}
 
 At minimum, verify these keys in \texttt{config.yaml}:
@@ -425,9 +422,11 @@ python check_env.py
 \subsection{Building the Pipeline}
 
 \begin{lstlisting}[style=shell]
-cd $SOXHLET_ROOT/pipeline
-mvn package -DskipTests
+make build
 \end{lstlisting}
+
+This runs Apache Ivy dependency resolution and \texttt{javac --release 21}
+against the pipeline sources.
 
 % ============================================================
 \section{Technology Stack}
@@ -441,9 +440,9 @@ mvn package -DskipTests
 Message broker    & ActiveMQ Artemis (AMQP~1.0)             & Native AMQP~1.0; K3s deployment \\
 Operational state & PostgreSQL + pgvector (K3s)             & Relational + vector queries; Flyway migrations \\
 Image generation  & ComfyUI + SDXL                          & Workflow-based; supports ControlNet / LoRA \\
-Holistic scoring  & Qwen3-VL-8B Q8 GGUF via llama.cpp      & Fast local VLM; no API dependency \\
-Tactical LLM      & Qwen3-Next-80B-A3B MLX 4-bit via mlx\_lm & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
-Strategic LLM     & Qwen3-Next-80B-A3B-Thinking bf16 via mlx\_lm & Same architecture; thinking variant \\
+Holistic scoring  & Qwen3-VL-8B mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; no API dependency \\
+Tactical LLM      & Qwen3-Next-80B-A3B mlx\_lm (macOS) / llama.cpp (Linux) & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
+Strategic LLM     & Qwen3-Next-80B-A3B-Thinking mlx\_lm (macOS) / llama.cpp (Linux) & Same architecture; thinking variant \\
 Pipeline / UI     & Spring Boot + JMS + WebSocket           & All pipeline logic; REST + WebSocket UI \\
 Scorer sidecars   & Python (FastAPI + uvicorn)              & HTTP services; no broker dependency \\
 \bottomrule
@@ -964,7 +963,7 @@ LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 \midrule
 \texttt{thresholds.clip}              & 0.25 & Reject if CLIP score $< 0.25$ \\
 \texttt{thresholds.artifact}          & 0.50 & Reject if AI confidence $> 0.50$ \\
-\texttt{thresholds.accept\_vlm\_mean\_min} & 7.0 & Reject if VLM mean score $< 7.0$ \\
+\texttt{tactical.decisions.accept\_vlm\_mean\_min} & 7.0 & Reject if VLM mean score $< 7.0$ \\
 \bottomrule
 \end{tabular}
 \end{center}
@@ -972,8 +971,9 @@ LLM server (same architecture, bf16, \textasciitilde40--50\,GB working set).
 All values are placeholders. Calibration procedure:
 
 \begin{enumerate}
-  \item Run the loop permissively (\texttt{clip: 0.0}, \texttt{artifact: 1.0},
-        \texttt{accept\_vlm\_mean\_min: 0.0}).
+  \item Run the loop permissively (\texttt{thresholds.clip: 0.0},
+        \texttt{thresholds.artifact: 1.0},
+        \texttt{tactical.decisions.accept\_vlm\_mean\_min: 0.0}).
   \item Query the \texttt{images} PostgreSQL table and examine score
         distributions across accepted and rejected images.
   \item Set \texttt{clip} at the point below which VLM scores are consistently poor.
@@ -1018,7 +1018,7 @@ Test files and their coverage:
 
 \begin{lstlisting}[style=shell]
 cd $SOXHLET_ROOT
-make all    # lint + typecheck + test + build
+make all    # venvs + ComfyUI + lint + typecheck + test + build
 \end{lstlisting}
 
 % ============================================================
