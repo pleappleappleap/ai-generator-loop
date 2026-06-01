@@ -64,9 +64,14 @@ def _hf_download_file(repo_id: str, filename: str, local_dir: str) -> None:
     )
 
 
+_MODEL_WEIGHT_EXTS = {".safetensors", ".gguf", ".bin", ".pth", ".pt"}
+
+
 def _hf_snapshot(repo_id: str, local_dir: str) -> None:
     dest = Path(local_dir)
-    if dest.exists() and any(f for f in dest.iterdir() if not f.name.startswith(".")):
+    if dest.exists() and any(
+        f.suffix in _MODEL_WEIGHT_EXTS for f in dest.rglob("*") if f.is_file()
+    ):
         print(f"    Already present — skipping.")
         return
     dest.mkdir(parents=True, exist_ok=True)
