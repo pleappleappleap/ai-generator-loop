@@ -239,7 +239,7 @@ public class ChatWsHandler extends TextWebSocketHandler {
 
         } catch (java.net.ConnectException | java.net.http.HttpConnectTimeoutException e) {
             String errMsg = "⚠️ Cannot reach the LLM server at **" + llmUrl + "**. "
-                    + "Run `./loop/llama_cpp.sh start` to start it.";
+                    + "Run `./loop/tactical_llm.sh start` to start it.";
             sendJson(session, jsonChunk(errMsg));
             sendJson(session, jsonDone());
             return errMsg;

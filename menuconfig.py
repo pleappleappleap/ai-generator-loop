@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """menuconfig-style TUI for ai-image pipeline configuration.
 
-Presents a Linux kernel menuconfig-inspired interface for generating
+Presents a Linux kernel menuconfig-inspired interface for editing
 config.yaml. Auto-detects GPU backend, package manager, and all
 repository paths; every value can be overridden.
 
 Usage::
 
     python3 menuconfig.py
-    make config
+    make menuconfig
 
 Keys:
     ↑ / ↓       Navigate items
@@ -106,8 +106,7 @@ def _build_defaults() -> dict:
         "models": {
             "vlm": {
                 "dir": f"{scorers}/models/vlm",
-                "filename": "Qwen2.5-VL-7B-Instruct-Q5_K_M.gguf",
-                "n_gpu_layers": -1,
+                "mlx_model_name": "Qwen3-VL-8B-Instruct-abliterated-v2",
                 "context_length": 4096,
             },
             "artifact_detector": {
@@ -118,12 +117,10 @@ def _build_defaults() -> dict:
                 "pretrained": "openai",
             },
         },
-        "gpu": {
-            "backend": gpu_backend,
-        },
         "thresholds": {
             "clip": 0.25,
             "artifact": 0.50,
+            "score_timeout_secs": 60,
         },
         "broker": {
             "url":             "tcp://localhost:12008",
@@ -143,11 +140,10 @@ def _build_defaults() -> dict:
         "tactical": {
             "model": {
                 "dir":            f"{scorers}/models/tactical",
-                "filename":       "Qwen3-30B-A3B-Instruct-2507-Q4_K_M.gguf",
-                "n_gpu_layers":   -1,
                 "context_length": 8192,
                 "temperature":    0.1,
-                "max_tokens":     512,
+                "max_tokens":     128,
+                "server_url":     "http://localhost:12001/v1",
             },
             "decisions": {
                 "max_retries":         3,
@@ -160,13 +156,9 @@ def _build_defaults() -> dict:
             "comfyui":         {"backend": gpu_backend},
             "clip_scorer":     {"backend": gpu_backend},
             "artifact_scorer": {"backend": gpu_backend},
-            "vlm_scorer":      {"backend": gpu_backend, "n_gpu_layers": -1},
-            "tactical_llm":    {"backend": gpu_backend, "n_gpu_layers": -1, "expert_offload": False},
-        },
-        "sidecars": {
-            "clip_scorer":     {"url": "http://localhost:12002", "port": 12002},
-            "artifact_scorer": {"url": "http://localhost:12003", "port": 12003},
-            "vlm_scorer":      {"url": "http://localhost:12004", "port": 12004},
+            "vlm_scorer":      {"backend": gpu_backend},
+            "tactical_llm":    {"backend": "auto"},
+            "strategic_llm":   {"backend": "auto"},
         },
     }
 
@@ -203,17 +195,15 @@ MENU_SCHEMA = [
         "help": "Model file locations and inference parameters",
         "children": [
             {
-                "label": "VLM (Qwen2.5-VL)",
+                "label": "VLM (Qwen3-VL-8B)",
                 "key": "vlm",
                 "help": "Visual language model for holistic image evaluation",
                 "children": [
-                    {"label": "Model directory",  "key": "dir",            "type": "string",
-                     "help": "Directory containing the GGUF model file"},
-                    {"label": "Model filename",   "key": "filename",       "type": "string",
-                     "help": "GGUF model filename within the model directory"},
-                    {"label": "GPU layers",       "key": "n_gpu_layers",   "type": "int",
-                     "help": "-1 = all layers on GPU (recommended); 0 = CPU only"},
-                    {"label": "Context length",   "key": "context_length", "type": "int",
+                    {"label": "Model directory",       "key": "dir",            "type": "string",
+                     "help": "Directory containing the VLM model files"},
+                    {"label": "MLX model name (macOS)", "key": "mlx_model_name", "type": "string",
+                     "help": "Subdirectory name within dir/ for mlx-vlm (macOS only)"},
+                    {"label": "Context length",        "key": "context_length", "type": "int",
                      "help": "Maximum context window in tokens (default 4096)"},
                 ],
             },
@@ -236,24 +226,6 @@ MENU_SCHEMA = [
                     {"label": "Pretrained",  "key": "pretrained", "type": "string",
                      "help": "Pretrained weights source (e.g. openai)"},
                 ],
-            },
-        ],
-    },
-    {
-        "label": "GPU",
-        "key": "gpu",
-        "help": "GPU compute backend — affects ComfyUI launch args and torch device",
-        "children": [
-            {
-                "label": "Backend",
-                "key": "backend",
-                "type": "choice",
-                "choices": ["mps", "cuda", "rocm", "cpu"],
-                "help": (
-                    "mps: Apple Metal (macOS). eGPU auto-selected by Metal when connected. "
-                    "NVIDIA eGPU on Apple Silicon: set cuda manually if signed drivers present. "
-                    "cuda: NVIDIA via CUDA (Linux). rocm: AMD via ROCm/HIP (Linux). cpu: fallback."
-                ),
             },
         ],
     },
@@ -293,20 +265,18 @@ MENU_SCHEMA = [
             {
                 "label": "Model",
                 "key": "model",
-                "help": "Local GGUF model for tactical decisions",
+                "help": "Tactical LLM — mlx_lm.server (macOS) or llama_cpp.server (Linux)",
                 "children": [
                     {"label": "Model directory",  "key": "dir",            "type": "string",
-                     "help": "Directory containing the tactical LLM GGUF file"},
-                    {"label": "Model filename",   "key": "filename",       "type": "string",
-                     "help": "GGUF filename (e.g. Qwen2.5-14B-Instruct-Q5_K_M.gguf)"},
-                    {"label": "GPU layers",       "key": "n_gpu_layers",   "type": "int",
-                     "help": "-1 = all layers on GPU; 0 = CPU only"},
+                     "help": "Directory containing the tactical LLM model files"},
                     {"label": "Context length",   "key": "context_length", "type": "int",
                      "help": "Token context window (default 8192)"},
                     {"label": "Temperature",      "key": "temperature",    "type": "float",
                      "help": "Sampling temperature (0.1 = deterministic)"},
                     {"label": "Max tokens",       "key": "max_tokens",     "type": "int",
-                     "help": "Maximum tokens in LLM decision response (default 512)"},
+                     "help": "Maximum tokens in LLM decision response (default 128)"},
+                    {"label": "Server URL",       "key": "server_url",     "type": "string",
+                     "help": "OpenAI-compatible API base URL (default http://localhost:12001/v1)"},
                 ],
             },
             {
@@ -367,7 +337,7 @@ MENU_SCHEMA = [
             {
                 "label": "Tactical LLM",
                 "key": "tactical_llm",
-                "help": "Runtime compute options for the llama.cpp tactical model server",
+                "help": "Compute backend for tactical LLM (mlx_lm on macOS, llama_cpp on Linux)",
                 "children": [
                     {
                         "label": "Backend",
@@ -375,15 +345,6 @@ MENU_SCHEMA = [
                         "type": "choice",
                         "choices": ["auto", "mps", "cuda", "rocm", "cpu"],
                         "help": "GPU backend: auto detects at startup",
-                    },
-                    {"label": "GPU layers", "key": "n_gpu_layers", "type": "int",
-                     "help": "-1 = all layers on GPU; 0 = CPU only"},
-                    {
-                        "label": "Expert offload (MoE)",
-                        "key": "expert_offload",
-                        "type": "choice",
-                        "choices": ["false", "true"],
-                        "help": "Stream inactive MoE expert weights from CPU RAM. Enable on CUDA/small-RAM systems.",
                     },
                 ],
             },
@@ -802,7 +763,7 @@ def main() -> None:
         print(f"Package manager: {result['system']['package_manager']}")
         print(f"Repo root:       {result['paths']['root']}")
         print()
-        print("Run  make check  to validate the environment.")
+        print("Run  python check_env.py  to validate the environment.")
     else:
         print("Aborted — no changes saved.")
 

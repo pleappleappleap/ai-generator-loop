@@ -4,14 +4,15 @@ Reads config.yaml from the repository root (the directory containing this
 file). Expands ~ and environment variables in all string values. Provides
 typed property access to all configuration sections.
 
-Run ``make config`` to generate config.yaml from the interactive TUI.
+Run ``make config-default`` to copy the defaults into config.yaml, then
+optionally ``make menuconfig`` to customise values interactively.
 
 Example::
 
     from config import load, resolve_backend
     cfg = load()
     backend = resolve_backend(cfg.compute["clip_scorer"]["backend"])
-    print(cfg.paths["lancedb"])
+    print(cfg.paths["scorers"])
 """
 
 from __future__ import annotations
@@ -50,7 +51,7 @@ def _resolve_auto_paths(data: dict) -> dict:
 
     The config.yaml uses ``"auto"`` as a placeholder for paths that are
     derived from the repository root at runtime.  This mirrors the shell
-    logic in ``start_loop.sh`` so that Python processes see fully-resolved
+    logic in ``loop.sh`` so that Python processes see fully-resolved
     absolute paths rather than the literal string ``"auto"``.
     """
     root = str(_REPO_ROOT)
@@ -62,8 +63,6 @@ def _resolve_auto_paths(data: dict) -> dict:
 
     if paths.get("scorers") == "auto":
         paths["scorers"] = str(Path(r) / "loop" / "scorers")
-    if paths.get("lancedb") == "auto":
-        paths["lancedb"] = str(Path(r) / "lancedb")
     if paths.get("comfyui") == "auto":
         paths["comfyui"] = str(Path(r) / "loop" / "ComfyUI")
     if paths.get("output") == "auto":
@@ -88,10 +87,6 @@ def _resolve_auto_paths(data: dict) -> dict:
     smodel = strategic.get("model", {})
     if smodel.get("dir") == "auto":
         smodel["dir"] = str(Path(r) / "strategic-llm" / "models")
-
-    db = data.get("database", {})
-    if db.get("path") == "auto":
-        db["path"] = str(Path(r) / "pipeline.db")
 
     return data
 
@@ -135,11 +130,10 @@ class Config:
     Attributes:
         paths: Repository and output directory paths.
         models: Model file locations and inference parameters.
-        compute: Per-component compute target configuration (backend,
-            n_gpu_layers).
+        compute: Per-component compute target configuration.
         thresholds: Scorer acceptance thresholds.
         broker: Artemis and ComfyUI connection parameters.
-        database: SQLite operational state store configuration.
+        database: PostgreSQL connection parameters.
         system: Host system parameters (package manager, Homebrew prefix).
     """
 
@@ -173,7 +167,7 @@ class Config:
 
     @property
     def database(self) -> dict:
-        """SQLite operational state store configuration."""
+        """PostgreSQL connection parameters."""
         return self._data.get("database", {})
 
     @property
@@ -222,12 +216,12 @@ def load() -> Config:
 
     Raises:
         FileNotFoundError: If ``config.yaml`` does not exist.
-            Run ``make config`` to generate it.
+            Run ``make config-default`` to create it.
     """
     if not _CONFIG_PATH.exists():
         raise FileNotFoundError(
             f"config.yaml not found at {_CONFIG_PATH}\n"
-            "Run: make config"
+            "Run: make config-default"
         )
     with open(_CONFIG_PATH) as f:
         data = yaml.safe_load(f)
