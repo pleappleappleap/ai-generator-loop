@@ -432,6 +432,30 @@ open http://localhost:12000
 3. Scorers: clip (12002), artifact (12003), vlm (12004)
 4. Spring Boot pipeline (12000)
 
+### Autonomous escalation handoff
+
+Pass `--auto-escalate` to enable autonomous mode switching:
+
+```bash
+$SOXHLET_ROOT/loop.sh start --auto-escalate
+```
+
+With this flag, `loop.sh` forks a background monitor after startup. If the
+tactical LLM emits an `escalate` decision, the pipeline writes a
+`pipeline_events` row and shuts down. The monitor detects the exit, finds the
+pending escalation, and starts `strategic.sh` automatically — no operator
+action required.
+
+Without `--auto-escalate`, the pipeline still shuts down on escalation but
+the operator decides when (and whether) to start the strategic session:
+
+```bash
+$SOXHLET_ROOT/strategic.sh start
+```
+
+The flag is per-invocation and not persisted, which prevents runaway
+mode-switch cycles if the pipeline exits unexpectedly for any other reason.
+
 From the browser UI at `http://localhost:12000`:
 1. Create a **conversation** (a named project).
 2. Create a **workflow** (choose a workflow JSON and parameters).

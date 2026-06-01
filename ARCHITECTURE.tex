@@ -646,7 +646,11 @@ The \texttt{loop.retry} address carries the same JSON schema as
       \item[\texttt{escalate}] Writes a \texttt{pipeline\_events} row
             (\texttt{type = 'mode\_switch\_requested'}) and calls
             \texttt{SpringApplication.exit()} to shut down the Loop cleanly.
-            The operator starts \texttt{strategic.sh} manually; once started,
+            If \texttt{loop.sh} was started with \texttt{--auto-escalate}, the
+            background monitor detects the pipeline exit, finds the pending
+            escalation in \texttt{pipeline\_events}, and starts
+            \texttt{strategic.sh} automatically. Without that flag the operator
+            starts \texttt{strategic.sh} manually; either way,
             \texttt{StrategicLlmCaller} auto-detects the pending escalation.
     \end{description}
 \end{enumerate}
@@ -844,7 +848,19 @@ $SOXHLET_ROOT/middleware.sh start
 
 # Start the Loop super-component
 $SOXHLET_ROOT/loop.sh start
+
+# Or with autonomous escalation handoff enabled:
+$SOXHLET_ROOT/loop.sh start --auto-escalate
 \end{lstlisting}
+
+The optional \texttt{--auto-escalate} flag forks a background monitor after
+startup. When the pipeline exits due to a tactical \texttt{escalate} decision,
+the monitor finds the pending \texttt{pipeline\_events} row and starts
+\texttt{strategic.sh} without operator intervention. Without this flag,
+\texttt{loop.sh start} returns after all components are healthy and the
+operator controls the escalation handoff manually. The flag is intentionally
+per-invocation: there is no persistent auto-escalation state, which prevents
+runaway mode-switch cycles if the pipeline crashes unexpectedly.
 
 \texttt{loop.sh} starts components in dependency order:
 
