@@ -34,6 +34,7 @@ patch("open_clip.get_tokenizer", return_value=MagicMock()).start()
 @pytest.fixture(scope="module")
 def clip_client():
     from fastapi.testclient import TestClient
+
     from clip_scorer import app
     return TestClient(app)
 
@@ -41,6 +42,7 @@ def clip_client():
 @pytest.fixture(scope="module")
 def artifact_client():
     from fastapi.testclient import TestClient
+
     from artifact_scorer import app
     return TestClient(app)
 
@@ -48,5 +50,6 @@ def artifact_client():
 @pytest.fixture(scope="module")
 def vlm_client():
     from fastapi.testclient import TestClient
+
     from vlm_scorer import app
     return TestClient(app)

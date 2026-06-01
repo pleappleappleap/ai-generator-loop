@@ -1,8 +1,8 @@
 {
-  "venvPath": "../loop/scorers",
+  "venvPath": ".",
   "venv": "venv",
   "pythonVersion": "3.11",
-  "extraPaths": ["../"],
+  "extraPaths": ["../../"],
   "reportPrivateImportUsage": "none",
   "reportAttributeAccessIssue": "none",
   "reportCallIssue": "none",

@@ -6,7 +6,7 @@ ifeq ($(OS),Windows_NT)
   endif
 endif
 
-.PHONY: all lint typecheck test build format docs clean distclean config \
+.PHONY: all lint typecheck test build format docs clean distclean config-default menuconfig \
         prereqs prereqs-system prereqs-python models models-pick setup \
         k8s-install comfyui-nodes targets
 
@@ -14,14 +14,15 @@ targets:
 	@printf "%-20s %s\n" "all"            "Install venvs, then lint, type-check, test, and compile."
 	@printf "%-20s %s\n" "lint"           "Lint loop/ and loop/tactical-llm/ with ruff."
 	@printf "%-20s %s\n" "typecheck"      "Type-check loop/ and loop/tactical-llm/ with mypy."
-	@printf "%-20s %s\n" "test"           "Run all tests: pytest on loop/ and tactical-llm/, plus Maven on pipeline/."
-	@printf "%-20s %s\n" "build"          "Compile the Java pipeline (mvn compile in pipeline/)."
+	@printf "%-20s %s\n" "test"           "Run all tests: pytest on loop/ and tactical-llm/, plus JUnit on pipeline/."
+	@printf "%-20s %s\n" "build"          "Compile the Java pipeline with Ivy and javac."
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
 	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
 	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
-	@printf "%-20s %s\n" "config"         "Generate config.yaml via the interactive menuconfig.py TUI."
-	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config, models, then build."
+	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
+	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
+	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, then build."
 	@printf "%-20s %s\n" "prereqs"        "Run prereqs-system and prereqs-python."
 	@printf "%-20s %s\n" "prereqs-system" "Install Python 3.11, yq, Java 21, and the HuggingFace CLI."
 	@printf "%-20s %s\n" "prereqs-python" "Create all Python venvs: root, scorers, ComfyUI, and tactical-llm."
@@ -48,7 +49,7 @@ typecheck:
 	$(MAKE) -C loop typecheck
 	$(MAKE) -C loop/tactical-llm typecheck
 
-test:
+test: config.yaml
 	$(MAKE) -C loop test
 	$(MAKE) -C loop/tactical-llm test
 	$(MAKE) -C pipeline test
@@ -105,9 +106,12 @@ distclean: clean
 	rm -f config.yaml
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 
-# Interactive configuration TUI (menuconfig-style).
-# Generates config.yaml from auto-detected defaults.
-config:
+config-default:
+	cp config.yaml.default config.yaml
+	@echo "==> config.yaml created from defaults."
+
+# Interactive configuration TUI — use to override defaults.
+menuconfig:
 	@command -v yq >/dev/null 2>&1 || { \
 		echo "yq not found. Install it:"; \
 		echo "  macOS:  brew install yq"; \
@@ -117,8 +121,7 @@ config:
 	python3.11 menuconfig.py
 
 config.yaml:
-	@echo "config.yaml not found — running make config first"
-	$(MAKE) config
+	$(MAKE) config-default
 
 # ── Prerequisites ─────────────────────────────────────────────────────────────
 
@@ -180,7 +183,7 @@ $(K8S_OK):
 	@touch $(K8S_OK)
 
 # Full first-time setup: system deps → Python venvs → config → models → build.
-setup: prereqs-system prereqs-python config models build
+setup: prereqs-system prereqs-python config-default models build
 
 prereqs: prereqs-system prereqs-python
 

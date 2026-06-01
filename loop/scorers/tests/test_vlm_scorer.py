@@ -191,6 +191,7 @@ def test_call_vlm_mlx_local_file(tmp_path):
 def test_call_vlm_mlx_data_uri():
     import base64
     import io
+
     from PIL import Image as PILImage
     buf = io.BytesIO()
     PILImage.new("RGB", (1, 1)).save(buf, format="PNG")

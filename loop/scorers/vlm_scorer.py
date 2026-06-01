@@ -36,6 +36,14 @@ _infer_lock = threading.Lock()
 
 # ── Backend initialisation ────────────────────────────────────────────────────
 
+# Forward-declare platform-specific names so pyright sees them as always bound.
+_mlx_generate: Any = None
+_mlx_model: Any = None
+_mlx_processor: Any = None
+_mlx_config: Any = None
+_llm: Any = None
+
+
 def _ensure_quantized(base_path: str) -> str:
     """Quantize the VLM model to Q8 on first run and save alongside the original.
 
@@ -118,9 +126,9 @@ def _to_mlx_image(image_source: str):
     data: URIs are decoded to a PIL Image object.
     """
     if image_source.startswith("data:"):
-        from PIL import Image as _PIL
+        from PIL import Image as PILImage
         _, data = image_source.split(",", 1)
-        return _PIL.open(io.BytesIO(base64.b64decode(data)))
+        return PILImage.open(io.BytesIO(base64.b64decode(data)))
     return image_source  # local path or http(s) URL — mlx-vlm handles both
 
 
