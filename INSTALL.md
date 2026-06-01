@@ -190,10 +190,10 @@ below are for reference or if you need to download individual models.
 
 All models are stored under `loop/scorers/models/`.
 
-### SDXL checkpoint (ComfyUI)
+### Image generation checkpoint (ComfyUI)
 
-Download your preferred SDXL checkpoint (e.g., Absolute Reality XL) and
-place it in:
+Download your preferred checkpoint (SD 1.5, SDXL, Flux, or any
+ComfyUI-compatible model; e.g., Absolute Reality for SD 1.5) and place it in:
 
 ```
 loop/ComfyUI/models/checkpoints/

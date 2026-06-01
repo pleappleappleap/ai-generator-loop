@@ -21,15 +21,16 @@ before the JSON response, and a ``/no_think`` token that suppresses it.
   or all scores clearly above acceptance thresholds (clean accept).
 
 When thinking is enabled the model produces a ``<think>…</think>`` block
-before the JSON. ``_run_inference`` in ``tactical_llm.py`` strips this block
-before parsing. The thinking budget is separate from ``max_tokens``; see
-``tactical.model.max_tokens_thinking`` in ``config.yaml``.
+before the JSON. ``TacticalLlmCaller.parseDecisionJson()`` in the Java pipeline
+strips this block before parsing. The thinking budget is separate from
+``max_tokens``; see ``tactical-llm.max-tokens-thinking`` in
+``pipeline/src/main/resources/application.properties``.
 
 Typical token budget:
     System prompt:         ~900 tokens
     Decision prompt:       ~300–600 tokens (scales with history depth)
     Thinking block:        0–2000 tokens (thinking mode only)
-    Response:              ≤512 tokens (configured via tactical.model.max_tokens)
+    Response:              ≤128 tokens normally (≤512 with thinking enabled)
 """
 
 from __future__ import annotations

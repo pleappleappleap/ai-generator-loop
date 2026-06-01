@@ -59,7 +59,7 @@ Full step-by-step instructions are in **`INSTALL.md`**. The summary:
 3. **Four Python venvs**: root (config utilities), scorers (PyTorch, mlx-vlm/llama-cpp,
    FastAPI, transformers), ComfyUI, and tactical-llm (ruff, pyright, pytest).
    Run `make prereqs-python` to create all four.
-4. **Models**: SDXL checkpoint into ComfyUI (manual); artifact detector, VLM
+4. **Models**: Image generation checkpoint (SD 1.5, SDXL, Flux — any ComfyUI-compatible model) into ComfyUI (manual); artifact detector, VLM
    (Qwen3-VL-8B-Instruct Q8 GGUF), tactical LLM (Qwen3-Next-80B-A3B MLX 4-bit), and
    strategic LLM (Qwen3-Next-80B-A3B-Thinking bf16) via `make models`.
 5. **Middleware**: `middleware.sh start`  -  starts Artemis and PostgreSQL in K3s

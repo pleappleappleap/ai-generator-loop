@@ -131,7 +131,7 @@ All platforms       & Free disk       & 100\,GB            & 200\,GB \\
 \end{center}
 
 The pipeline holds approximately 60\,GB of model weights in GPU memory
-simultaneously (ComfyUI + SDXL $\approx$14\,GB; tactical LLM $\approx$45\,GB active;
+simultaneously (ComfyUI + SD~1.5/SDXL/Flux $\approx$7--14\,GB; tactical LLM $\approx$45\,GB active;
 scorers $\approx$8\,GB). The tactical and strategic LLMs are ultra-sparse MoE models
 (80B total, $\sim$3B active per forward pass) served via \texttt{mlx\_lm.server}.
 See Section~\ref{sec:memory} for the per-component breakdown.
@@ -265,9 +265,10 @@ make prereqs-python
 
 \subsection{Model Downloads}
 
-\subsubsection{SDXL checkpoint (ComfyUI)}
+\subsubsection{Image generation checkpoint (ComfyUI)}
 
-Download a Stable Diffusion XL checkpoint and place it in:
+Download a checkpoint (SD~1.5, SDXL, Flux, or any ComfyUI-compatible model)
+and place it in:
 
 \begin{lstlisting}[style=shell]
 loop/ComfyUI/models/checkpoints/
@@ -431,7 +432,7 @@ against the pipeline sources.
 \midrule
 Message broker    & ActiveMQ Artemis (AMQP~1.0)             & Native AMQP~1.0; K3s deployment \\
 Operational state & PostgreSQL + pgvector (K3s)             & Relational + vector queries; Flyway migrations \\
-Image generation  & ComfyUI + SDXL                          & Workflow-based; supports ControlNet / LoRA \\
+Image generation  & ComfyUI (any checkpoint)                & Workflow-based; SD~1.5/SDXL/Flux; LoRA injection \\
 Holistic scoring  & Qwen3-VL-8B mlx-vlm (macOS) / llama.cpp (Linux) & Fast local VLM; no API dependency \\
 Tactical LLM      & Qwen3-Next-80B-A3B mlx\_lm (macOS) / llama.cpp (Linux) & Ultra-sparse MoE; 3B active; 40--60 tok/s \\
 Strategic LLM     & Qwen3-Next-80B-A3B-Thinking mlx\_lm (macOS) / llama.cpp (Linux) & Same architecture; thinking variant \\
@@ -464,8 +465,8 @@ four internal workers, each responsible for a distinct phase of the loop:
   \item[\texttt{TacticalLlmCaller}] Listens on \texttt{loop.verdicts}. Runs
         a full agentic loop: builds context from PostgreSQL, calls the tactical
         LLM server with tool definitions (\texttt{analyze\_image} via VLM
-        sidecar), and handles the decision. Retry and inpaint decisions
-        publish to \texttt{loop.retry} / \texttt{loop.inpaint}. Accept writes
+        sidecar), and handles the decision. Retry decisions (and inpaint decisions,
+        which are downgraded to retry) publish to \texttt{loop.retry}. Accept writes
         to PostgreSQL. Escalate writes a \texttt{pipeline\_events} row and
         shuts down the Loop cleanly. Fires \texttt{decision} events via
         \texttt{GalleryBroadcastService}.
@@ -514,7 +515,7 @@ the message broker.
   \draw[arrow] (artemis)    -- node[lbl,above] {loop.generate} (comfyworker);
   \draw[arrow] (comfyworker) .. controls +(left:1.5cm) and +(left:1.5cm) .. node[lbl,left] {loop.generated} (scorer);
   \draw[arrow] (scorer)     .. controls +(left:1.5cm) and +(left:1.5cm) .. node[lbl,left] {loop.verdicts} (tactical);
-  \draw[arrow] (tactical)   .. controls +(left:2cm) and +(left:2cm) .. node[lbl,left,xshift=-4mm] {loop.retry / loop.inpaint} (comfyworker);
+  \draw[arrow] (tactical)   .. controls +(left:2cm) and +(left:2cm) .. node[lbl,left,xshift=-4mm] {loop.retry} (comfyworker);
 
   % HTTP flows
   \draw[arrow,dashed] (comfyworker) -- node[lbl,above] {HTTP/WS} (comfyui);
@@ -554,16 +555,19 @@ to browsers is handled in-process by \texttt{GalleryBroadcastService}.
 \texttt{loop.generated} & AMQP~1.0 & ComfyUiWorker                     & Scorer \\
 \texttt{loop.verdicts}  & AMQP~1.0 & Scorer (candidates only)          & TacticalLlmCaller \\
 \texttt{loop.retry}     & AMQP~1.0 & TacticalLlmCaller                 & ComfyUiWorker \\
-\texttt{loop.inpaint}   & AMQP~1.0 & TacticalLlmCaller                 & ComfyUiWorker \\
+\texttt{loop.inpaint}   & AMQP~1.0 & (none — not implemented)          & ComfyUiWorker \\
 \texttt{pipeline.dead}  & AMQP~1.0 & (DLX from all queues)             & (none; Artemis console) \\
 \bottomrule
 \end{tabular}
 \end{center}
 
 Images rejected by the cascade threshold logic are written to PostgreSQL
-with \texttt{status = 'rejected'} but are not published to any queue.
-The \texttt{loop.retry} and \texttt{loop.inpaint} addresses carry the same
-JSON schema as \texttt{loop.generate} with revised prompt / workflow params.
+with \texttt{verdict = 'rejected'} and a \texttt{rejection\_reason} field
+(\texttt{clip\_threshold} or \texttt{artifact\_threshold}) but are not
+published to any queue.
+The \texttt{loop.retry} address carries the same JSON schema as
+\texttt{loop.generate} with revised prompt / workflow params.
+\texttt{loop.inpaint} is registered but receives no messages (not yet implemented).
 
 % ============================================================
 \section{Data Flow}
@@ -631,15 +635,15 @@ JSON schema as \texttt{loop.generate} with revised prompt / workflow params.
       \item[\texttt{retry}] Publishes to \texttt{loop.retry} with revised
             prompt and/or workflow params. Increments retry counter in
             PostgreSQL budget table.
-      \item[\texttt{inpaint}] Publishes to \texttt{loop.inpaint} with
-            region and prompt. Increments inpaint counter.
+      \item[\texttt{inpaint}] Not yet implemented. \texttt{TacticalLlmCaller}
+            downgrades to \texttt{retry} and publishes to \texttt{loop.retry}.
       \item[\texttt{give\_up}] Writes give-up record to PostgreSQL. No further
             messages published.
       \item[\texttt{escalate}] Writes a \texttt{pipeline\_events} row
             (\texttt{type = 'mode\_switch\_requested'}) and calls
             \texttt{SpringApplication.exit()} to shut down the Loop cleanly.
-            \texttt{loop.sh} detects the shutdown, finds the pending escalation,
-            and starts \texttt{strategic.sh} automatically.
+            The operator starts \texttt{strategic.sh} manually; once started,
+            \texttt{StrategicLlmCaller} auto-detects the pending escalation.
     \end{description}
 \end{enumerate}
 
@@ -923,7 +927,7 @@ Loop and Strategic are mutually exclusive.
 \toprule
 \textbf{Component} & \textbf{Role} & \textbf{Memory} \\
 \midrule
-ComfyUI + SDXL           & Image generation                     & $\sim$14\,GB \\
+ComfyUI + checkpoint     & Image generation                     & $\sim$7--14\,GB (model-dependent) \\
 clip\_scorer (Python)    & Prompt adherence + embedding         & $\sim$1.7\,GB \\
 artifact\_scorer (Python)& Photorealism scoring                 & $\sim$500\,MB \\
 vlm\_scorer (Python)     & Holistic image evaluation            & $\sim$6\,GB \\

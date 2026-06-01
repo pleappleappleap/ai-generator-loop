@@ -26,11 +26,10 @@ All addresses below use anycast routing.
   "prompt":          "string",
   "model_type":      "string (optional: 'sdxl' | 'flux')",
   "workflow_params": {
-    "checkpoint": "string",
-    "steps":      "integer",
-    "cfg":        "float",
-    "sampler":    "string",
-    "seed":       "integer (optional)"
+    "KSampler":         {"steps": "integer", "cfg": "float",
+                         "sampler_name": "string", "scheduler": "string",
+                         "seed": "integer (optional)"},
+    "EmptyLatentImage": {"width": "integer", "height": "integer"}
   },
   "graph_ops": "array (optional — workflow graph patch operations)",
   "loras":     "array (optional — LoRA entries to inject)"
@@ -107,8 +106,9 @@ to `loop.retry` instead. `loop.inpaint` has a registered JMS listener in
 }
 ```
 
-Images rejected by threshold logic are written to PostgreSQL with `status = 'rejected'`
-and a `reason` field but are not published to any queue.
+Images rejected by threshold logic are written to PostgreSQL with `verdict = 'rejected'`
+and a `rejection_reason` field (`clip_threshold` or `artifact_threshold`) but are not
+published to any queue.
 
 ### `pipeline.dead`
 **Publisher:** Artemis DLX (from all failed queues)
@@ -194,26 +194,19 @@ The `/ws/gallery` WebSocket pushes two event types to connected browsers:
 
 **`image_ready`** — emitted by `ComfyUiWorker` after generation:
 ```json
-{ "type": "image_ready", "image_uuid": "string", "image_path": "string",
-  "session_uuid": "string", "workflow_id": "string" }
+{ "type": "image_ready", "image_uuid": "string", "workflow_id": "string",
+  "conversation_id": "string", "sequence_number": "integer" }
 ```
 
 **`decision`** — emitted by `TacticalLlmCaller` after each decision:
 ```json
 {
-  "type": "decision",
-  "image_uuid": "string",
-  "session_uuid": "string",
-  "workflow_id": "string",
-  "decision": {
-    "decision":    "accept | retry | inpaint | give_up | escalate",
-    "reasoning":   "string",
-    "confidence":  "float 0.0-1.0",
-    "retry_prompt":      "string (if retry)",
-    "retry_params":      "object (if retry)",
-    "inpaint_regions":   "array (if inpaint)",
-    "inpaint_prompt":    "string (if inpaint)"
-  },
-  "scores": "object (full scorer results from loop.verdicts)"
+  "type":            "decision",
+  "image_uuid":      "string",
+  "decision":        "accept | retry | inpaint | give_up | escalate",
+  "reasoning":       "string",
+  "confidence":      "float 0.0-1.0",
+  "workflow_id":     "string",
+  "conversation_id": "string"
 }
 ```
