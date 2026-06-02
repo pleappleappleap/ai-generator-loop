@@ -54,7 +54,7 @@ tactical-llm:
   temperature: 0.1
   max-tokens: 512
   max-tokens-thinking: 1024
-  max-tool-iterations: 3
+  max-tool-iterations: 8
   decisions:
     max-retries: 3
     max-inpaints: 2
