@@ -849,10 +849,10 @@ function appendChatMsg(role, text) {
   const msgs = document.getElementById('chat-messages');
   const el = document.createElement('div');
   el.className = `chat-msg ${role}`;
-  if (role === 'assistant') {
-    el.innerHTML = renderMarkdown(text);
-  } else {
+  if (role === 'system') {
     el.textContent = text;
+  } else {
+    el.innerHTML = renderMarkdown(text);
   }
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
