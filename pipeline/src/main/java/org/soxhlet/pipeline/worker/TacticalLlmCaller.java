@@ -138,6 +138,7 @@ public class TacticalLlmCaller {
                 sendJson(session, jsonChunk(message));
             }
             sendJson(session, jsonDone());
+            maybeAutoTitle(conversationId, messages);
 
         } catch (Exception e) {
             log.warning("handleUserMessage error for " + conversationId + ": " + e.getMessage());
@@ -1017,6 +1018,55 @@ public class TacticalLlmCaller {
             log.warning("get_workflow failed: " + e.getMessage());
             return "Error: " + e.getMessage();
         }
+    }
+
+    // ── Auto-title ─────────────────────────────────────────────────────────────
+
+    private void maybeAutoTitle(String conversationId, List<ObjectNode> messages) {
+        if (conversationId == null) return;
+        List<String> names = jdbc.queryForList(
+                "SELECT name FROM conversations WHERE conversation_id = :id::uuid",
+                Map.of("id", conversationId), String.class);
+        if (names.isEmpty() || !"Untitled".equals(names.get(0))) return;
+
+        // Find the first user message to base the title on
+        String firstUserMsg = messages.stream()
+                .filter(m -> "user".equals(m.path("role").asText("")))
+                .map(m -> m.path("content").asText(""))
+                .findFirst().orElse("");
+        if (firstUserMsg.isBlank()) return;
+
+        new Thread(() -> {
+            try {
+                String snippet = firstUserMsg.substring(0, Math.min(200, firstUserMsg.length()));
+                ObjectNode body = mapper.createObjectNode();
+                body.put("model", resolvedModelId);
+                body.put("temperature", 0.3);
+                body.put("max_tokens", 16);
+                ArrayNode msgs = body.putArray("messages");
+                msgs.add(mapper.createObjectNode()
+                        .put("role", "user")
+                        .put("content",
+                             "Respond with only a 3-6 word title for this request. " +
+                             "Title case, no punctuation, no quotes:\n" + snippet));
+                byte[] bodyBytes = mapper.writeValueAsBytes(body);
+                ObjectNode resp = llmClient.post()
+                        .uri("/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(bodyBytes)
+                        .retrieve()
+                        .body(ObjectNode.class);
+                String title = resp.path("choices").path(0).path("message").path("content")
+                        .asText("").strip().replaceAll("[\"']", "");
+                if (title.isBlank() || title.length() > 80) return;
+                jdbc.update("UPDATE conversations SET name = :name WHERE conversation_id = :id::uuid",
+                        Map.of("name", title, "id", conversationId));
+                chatBroadcast.sendRename(conversationId, title);
+                log.info("Auto-titled conversation " + conversationId + ": " + title);
+            } catch (Exception e) {
+                log.warning("Auto-title failed for " + conversationId + ": " + e.getMessage());
+            }
+        }, "auto-title-" + conversationId).start();
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

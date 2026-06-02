@@ -93,6 +93,9 @@
   .conv-arrow { font-size: 8px; transition: transform 0.15s; display: inline-block; }
   .conv-header.collapsed .conv-arrow { transform: rotate(-90deg); }
   .conv-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .conv-delete { opacity: 0; font-size: 13px; line-height: 1; padding: 0 2px; cursor: pointer; color: var(--muted); }
+  .conv-delete:hover { color: #e06c75; }
+  .conv-header:hover .conv-delete { opacity: 1; }
 
   .conv-workflows { padding-left: 10px; }
 
@@ -579,6 +582,9 @@ function connectChatWs() {
         document.getElementById('chat-input').focus();
       } else if (chunk.type === 'workflow_activate') {
         activateWorkflowFromChat(chunk);
+      } else if (chunk.type === 'conv_renamed') {
+        const conv = state.conversations.find(c => c.conversation_id === chunk.conversation_id);
+        if (conv) { conv.name = chunk.name; persistState(); renderSidebar(); }
       }
     } catch {}
   };
@@ -743,10 +749,32 @@ function renderSidebar() {
     const isActive = conv.conversation_id === state.activeConvId;
     const item = document.createElement('div');
     item.className = 'conv-header' + (isActive ? ' active-conv' : '');
-    item.innerHTML = `<span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>`;
-    item.onclick = () => switchConversation(conv.conversation_id);
+    item.innerHTML = `<span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>` +
+                     `<span class="conv-delete" title="Delete conversation">&times;</span>`;
+    item.querySelector('.conv-name').onclick = () => switchConversation(conv.conversation_id);
+    item.querySelector('.conv-delete').onclick = (e) => {
+      e.stopPropagation();
+      deleteConversation(conv.conversation_id);
+    };
     list.appendChild(item);
   });
+}
+
+async function deleteConversation(convId) {
+  if (!confirm('Delete this conversation and all its images and history?')) return;
+  const resp = await api('DELETE', `/conversations/${convId}`);
+  if (!resp.ok) { alert('Delete failed: ' + (resp.error || 'unknown error')); return; }
+  state.conversations = state.conversations.filter(c => c.conversation_id !== convId);
+  if (state.activeConvId === convId) {
+    state.activeConvId = state.conversations[0]?.conversation_id || null;
+    state.activeWorkflow = null;
+    document.getElementById('chat-messages').innerHTML =
+      '<div class="chat-msg system">Discuss your creative direction. Start a new conversation to begin.</div>';
+    document.getElementById('gallery-grid').innerHTML = '';
+    document.getElementById('gallery-title').textContent = 'Select a conversation';
+  }
+  persistState();
+  renderSidebar();
 }
 
 function switchConversation(convId) {

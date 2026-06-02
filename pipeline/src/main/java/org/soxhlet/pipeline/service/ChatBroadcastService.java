@@ -58,6 +58,14 @@ public class ChatBroadcastService {
         broadcast(conversationId, msg);
     }
 
+    public void sendRename(String conversationId, String name) {
+        ObjectNode msg = mapper.createObjectNode();
+        msg.put("type", "conv_renamed");
+        msg.put("conversation_id", conversationId);
+        msg.put("name", name);
+        broadcast(conversationId, msg);
+    }
+
     private void broadcast(String conversationId, ObjectNode payload) {
         Set<WebSocketSession> sessions = sessionsByConversation.get(conversationId);
         if (sessions == null || sessions.isEmpty()) return;
