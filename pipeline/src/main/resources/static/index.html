@@ -136,17 +136,6 @@
 
   #gallery-header h1 { font-size: 14px; font-weight: 600; flex: 1; }
 
-  #btn-start-run {
-    background: var(--accent2);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius);
-    padding: 6px 14px;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  #btn-start-run:hover { filter: brightness(1.15); }
-  #btn-start-run:disabled { opacity: 0.4; cursor: default; }
 
   #gallery-grid {
     flex: 1;
@@ -427,7 +416,6 @@
 <main id="gallery-panel">
   <div id="gallery-header">
     <h1 id="gallery-title">Select a conversation</h1>
-    <button id="btn-start-run" disabled>Generate</button>
   </div>
   <div id="gallery-grid"></div>
 </main>
@@ -583,7 +571,6 @@ function activateWorkflowFromChat(wf) {
   };
   const conv = state.conversations.find(c => c.conversation_id === state.activeConvId);
   document.getElementById('gallery-title').textContent = conv?.name || state.activeWorkflow.name;
-  document.getElementById('btn-start-run').disabled = false;
   renderSidebar();
   saveState();
 }
@@ -803,7 +790,6 @@ function switchConversation(convId) {
   } else if (!wf) {
     state.activeWorkflow = null;
     document.getElementById('gallery-title').textContent = conv.name || 'Untitled';
-    document.getElementById('btn-start-run').disabled = true;
     document.getElementById('gallery-grid').innerHTML = '';
   }
   document.getElementById('chat-messages').innerHTML =
@@ -824,7 +810,6 @@ async function selectWorkflow(wf) {
   state.activeWorkflow = { ...wf };
   const _selConv = state.conversations.find(c => c.conversation_id === (wf.conversation_id || state.activeConvId));
   document.getElementById('gallery-title').textContent = _selConv?.name || wf.name;
-  document.getElementById('btn-start-run').disabled = true;
   renderSidebar();
   renderGallery();
 
@@ -845,32 +830,7 @@ async function selectWorkflow(wf) {
     } catch {}
   }
   updateChatEnabled();
-
-  // Auto-resume if no run_id.
-  if (!state.activeWorkflow.run_id) {
-    await _resumeActiveWorkflow();
-  } else {
-    document.getElementById('btn-start-run').disabled = false;
-  }
-
   saveState();
-}
-
-async function _resumeActiveWorkflow() {
-  const wf = state.activeWorkflow;
-  if (!wf) return;
-  status('Resuming workflow…', 5000);
-  const resp = await api('POST', `/workflow/${wf.workflow_id}/resume`, {});
-  if (resp.ok !== false) {
-    state.activeWorkflow.run_id          = resp.run_id;
-    state.activeWorkflow.conversation_id = resp.conversation_id || wf.conversation_id;
-    state.activeWorkflow.workflow_path   = resp.workflow_path   || wf.workflow_path;
-    document.getElementById('btn-start-run').disabled = false;
-    saveState();
-    status(`Ready (run ${(resp.run_id || '').slice(0, 8)}…)`);
-  } else {
-    status(`Resume failed: ${resp.error || 'unknown error'}`);
-  }
 }
 
 function escHtml(s) {
@@ -984,7 +944,6 @@ async function createConversation(convName) {
   renderSidebar();
   renderGallery();
   document.getElementById('gallery-title').textContent = convName;
-  document.getElementById('btn-start-run').disabled = !state.activeWorkflow;
   document.getElementById('chat-messages').innerHTML =
     '<div class="chat-msg system">New conversation started. Describe your creative vision…</div>';
   updateChatEnabled();
@@ -999,32 +958,6 @@ document.getElementById('btn-new-session').onclick = async () => {
   }
 };
 
-// Generate — start the autonomous loop directly (no user prompt needed)
-document.getElementById('btn-start-run').onclick = async () => {
-  const wf = state.activeWorkflow;
-  if (!wf?.run_id) { status('No active run — click Resume first'); return; }
-  setLoading('btn-start-run', true, 'Generate');
-  try {
-    const resp = await api('POST', `/workflow/${wf.workflow_id}/start-run`, {
-      run_id:          wf.run_id,
-      conversation_id: wf.conversation_id || state.activeConvId || '',
-      workflow_path:   wf.workflow_path   || '',
-    });
-    if (resp.ok) {
-      status('Generation queued');
-      const pending = { image_uuid: resp.image_uuid, verdict: 'queued', run_id: wf.run_id, rating: null };
-      if (!state.images[wf.workflow_id]) state.images[wf.workflow_id] = [];
-      state.images[wf.workflow_id].unshift(pending);
-      prependImageCard(pending);
-    } else {
-      status(`Error: ${resp.error || 'unknown'}`);
-    }
-  } catch (e) {
-    status('Error starting generation');
-  } finally {
-    setLoading('btn-start-run', false, 'Generate');
-  }
-};
 
 // Chat input
 document.getElementById('btn-send').onclick = () => {
