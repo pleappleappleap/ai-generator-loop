@@ -343,12 +343,20 @@ public class ComfyUiWorker {
         for (JsonNode req : lorasNode) {
             String name = req.path("name").asText("");
             ModelsConfig.LoraEntry entry = registry.get(name);
-            if (entry == null) { log.warning("Unknown LoRA '" + name + "' for " + modelType + " — skipping"); continue; }
             ObjectNode resolved = mapper.createObjectNode();
-            resolved.put("filename", entry.getFilename());
-            resolved.put("strength_model", req.has("strength_model") ? req.get("strength_model").asDouble() : entry.getDefaultStrength());
-            resolved.put("strength_clip",  req.has("strength_clip")  ? req.get("strength_clip").asDouble()  : entry.getDefaultStrength());
-            resolved.put("name", entry.getName());
+            if (entry != null) {
+                resolved.put("filename", entry.getFilename());
+                resolved.put("strength_model", req.has("strength_model") ? req.get("strength_model").asDouble() : entry.getDefaultStrength());
+                resolved.put("strength_clip",  req.has("strength_clip")  ? req.get("strength_clip").asDouble()  : entry.getDefaultStrength());
+                resolved.put("name", entry.getName());
+            } else {
+                // Treat name as filename directly (for manually-installed LoRAs not in config)
+                log.info("LoRA '" + name + "' not in config registry — using as filename directly");
+                resolved.put("filename", name);
+                resolved.put("strength_model", req.has("strength_model") ? req.get("strength_model").asDouble() : 1.0);
+                resolved.put("strength_clip",  req.has("strength_clip")  ? req.get("strength_clip").asDouble()  : 1.0);
+                resolved.put("name", name);
+            }
             resolvedLoras.add(resolved);
         }
         if (resolvedLoras.isEmpty()) return workflow;

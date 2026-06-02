@@ -37,4 +37,10 @@ public class SidecarConfig {
             @Value("${strategic-llm.url}") String url) {
         return RestClient.builder().baseUrl(url).build();
     }
+
+    @Bean("comfyuiClient")
+    public RestClient comfyuiClient(
+            @Value("${comfyui.url:http://localhost:12006}") String url) {
+        return RestClient.builder().baseUrl(url).build();
+    }
 }

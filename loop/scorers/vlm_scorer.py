@@ -209,6 +209,7 @@ class ScoreRequest(BaseModel):
     image_uuid: str
     image_path: str
     prompt: str
+    eval_prompt: str | None = None
 
 
 class AnalyzeRequest(BaseModel):
@@ -224,7 +225,8 @@ def health() -> dict[str, str]:
 @app.post("/score")
 def score(req: ScoreRequest) -> dict[str, Any]:
     try:
-        raw = _call_vlm(req.image_path, EVAL_PROMPT.format(prompt=req.prompt), 512)
+        prompt_text = req.eval_prompt if req.eval_prompt else EVAL_PROMPT.format(prompt=req.prompt)
+        raw = _call_vlm(req.image_path, prompt_text, 512)
     except OSError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     try:

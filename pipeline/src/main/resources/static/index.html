@@ -570,10 +570,12 @@ function connectChatWs() {
         finalizeChatResponse();
         document.getElementById('btn-send').disabled = false;
         document.getElementById('chat-input').disabled = false;
+        document.getElementById('chat-input').focus();
       } else if (chunk.type === 'error') {
         appendChatMsg('system', `Error: ${chunk.text}`);
         document.getElementById('btn-send').disabled = false;
         document.getElementById('chat-input').disabled = false;
+        document.getElementById('chat-input').focus();
       } else if (chunk.type === 'workflow_activate') {
         activateWorkflowFromChat(chunk);
       }

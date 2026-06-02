@@ -138,9 +138,22 @@ public class Scorer {
         double aiConfidence = artifactResult.path("ai_confidence").asDouble(1.0);
 
         // ── VLM sidecar ────────────────────────────────────────────────────────
+        String vlmEvalPrompt = null;
+        if (conversationId != null) {
+            List<String> prompts = jdbc.queryForList(
+                    "SELECT eval_prompt FROM session_vlm_prompts " +
+                    "WHERE conversation_id = :convId::uuid ORDER BY created_at DESC LIMIT 1",
+                    Map.of("convId", conversationId), String.class);
+            if (!prompts.isEmpty()) vlmEvalPrompt = prompts.get(0);
+        }
+        java.util.Map<String, Object> vlmReqBody = new java.util.HashMap<>();
+        vlmReqBody.put("image_uuid", imageUuid);
+        vlmReqBody.put("image_path", imagePath);
+        vlmReqBody.put("prompt", prompt);
+        if (vlmEvalPrompt != null) vlmReqBody.put("eval_prompt", vlmEvalPrompt);
         JsonNode vlmResult = vlmClient.post().uri("/score")
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("image_uuid", imageUuid, "image_path", imagePath, "prompt", prompt))
+                .body(vlmReqBody)
                 .retrieve()
                 .body(JsonNode.class);
 
