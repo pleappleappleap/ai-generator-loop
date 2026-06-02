@@ -303,7 +303,20 @@ public class ConversationAgent implements Runnable {
             if (lastChance) {
                 prompt.add(mgr.mapper.createObjectNode()
                         .put("role", "user")
-                        .put("content", "Respond now with your JSON decision object only."));
+                        .put("content", "Respond now with your JSON decision object only. /no_think"));
+            } else {
+                // Append thinking-mode suffix to the last user message so Qwen3 knows
+                // whether to emit a <think> block. Without this it defaults to thinking
+                // mode and frequently exhausts max_tokens before producing any output.
+                String thinkSuffix = thinkingEnabled ? " /think" : " /no_think";
+                for (int j = prompt.size() - 1; j >= 0; j--) {
+                    if ("user".equals(prompt.get(j).path("role").asText(""))) {
+                        ObjectNode patched = prompt.get(j).deepCopy();
+                        patched.put("content", patched.path("content").asText("") + thinkSuffix);
+                        prompt.set(j, patched);
+                        break;
+                    }
+                }
             }
 
             ArrayNode msgArray = body.putArray("messages");
