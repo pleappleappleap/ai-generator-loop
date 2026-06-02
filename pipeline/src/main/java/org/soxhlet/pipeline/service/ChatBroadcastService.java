@@ -68,6 +68,14 @@ public class ChatBroadcastService {
         broadcast(conversationId, msg);
     }
 
+    public void sendProgress(String conversationId, String text) {
+        ObjectNode msg = mapper.createObjectNode();
+        msg.put("type", "progress");
+        msg.put("conversation_id", conversationId);
+        msg.put("text", text);
+        broadcast(conversationId, msg);
+    }
+
     public void sendError(String conversationId, String text) {
         ObjectNode msg = mapper.createObjectNode();
         msg.put("type", "error");

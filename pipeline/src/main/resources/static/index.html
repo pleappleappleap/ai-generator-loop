@@ -250,6 +250,12 @@
   .chat-msg.user      { background: rgba(74,158,255,0.18); align-self: flex-end; }
   .chat-msg.assistant { background: var(--surface); border: 1px solid var(--border); align-self: flex-start; white-space: normal; }
   .chat-msg.system    { background: transparent; color: var(--muted); font-size: 10px; text-align: center; align-self: center; }
+  .chat-msg.dl-progress {
+    font-family: monospace; font-size: 11px; color: var(--muted);
+    background: rgba(124,92,191,0.08); border-left: 2px solid var(--accent);
+    align-self: stretch; text-align: left; padding: 5px 10px;
+  }
+  .chat-msg.dl-progress p { margin: 0; }
 
   /* Markdown elements inside assistant messages */
   .chat-msg.assistant p  { margin: 0 0 6px; }
@@ -534,12 +540,16 @@ function connectChatWs() {
       if (forConv && forConv !== state.activeConvId) return;
       if (chunk.type === 'chunk') {
         appendChatChunk(chunk.text);
+      } else if (chunk.type === 'progress') {
+        updateDownloadProgress(chunk.text);
       } else if (chunk.type === 'done') {
+        clearDownloadProgress();
         finalizeChatResponse();
         document.getElementById('btn-send').disabled = false;
         document.getElementById('chat-input').disabled = false;
         document.getElementById('chat-input').focus();
       } else if (chunk.type === 'error') {
+        clearDownloadProgress();
         appendChatMsg('system', `Error: ${chunk.text}`);
         document.getElementById('btn-send').disabled = false;
         document.getElementById('chat-input').disabled = false;
@@ -879,6 +889,20 @@ function finalizeChatResponse() {
   }
   _streamEl = null;
   _streamText = '';
+}
+
+let _progressEl = null;
+function updateDownloadProgress(text) {
+  if (!_progressEl) {
+    _progressEl = document.createElement('div');
+    _progressEl.className = 'chat-msg dl-progress';
+    document.getElementById('chat-messages').appendChild(_progressEl);
+  }
+  _progressEl.innerHTML = renderMarkdown(text);
+  document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
+}
+function clearDownloadProgress() {
+  if (_progressEl) { _progressEl.remove(); _progressEl = null; }
 }
 
 function subscribeConversation(convId) {

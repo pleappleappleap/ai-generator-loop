@@ -11,13 +11,20 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Logger;
 import java.util.stream.Collectors;
@@ -35,6 +42,10 @@ public class ConversationAgent implements Runnable {
 
     // Per-conversation workflow state (workflow_id, session_uuid, workflow_path)
     private Map<String, String> workflowState = null;
+
+    // Download tracking: filename → expected total bytes / destination directory
+    private final Map<String, Long> downloadExpectedSizes = new ConcurrentHashMap<>();
+    private final Map<String, Path> downloadDestDirs      = new ConcurrentHashMap<>();
 
     ConversationAgent(String conversationId, ConversationAgentManager mgr) {
         this.conversationId = conversationId;
@@ -591,14 +602,42 @@ public class ConversationAgent implements Runnable {
             Path destDir = mgr.comfyuiModelsDir.resolve(subdir);
             Files.createDirectories(destDir);
 
+            downloadDestDirs.put(filename, destDir);
+
             new ProcessBuilder("hf", "download", repoId, filename, "--local-dir", destDir.toString())
                     .redirectOutput(new java.io.File("/tmp/ai-loop/model-download.log"))
                     .redirectErrorStream(true)
                     .start();
 
             log.info("Model download started: " + repoId + "/" + filename + " → " + destDir);
+
+            // Async HEAD to get total file size for progress reporting
+            final String finalRepoId = repoId;
+            final String finalFilename = filename;
+            Thread.ofVirtual().start(() -> {
+                try {
+                    HttpClient hc = HttpClient.newBuilder()
+                            .followRedirects(HttpClient.Redirect.ALWAYS)
+                            .connectTimeout(Duration.ofSeconds(15))
+                            .build();
+                    HttpResponse<Void> resp = hc.send(
+                            HttpRequest.newBuilder()
+                                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                                    .uri(URI.create("https://huggingface.co/" + finalRepoId + "/resolve/main/" + finalFilename))
+                                    .timeout(Duration.ofSeconds(30))
+                                    .build(),
+                            HttpResponse.BodyHandlers.discarding());
+                    resp.headers().firstValue("content-length").ifPresent(cl -> {
+                        try { downloadExpectedSizes.put(finalFilename, Long.parseLong(cl)); }
+                        catch (NumberFormatException ignored) {}
+                    });
+                } catch (Exception e) {
+                    log.warning("HEAD request for " + finalFilename + ": " + e.getMessage());
+                }
+            });
+
             mgr.chatBroadcast.sendChunk(conversationId,
-                    "Downloading **" + filename + "** from `" + repoId + "` — this may take several minutes…");
+                    "Downloading **" + filename + "** from `" + repoId + "`…");
             return "Download started: " + filename + " → " + destDir +
                    ". Call wait_for_download(\"" + filename + "\") now.";
         } catch (Exception e) {
@@ -616,10 +655,12 @@ public class ConversationAgent implements Runnable {
             int pollCount = 0;
             while (System.currentTimeMillis() < deadlineMs) {
                 try (var stream = Files.walk(mgr.comfyuiModelsDir, 3)) {
-                    java.util.Optional<Path> found = stream
+                    Optional<Path> found = stream
                             .filter(p -> p.getFileName().toString().equals(filename))
                             .findFirst();
                     if (found.isPresent()) {
+                        downloadExpectedSizes.remove(filename);
+                        downloadDestDirs.remove(filename);
                         log.info("wait_for_download: " + filename + " ready");
                         mgr.chatBroadcast.sendChunk(conversationId, "**" + filename + "** is ready.");
                         return "Ready: " + filename + " found. Call get_available_models() and proceed.";
@@ -628,11 +669,8 @@ public class ConversationAgent implements Runnable {
                     log.warning("wait_for_download scan: " + e.getMessage());
                 }
                 pollCount++;
-                if (pollCount % 4 == 0) { // every ~20s
-                    long elapsedSec = pollCount * 5L;
-                    mgr.chatBroadcast.sendChunk(conversationId,
-                            "Still downloading **" + filename + "** (" + elapsedSec + "s elapsed)…");
-                }
+                mgr.chatBroadcast.sendProgress(conversationId,
+                        buildProgressText(filename, pollCount * 5L));
                 Thread.sleep(5_000);
             }
             return "Timeout: " + filename + " did not appear within 10 minutes.";
@@ -642,6 +680,47 @@ public class ConversationAgent implements Runnable {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    private String buildProgressText(String filename, long elapsedSec) {
+        Path destDir = downloadDestDirs.get(filename);
+        long total = downloadExpectedSizes.getOrDefault(filename, 0L);
+        long downloaded = 0;
+
+        if (destDir != null) {
+            Path cacheDir = destDir.resolve(".cache/huggingface/download");
+            if (Files.isDirectory(cacheDir)) {
+                try (var ls = Files.list(cacheDir)) {
+                    Optional<Path> partial = ls
+                            .filter(p -> {
+                                String n = p.getFileName().toString();
+                                return n.startsWith(filename + ".") && n.endsWith(".incomplete");
+                            })
+                            .findFirst();
+                    if (partial.isPresent()) downloaded = Files.size(partial.get());
+                } catch (Exception ignored) {}
+            }
+        }
+
+        if (total > 0 && downloaded > 0) {
+            double pct = Math.min(100.0, (double) downloaded / total * 100.0);
+            int filled = (int) (pct / 5.0);
+            String bar = "█".repeat(filled) + "░".repeat(20 - filled);
+            return String.format("**%s** — %s / %s [%s] %.0f%%",
+                    filename, humanBytes(downloaded), humanBytes(total), bar, pct);
+        } else if (total > 0) {
+            return String.format("**%s** — %s total, %ds elapsed",
+                    filename, humanBytes(total), elapsedSec);
+        } else {
+            return String.format("**%s** — %ds elapsed", filename, elapsedSec);
+        }
+    }
+
+    private static String humanBytes(long bytes) {
+        if (bytes < 1024) return bytes + " B";
+        if (bytes < 1_048_576L) return String.format("%.1f KB", bytes / 1024.0);
+        if (bytes < 1_073_741_824L) return String.format("%.1f MB", bytes / 1_048_576.0);
+        return String.format("%.2f GB", bytes / 1_073_741_824.0);
     }
 
     private String executeSearchWeb(String argsJson) {
