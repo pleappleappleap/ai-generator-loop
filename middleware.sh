@@ -82,8 +82,14 @@ _stop_all() {
 
 _restart() {
     _require_kubectl
-    kubectl rollout restart deployment/artemis -n "$NS"
-    _wait_pod_ready "app=artemis" "Artemis" 120
+    _stop_port_forwards
+    kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
+    kubectl rollout restart deployment/artemis deployment/searxng -n "$NS" 2>/dev/null || true
+    _wait_pod_ready "app=postgres" "PostgreSQL" 120
+    _wait_pod_ready "app=artemis"  "Artemis"    120
+    _wait_pod_ready "app=searxng"  "SearXNG"    120
+    _start_port_forwards
+    _status
 }
 
 _status() {
