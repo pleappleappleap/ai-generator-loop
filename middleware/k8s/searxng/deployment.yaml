@@ -13,6 +13,16 @@ spec:
       labels:
         app: searxng
     spec:
+      enableServiceLinks: false
+      initContainers:
+        - name: copy-settings
+          image: busybox:latest
+          command: ['sh', '-c', 'cp /config-ro/settings.yml /etc/searxng/settings.yml']
+          volumeMounts:
+            - name: settings-ro
+              mountPath: /config-ro
+            - name: settings-rw
+              mountPath: /etc/searxng
       containers:
         - name: searxng
           image: searxng/searxng:latest
@@ -22,14 +32,13 @@ spec:
             - name: SEARXNG_SECRET
               value: "soxhlet-local-search-key"
           volumeMounts:
-            - name: settings
-              mountPath: /etc/searxng/settings.yml
-              subPath: settings.yml
+            - name: settings-rw
+              mountPath: /etc/searxng
           readinessProbe:
             httpGet:
               path: /healthz
               port: 8080
-            initialDelaySeconds: 5
+            initialDelaySeconds: 10
             periodSeconds: 5
           resources:
             requests:
@@ -39,9 +48,11 @@ spec:
               memory: 512Mi
               cpu: 500m
       volumes:
-        - name: settings
+        - name: settings-ro
           configMap:
             name: searxng-settings
+        - name: settings-rw
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
