@@ -18,6 +18,9 @@
         <dependency org="org.flywaydb"            name="flyway-database-postgresql"   rev="10.22.0" conf="runtime->default"/>
         <dependency org="org.postgresql"           name="postgresql"                   rev="42.7.3" conf="runtime->default"/>
         <dependency org="com.pgvector"             name="pgvector"                     rev="0.1.6"  conf="compile->default"/>
+        <dependency org="org.apache.httpcomponents.client5" name="httpclient5"        rev="5.4.4"  conf="compile->default"/>
+        <dependency org="org.apache.httpcomponents.core5"   name="httpcore5"          rev="5.3.6"  conf="compile->default"/>
+        <dependency org="org.apache.httpcomponents.core5"   name="httpcore5-h2"       rev="5.3.6"  conf="compile->default"/>
         <dependency org="org.springframework.boot" name="spring-boot-starter-test"     rev="3.5.0" conf="test->default"/>
     </dependencies>
 </ivy-module>

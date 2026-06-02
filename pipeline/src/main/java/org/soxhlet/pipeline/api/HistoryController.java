@@ -30,20 +30,13 @@ public class HistoryController {
         }
 
         // Chat messages — all for the conversation, or workflow-scoped if provided
-        List<Map<String, Object>> chatRaw;
-        if (!workflowId.isBlank()) {
-            chatRaw = jdbc.queryForList(
-                    "SELECT role, content, created_at::text FROM chat_messages " +
-                    "WHERE conversation_id = :convId::uuid " +
-                    "ORDER BY created_at ASC LIMIT :limit",
-                    Map.of("convId", conversationId, "limit", limit));
-        } else {
-            chatRaw = jdbc.queryForList(
-                    "SELECT role, content, created_at::text FROM chat_messages " +
-                    "WHERE conversation_id = :convId::uuid " +
-                    "ORDER BY created_at ASC LIMIT :limit",
-                    Map.of("convId", conversationId, "limit", limit));
-        }
+        List<Map<String, Object>> chatRaw = jdbc.queryForList(
+                "SELECT role, content, created_at::text FROM (" +
+                "  SELECT role, content, created_at FROM chat_messages " +
+                "  WHERE conversation_id = :convId::uuid " +
+                "  ORDER BY created_at DESC LIMIT :limit" +
+                ") sub ORDER BY created_at ASC",
+                Map.of("convId", conversationId, "limit", limit));
 
         // Recent user feedback for this workflow (or conversation)
         List<Map<String, Object>> feedbackRaw;

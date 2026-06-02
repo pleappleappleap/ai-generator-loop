@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AI Image Pipeline</title>
+<script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -21,7 +22,7 @@
     --down:      #f44336;
     --radius:    6px;
     --sidebar-w: 280px;
-    --chat-w:    400px;
+    --chat-w:    520px;
   }
 
   body {
@@ -37,11 +38,11 @@
   /* ── Sidebar ── */
   #sidebar {
     width: var(--sidebar-w);
+    min-width: 160px;
     background: var(--surface);
     border-right: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    flex-shrink: 0;
   }
 
   #sidebar-header {
@@ -233,10 +234,10 @@
   /* ── Chat panel ── */
   #chat-panel {
     width: var(--chat-w);
+    min-width: 200px;
     border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    flex-shrink: 0;
   }
 
   #chat-header {
@@ -784,18 +785,23 @@ async function selectWorkflow(wf) {
   renderSidebar();
   renderGallery();
 
+  // Clear chat and disable input synchronously (before any await) so the user
+  // cannot send a message that would then be wiped when history arrives.
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
+  document.getElementById('btn-send').disabled = true;
+
   // Restore chat history from the server.
   if (state.activeConvId && wf.workflow_id) {
     try {
       const hist = await api('GET',
         `/history?conversation_id=${state.activeConvId}&workflow_id=${wf.workflow_id}&limit=30`);
       if (hist.chat?.length) {
-        const msgs = document.getElementById('chat-messages');
-        msgs.innerHTML = '';
         hist.chat.forEach(m => appendChatMsg(m.role, m.content));
       }
     } catch {}
   }
+  updateChatEnabled();
 
   // Auto-resume if no run_id.
   if (!state.activeWorkflow.run_id) {
@@ -829,58 +835,10 @@ function escHtml(s) {
 }
 
 // ── Markdown renderer ──────────────────────────────────────────────────────────
-function _mdInline(s) {
-  return s
-    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/(?<![*])\*(?![*])(.+?)(?<![*])\*(?![*])/g, '<em>$1</em>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-}
+marked.setOptions({ breaks: true, gfm: true });
 
 function renderMarkdown(text) {
-  const saved = [];
-  // Extract fenced code blocks
-  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    saved.push(`<pre><code>${escHtml(code.trimEnd())}</code></pre>`);
-    return `\x00S${saved.length - 1}\x00`;
-  });
-  // Extract inline code
-  text = text.replace(/`([^`\n]+)`/g, (_, code) => {
-    saved.push(`<code>${escHtml(code)}</code>`);
-    return `\x00S${saved.length - 1}\x00`;
-  });
-
-  const html = text.split(/\n\n+/).map(para => {
-    para = para.trim();
-    if (!para) return '';
-    if (/^\x00S\d+\x00$/.test(para)) return para;
-
-    // Heading
-    const hm = para.match(/^(#{1,3}) (.*)/);
-    if (hm) return `<h${hm[1].length}>${_mdInline(escHtml(hm[2]))}</h${hm[1].length}>`;
-
-    // Unordered list
-    if (/^[ \t]*[-*] /m.test(para)) {
-      const lis = para.split('\n').map(l => {
-        const m = l.match(/^[ \t]*[-*] (.*)/);
-        return m ? `<li>${_mdInline(escHtml(m[1]))}</li>` : _mdInline(escHtml(l));
-      }).join('');
-      return `<ul>${lis}</ul>`;
-    }
-
-    // Ordered list
-    if (/^[ \t]*\d+\. /m.test(para)) {
-      const lis = para.split('\n').map(l => {
-        const m = l.match(/^[ \t]*\d+\. (.*)/);
-        return m ? `<li>${_mdInline(escHtml(m[1]))}</li>` : _mdInline(escHtml(l));
-      }).join('');
-      return `<ol>${lis}</ol>`;
-    }
-
-    return `<p>${_mdInline(escHtml(para).replace(/\n/g, '<br>'))}</p>`;
-  }).join('');
-
-  return html.replace(/\x00S(\d+)\x00/g, (_, i) => saved[+i]);
+  return marked.parse(text || '');
 }
 
 // ── Chat ───────────────────────────────────────────────────────────────────────
@@ -888,10 +846,10 @@ function appendChatMsg(role, text) {
   const msgs = document.getElementById('chat-messages');
   const el = document.createElement('div');
   el.className = `chat-msg ${role}`;
-  if (role === 'assistant') {
-    el.innerHTML = renderMarkdown(text);
-  } else {
+  if (role === 'system') {
     el.textContent = text;
+  } else {
+    el.innerHTML = renderMarkdown(text);
   }
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
@@ -989,6 +947,9 @@ document.getElementById('btn-new-session').onclick = () => {
   showModal('modal-session');
 };
 document.getElementById('modal-session-cancel').onclick = () => hideModal('modal-session');
+document.getElementById('session-name').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('modal-session-ok').click();
+});
 document.getElementById('modal-session-ok').onclick = async () => {
   setLoading('modal-session-ok', true, 'Create');
   const convName = document.getElementById('session-name').value.trim()

@@ -107,10 +107,11 @@ public class TasteService {
             body.put("max_tokens", 256);
             body.set("messages", msgArray);
 
+            byte[] bodyBytes = mapper.writeValueAsBytes(body);
             ObjectNode response = llmClient.post()
                     .uri("/chat/completions")
                     .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-                    .body(body)
+                    .body(bodyBytes)
                     .retrieve()
                     .body(ObjectNode.class);
 

@@ -356,9 +356,11 @@ public class TacticalLlmCaller {
 
         if (conversationId != null) {
             List<Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT role, content FROM chat_messages " +
-                    "WHERE conversation_id = :convId::uuid " +
-                    "ORDER BY created_at ASC LIMIT 60",
+                    "SELECT role, content FROM (" +
+                    "  SELECT role, content, created_at FROM chat_messages " +
+                    "  WHERE conversation_id = :convId::uuid " +
+                    "  ORDER BY created_at DESC LIMIT 60" +
+                    ") sub ORDER BY created_at ASC",
                     Map.of("convId", conversationId));
             for (Map<String, Object> row : rows) {
                 messages.add(mapper.createObjectNode()
@@ -638,10 +640,11 @@ public class TacticalLlmCaller {
 
             ObjectNode response;
             try {
+                byte[] bodyBytes = mapper.writeValueAsBytes(body);
                 response = llmClient.post()
                         .uri("/chat/completions")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .body(body)
+                        .body(bodyBytes)
                         .retrieve()
                         .body(ObjectNode.class);
             } catch (Exception e) {
@@ -672,7 +675,19 @@ public class TacticalLlmCaller {
             }
 
             String raw = message.path("content").asText("").strip();
-            return parseDecisionJson(raw);
+            JsonNode parsed = parseDecisionJson(raw);
+            if (parsed != null) return parsed;
+
+            // Model returned non-JSON (conversational text or truncated response).
+            // Wrap it so the user sees the content rather than a hard error.
+            if (!raw.isEmpty()) {
+                log.warning("LLM returned non-JSON content, wrapping as await_input: " + raw.substring(0, Math.min(80, raw.length())));
+                return mapper.createObjectNode()
+                        .put("decision", "await_input")
+                        .put("message", raw)
+                        .put("confidence", 0.5);
+            }
+            return null;
         }
 
         log.warning("Tool iteration cap reached without final decision");

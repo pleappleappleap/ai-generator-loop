@@ -24,6 +24,7 @@ case "${1:-status}" in
         fi
         component_start pipeline java \
             -cp "$PIPELINE_LIB/*:$PIPELINE_CLASSES" \
+            "-Dtactical-llm.system-prompt-file=$SOXHLET_ROOT/loop/tactical-llm/system_prompt.md" \
             org.soxhlet.pipeline.PipelineApplication
         ;;
     stop)    component_stop pipeline ;;
@@ -32,6 +33,7 @@ case "${1:-status}" in
         sleep 1
         component_start pipeline java \
             -cp "$PIPELINE_LIB/*:$PIPELINE_CLASSES" \
+            "-Dtactical-llm.system-prompt-file=$SOXHLET_ROOT/loop/tactical-llm/system_prompt.md" \
             org.soxhlet.pipeline.PipelineApplication
         ;;
     status)  component_status pipeline ;;
