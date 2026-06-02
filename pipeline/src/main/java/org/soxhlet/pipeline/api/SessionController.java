@@ -3,7 +3,6 @@ package org.soxhlet.pipeline.api;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.soxhlet.pipeline.service.ContextService;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -41,21 +40,11 @@ public class SessionController {
     }
 
     @DeleteMapping("/conversations/{conversationId}")
-    @Transactional
     public Map<String, Object> deleteConversation(@PathVariable String conversationId) {
-        Map<String, Object> p = Map.of("id", conversationId);
-        jdbc.update("DELETE FROM pending_decisions WHERE image_uuid IN (SELECT image_uuid FROM images WHERE conversation_id = :id::uuid)", p);
-        jdbc.update("DELETE FROM pending_generations WHERE image_uuid IN (SELECT image_uuid FROM images WHERE conversation_id = :id::uuid)", p);
-        jdbc.update("DELETE FROM user_feedback WHERE image_uuid IN (SELECT image_uuid FROM images WHERE conversation_id = :id::uuid)", p);
-        jdbc.update("DELETE FROM images WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM chat_messages WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM session_vlm_prompts WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM taste_synthesis WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM session_direction WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM budget WHERE conversation_id = :id::uuid", p);
-        jdbc.update("DELETE FROM workflows WHERE conversation_id = :id::uuid", p);
-        int deleted = jdbc.update("DELETE FROM conversations WHERE conversation_id = :id::uuid", p);
-        if (deleted == 0) return Map.of("ok", false, "error", "conversation not found");
+        int updated = jdbc.update(
+                "UPDATE conversations SET status = 'archived' WHERE conversation_id = :id::uuid",
+                Map.of("id", conversationId));
+        if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
         return Map.of("ok", true);
     }
 
