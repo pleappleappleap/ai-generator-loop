@@ -157,6 +157,7 @@ public class ComfyUiWorker {
         workflow = patchCheckpoint(workflow, effectiveModelType);
         workflow = injectLoras(workflow, lorasNode, effectiveModelType);
         workflow = applyWorkflowParams(workflow, (ObjectNode) workflowParams);
+        workflow = randomizeSeed(workflow);
         if (graphOps.isArray() && graphOps.size() > 0) {
             workflow = applyGraphOps(workflow, (ArrayNode) graphOps);
         }
@@ -425,6 +426,17 @@ public class ComfyUiWorker {
                 } else if (refId.equals(origClipNodeId) && refPort == origClipIdx) {
                     inputs.set(inp.getKey(), mapper.createArrayNode().add(currentClip[0]).add(Integer.parseInt(currentClip[1])));
                 }
+            }
+        }
+        return w;
+    }
+
+    private ObjectNode randomizeSeed(ObjectNode workflow) {
+        ObjectNode w = workflow.deepCopy();
+        for (JsonNode node : w) {
+            JsonNode inputs = node.path("inputs");
+            if (inputs.has("seed") && inputs.get("seed").asLong(-1) < 0) {
+                ((ObjectNode) inputs).put("seed", (long) (Math.random() * Long.MAX_VALUE));
             }
         }
         return w;
