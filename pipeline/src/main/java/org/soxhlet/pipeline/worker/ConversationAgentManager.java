@@ -1,0 +1,139 @@
+package org.soxhlet.pipeline.worker;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.soxhlet.pipeline.config.TacticalLlmConfig;
+import org.soxhlet.pipeline.service.ChatBroadcastService;
+import org.soxhlet.pipeline.service.ContextService;
+import org.soxhlet.pipeline.service.GalleryBroadcastService;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.SpringApplication;
+import org.springframework.context.ApplicationContext;
+import org.springframework.jms.annotation.JmsListener;
+import org.springframework.jms.core.JmsTemplate;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.web.client.RestClient;
+
+import java.nio.file.Path;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.logging.Logger;
+
+@Service
+public class ConversationAgentManager {
+
+    private static final Logger log = Logger.getLogger(ConversationAgentManager.class.getName());
+
+    private final ConcurrentHashMap<String, ConversationAgent> agents = new ConcurrentHashMap<>();
+
+    // Dependencies forwarded to each ConversationAgent
+    final PlatformTransactionManager txManager;
+    final NamedParameterJdbcTemplate jdbc;
+    final JmsTemplate jmsTemplate;
+    final ObjectMapper mapper;
+    final TacticalLlmConfig cfg;
+    final ContextService contextService;
+    final RestClient llmClient;
+    final RestClient vlmClient;
+    final RestClient comfyuiClient;
+    final RestClient searxngClient;
+    final GalleryBroadcastService galleryBroadcast;
+    final ChatBroadcastService chatBroadcast;
+    final ApplicationContext applicationContext;
+    final Path systemPromptPath;
+    final Path workflowsDir;
+    final Path comfyuiModelsDir;
+    final String resolvedModelId;
+
+    public ConversationAgentManager(
+            PlatformTransactionManager txManager,
+            NamedParameterJdbcTemplate jdbc,
+            JmsTemplate jmsTemplate,
+            ObjectMapper mapper,
+            TacticalLlmConfig cfg,
+            ContextService contextService,
+            GalleryBroadcastService galleryBroadcast,
+            ChatBroadcastService chatBroadcast,
+            ApplicationContext applicationContext,
+            @Qualifier("tacticalLlmClient")  RestClient llmClient,
+            @Qualifier("vlmScorerClient")    RestClient vlmClient,
+            @Qualifier("comfyuiClient")      RestClient comfyuiClient,
+            @Qualifier("searxngClient")      RestClient searxngClient,
+            @Value("${tactical-llm.system-prompt-file:loop/tactical-llm/system_prompt.md}") String systemPromptFile,
+            @Value("${ui.workflows-dir:loop/workflows}")           String workflowsDirStr,
+            @Value("${comfyui.models-dir:loop/ComfyUI/models}")    String comfyuiModelsDirStr) {
+
+        this.txManager        = txManager;
+        this.jdbc             = jdbc;
+        this.jmsTemplate      = jmsTemplate;
+        this.mapper           = mapper;
+        this.cfg              = cfg;
+        this.contextService   = contextService;
+        this.galleryBroadcast = galleryBroadcast;
+        this.chatBroadcast    = chatBroadcast;
+        this.applicationContext = applicationContext;
+        this.llmClient        = llmClient;
+        this.vlmClient        = vlmClient;
+        this.comfyuiClient    = comfyuiClient;
+        this.searxngClient    = searxngClient;
+        this.systemPromptPath = Path.of(systemPromptFile).toAbsolutePath().normalize();
+        this.workflowsDir     = Path.of(workflowsDirStr).toAbsolutePath().normalize();
+        this.comfyuiModelsDir = Path.of(comfyuiModelsDirStr).toAbsolutePath().normalize();
+        this.resolvedModelId  = ConversationAgent.resolveModelId(cfg.getModel(), llmClient, mapper);
+
+        log.info("ConversationAgentManager ready — model: " + this.resolvedModelId);
+    }
+
+    /** Route any event to the persistent agent for this conversation. */
+    public void dispatch(String conversationId, AgentEvent event) {
+        agents.computeIfAbsent(conversationId, this::createAgent).enqueue(event);
+    }
+
+    /** Shut down the agent for a conversation (e.g. after archive). */
+    public void shutdown(String conversationId) {
+        ConversationAgent agent = agents.remove(conversationId);
+        if (agent != null) agent.stop();
+    }
+
+    @JmsListener(destination = "loop.verdicts")
+    public void onVerdict(String body) {
+        try {
+            JsonNode msg   = mapper.readTree(body);
+            String convId  = nullIfBlank(msg.path("conversation_id").asText(""));
+            String imgUuid = msg.path("image_uuid").asText("");
+            if (convId == null || imgUuid.isBlank()) {
+                log.warning("Verdict missing conversation_id or image_uuid — dropping");
+                return;
+            }
+            // Persist first so it survives a crash before the agent processes it
+            jdbc.update(
+                "INSERT INTO pending_decisions (image_uuid, session_uuid, verdict_payload) " +
+                "VALUES (:id::uuid, :sess::uuid, :payload::jsonb) ON CONFLICT DO NOTHING",
+                java.util.Map.of(
+                    "id",      imgUuid,
+                    "sess",    msg.path("session_uuid").asText(""),
+                    "payload", body));
+
+            dispatch(convId, new AgentEvent.Verdict(imgUuid, body));
+        } catch (Exception e) {
+            log.warning("onVerdict error: " + e.getMessage());
+        }
+    }
+
+    // ── Internal ───────────────────────────────────────────────────────────────
+
+    private ConversationAgent createAgent(String conversationId) {
+        ConversationAgent agent = new ConversationAgent(conversationId, this);
+        Thread.ofVirtual()
+              .name("agent-" + conversationId.substring(0, 8))
+              .start(agent);
+        log.info("Started agent for conversation " + conversationId);
+        return agent;
+    }
+
+    static String nullIfBlank(String s) {
+        return (s == null || s.isBlank()) ? null : s;
+    }
+}

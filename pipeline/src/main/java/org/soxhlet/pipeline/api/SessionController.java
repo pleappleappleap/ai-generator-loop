@@ -58,6 +58,19 @@ public class SessionController {
         return Map.of("ok", true);
     }
 
+    @PatchMapping("/conversations/{conversationId}")
+    public Map<String, Object> renameConversation(
+            @PathVariable String conversationId,
+            @RequestBody Map<String, Object> req) {
+        String name = req.get("name") != null ? req.get("name").toString().strip() : "";
+        if (name.isBlank()) return Map.of("ok", false, "error", "name is required");
+        int updated = jdbc.update(
+                "UPDATE conversations SET name = :name WHERE conversation_id = :id::uuid",
+                Map.of("name", name, "id", conversationId));
+        if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
+        return Map.of("ok", true);
+    }
+
     @PostMapping("/north-star")
     public Map<String, Object> writeNorthStar(@RequestBody Map<String, Object> req) {
         String content = req.get("content") != null ? req.get("content").toString() : "";

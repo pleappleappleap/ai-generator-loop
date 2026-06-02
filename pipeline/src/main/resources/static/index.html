@@ -93,9 +93,17 @@
   .conv-arrow { font-size: 8px; transition: transform 0.15s; display: inline-block; }
   .conv-header.collapsed .conv-arrow { transform: rotate(-90deg); }
   .conv-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .conv-delete { opacity: 0; font-size: 13px; line-height: 1; padding: 0 2px; cursor: pointer; color: var(--muted); }
-  .conv-delete:hover { color: #e06c75; }
-  .conv-header:hover .conv-delete { opacity: 1; }
+  .conv-delete  { opacity: 0; font-size: 13px; line-height: 1; padding: 0 2px; cursor: pointer; color: var(--muted); }
+  .conv-delete:hover  { color: #e06c75; }
+  .conv-rename  { opacity: 0; font-size: 11px; line-height: 1; padding: 0 2px; cursor: pointer; color: var(--muted); }
+  .conv-rename:hover  { color: var(--text); }
+  .conv-header:hover .conv-delete,
+  .conv-header:hover .conv-rename { opacity: 1; }
+  .conv-name-input {
+    flex: 1; background: var(--bg); border: 1px solid var(--accent);
+    border-radius: 3px; color: var(--text); font-size: 11px;
+    padding: 1px 4px; font-family: inherit; min-width: 0;
+  }
 
   .conv-workflows { padding-left: 10px; }
 
@@ -110,25 +118,7 @@
   .wf-item .wf-name { font-weight: 500; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .wf-item .wf-meta { color: var(--muted); font-size: 10px; }
 
-  #sidebar-footer {
-    padding: 10px 12px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 6px;
-  }
-  #sidebar-footer button {
-    flex: 1;
-    background: var(--border);
-    color: var(--text);
-    border: none;
-    border-radius: var(--radius);
-    padding: 6px;
-    font-size: 11px;
-    cursor: pointer;
-  }
-  #sidebar-footer button:hover { background: #3a3a3a; }
-
-  /* ── Gallery ── */
+/* ── Gallery ── */
   #gallery-panel {
     flex: 1;
     display: flex;
@@ -430,9 +420,6 @@
     <button id="btn-new-session">+ New</button>
   </div>
   <div id="workflow-list"></div>
-  <div id="sidebar-footer">
-    <button id="btn-resume-workflow">Resume</button>
-  </div>
 </aside>
 <div class="resize-handle" id="handle-left"></div>
 
@@ -458,20 +445,6 @@
   </div>
 </aside>
 
-<!-- New Conversation Modal -->
-<div class="modal-backdrop hidden" id="modal-session">
-  <div class="modal">
-    <h3>New Conversation</h3>
-    <div class="form-row">
-      <label>Conversation name (optional)</label>
-      <input type="text" id="session-name" placeholder="e.g. Fantasy portraits">
-    </div>
-    <div class="modal-actions">
-      <button class="btn-cancel" id="modal-session-cancel">Cancel</button>
-      <button class="btn-primary" id="modal-session-ok">Create</button>
-    </div>
-  </div>
-</div>
 
 
 <div id="status-bar"></div>
@@ -568,6 +541,8 @@ function connectChatWs() {
   ws.onmessage = (ev) => {
     try {
       const chunk = JSON.parse(ev.data);
+      const forConv = chunk.conversation_id;
+      if (forConv && forConv !== state.activeConvId) return;
       if (chunk.type === 'chunk') {
         appendChatChunk(chunk.text);
       } else if (chunk.type === 'done') {
@@ -584,10 +559,11 @@ function connectChatWs() {
         activateWorkflowFromChat(chunk);
       } else if (chunk.type === 'conv_renamed') {
         const conv = state.conversations.find(c => c.conversation_id === chunk.conversation_id);
-        if (conv) { conv.name = chunk.name; persistState(); renderSidebar(); }
+        if (conv) { conv.name = chunk.name; saveState(); renderSidebar(); }
       }
     } catch {}
   };
+  ws.onopen = () => { if (state.activeConvId) subscribeConversation(state.activeConvId); };
   ws.onclose = () => setTimeout(connectChatWs, 3000);
   state.chatWs = ws;
 }
@@ -749,15 +725,53 @@ function renderSidebar() {
     const isActive = conv.conversation_id === state.activeConvId;
     const item = document.createElement('div');
     item.className = 'conv-header' + (isActive ? ' active-conv' : '');
-    item.innerHTML = `<span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>` +
-                     `<span class="conv-delete" title="Delete conversation">&times;</span>`;
+    item.innerHTML =
+      `<span class="conv-name">${escHtml(conv.name || 'Untitled')}</span>` +
+      `<span class="conv-rename" title="Rename">&#9998;</span>` +
+      `<span class="conv-delete" title="Delete">&times;</span>`;
     item.querySelector('.conv-name').onclick = () => switchConversation(conv.conversation_id);
+    item.querySelector('.conv-rename').onclick = (e) => {
+      e.stopPropagation();
+      startRename(conv, item);
+    };
     item.querySelector('.conv-delete').onclick = (e) => {
       e.stopPropagation();
       deleteConversation(conv.conversation_id);
     };
     list.appendChild(item);
   });
+}
+
+function startRename(conv, item) {
+  const nameSpan = item.querySelector('.conv-name');
+  const renameBtn = item.querySelector('.conv-rename');
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'conv-name-input';
+  input.value = conv.name || '';
+  nameSpan.replaceWith(input);
+  renameBtn.style.opacity = '0';
+  renameBtn.style.pointerEvents = 'none';
+  input.focus();
+  input.select();
+
+  async function commit() {
+    const newName = input.value.trim();
+    if (newName && newName !== conv.name) {
+      const resp = await api('PATCH', `/conversations/${conv.conversation_id}`, { name: newName });
+      if (resp.ok) {
+        conv.name = newName;
+        saveState();
+      }
+    }
+    renderSidebar();
+  }
+
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') renderSidebar();
+  });
+  input.addEventListener('blur', commit);
 }
 
 async function deleteConversation(convId) {
@@ -773,7 +787,7 @@ async function deleteConversation(convId) {
     document.getElementById('gallery-grid').innerHTML = '';
     document.getElementById('gallery-title').textContent = 'Select a conversation';
   }
-  persistState();
+  saveState();
   renderSidebar();
 }
 
@@ -781,6 +795,7 @@ function switchConversation(convId) {
   const conv = state.conversations.find(c => c.conversation_id === convId);
   if (!conv) return;
   state.activeConvId = convId;
+  subscribeConversation(convId);
   // Auto-select the conversation's workflow if available.
   const wf = (conv.workflows || [])[0] || null;
   if (wf && state.activeWorkflow?.workflow_id !== wf.workflow_id) {
@@ -905,6 +920,11 @@ function finalizeChatResponse() {
   _streamText = '';
 }
 
+function subscribeConversation(convId) {
+  if (!state.chatWs || state.chatWs.readyState !== WebSocket.OPEN || !convId) return;
+  state.chatWs.send(JSON.stringify({ type: 'subscribe', conversation_id: convId }));
+}
+
 function sendChat(text) {
   if (!state.chatWs || state.chatWs.readyState !== WebSocket.OPEN) {
     status('Chat not connected — reconnecting…');
@@ -959,6 +979,7 @@ async function createConversation(convName) {
     }
   } catch {}
 
+  subscribeConversation(resp.conversation_id);
   saveState();
   renderSidebar();
   renderGallery();
@@ -970,33 +991,12 @@ async function createConversation(convName) {
   return resp.conversation_id;
 }
 
-document.getElementById('btn-new-session').onclick = () => {
-  document.getElementById('session-name').value = '';
-  showModal('modal-session');
-};
-document.getElementById('modal-session-cancel').onclick = () => hideModal('modal-session');
-document.getElementById('session-name').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') document.getElementById('modal-session-ok').click();
-});
-document.getElementById('modal-session-ok').onclick = async () => {
-  setLoading('modal-session-ok', true, 'Create');
-  const convName = document.getElementById('session-name').value.trim()
-    || `Conversation ${state.conversations.length + 1}`;
+document.getElementById('btn-new-session').onclick = async () => {
   try {
-    await createConversation(convName);
-    status('Conversation created');
+    await createConversation('Untitled');
   } catch (e) {
     status(`Error: ${e.message}`);
-  } finally {
-    setLoading('modal-session-ok', false, 'Create');
-    hideModal('modal-session');
   }
-};
-
-// Resume button — manual resume with optional budget override
-document.getElementById('btn-resume-workflow').onclick = async () => {
-  if (!state.activeWorkflow) { status('Select a conversation first'); return; }
-  await _resumeActiveWorkflow();
 };
 
 // Generate — start the autonomous loop directly (no user prompt needed)
@@ -1111,7 +1111,7 @@ connectGalleryWs();
 connectChatWs();
 
 if (state.conversations.length === 0) {
-  createConversation('Conversation 1').catch(() => {});
+  createConversation('Untitled').catch(() => {});
 }
 </script>
 </body>

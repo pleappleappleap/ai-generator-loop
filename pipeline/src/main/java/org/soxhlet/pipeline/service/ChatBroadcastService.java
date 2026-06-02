@@ -45,9 +45,18 @@ public class ChatBroadcastService {
         sendDone(conversationId);
     }
 
+    public void sendRename(String conversationId, String name) {
+        ObjectNode msg = mapper.createObjectNode();
+        msg.put("type", "conv_renamed");
+        msg.put("conversation_id", conversationId);
+        msg.put("name", name);
+        broadcast(conversationId, msg);
+    }
+
     public void sendChunk(String conversationId, String text) {
         ObjectNode msg = mapper.createObjectNode();
         msg.put("type", "chunk");
+        msg.put("conversation_id", conversationId);
         msg.put("text", text);
         broadcast(conversationId, msg);
     }
@@ -55,14 +64,15 @@ public class ChatBroadcastService {
     public void sendDone(String conversationId) {
         ObjectNode msg = mapper.createObjectNode();
         msg.put("type", "done");
+        msg.put("conversation_id", conversationId);
         broadcast(conversationId, msg);
     }
 
-    public void sendRename(String conversationId, String name) {
+    public void sendError(String conversationId, String text) {
         ObjectNode msg = mapper.createObjectNode();
-        msg.put("type", "conv_renamed");
+        msg.put("type", "error");
         msg.put("conversation_id", conversationId);
-        msg.put("name", name);
+        msg.put("text", text);
         broadcast(conversationId, msg);
     }
 
