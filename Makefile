@@ -18,7 +18,7 @@ targets:
 	@printf "%-20s %s\n" "build"          "Compile the Java pipeline with Ivy and javac."
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
-	@printf "%-20s %s\n" "clean"          "Stop loop components, remove build artifacts, caches, and runtime logs."
+	@printf "%-20s %s\n" "clean"          "Stop loop processes; remove pipeline/build, LaTeX artifacts, __pycache__ across all modules, and /tmp/ai-loop logs."
 	@printf "%-20s %s\n" "distclean"      "Full wipe: venvs, models, ComfyUI, config, and the k3s pipeline namespace (drops DB)."
 	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
 	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
