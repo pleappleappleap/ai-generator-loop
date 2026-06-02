@@ -19,7 +19,7 @@ targets:
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
 	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
-	@printf "%-20s %s\n" "distclean"      "Remove artifacts, venvs, the ComfyUI clone, downloaded models, and config.yaml."
+	@printf "%-20s %s\n" "distclean"      "Full wipe: venvs, models, ComfyUI, config, and the k3s pipeline namespace (drops DB)."
 	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
 	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
 	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, comfyui-nodes, middleware-apply, then build."
@@ -83,9 +83,10 @@ clean:
 # the placeholder survives and make models knows where to put files.
 MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .gitignore | sed 's|/*$$||')
 
-# Remove everything that can be regenerated: venvs, the ComfyUI clone, and
-# auto-downloaded model files.  Reads .gitignore and .gitkeep files as the
-# source of truth — does not require the git CLI or a .git directory.
+# Remove everything that can be regenerated: venvs, the ComfyUI clone,
+# auto-downloaded model files, and the k3s pipeline namespace (including the
+# Postgres PVC — all conversation/image data is lost).  Reads .gitignore and
+# .gitkeep files as the source of truth — does not require the git CLI.
 # The only hardcoded exclusions protect user-placed data that cannot be
 # re-downloaded (SDXL checkpoints, custom workflows).
 # After distclean, restore with: make setup
@@ -107,6 +108,16 @@ distclean: clean
 	git checkout -- loop/ComfyUI/
 	@echo "==> Removing generated config..."
 	rm -f config.yaml
+	@echo "==> Tearing down k3s pipeline namespace (drops Postgres PVC and all pipeline data)..."
+	@for f in /tmp/ai-loop/pf-postgres.pid /tmp/ai-loop/pf-artemis.pid /tmp/ai-loop/pf-searxng.pid; do \
+	  [ -f "$$f" ] && kill "$$(cat $$f)" 2>/dev/null; rm -f "$$f" 2>/dev/null || true; \
+	done
+	@if command -v kubectl >/dev/null 2>&1; then \
+	  kubectl delete namespace pipeline --ignore-not-found 2>/dev/null && \
+	    echo "    namespace/pipeline deleted." || true; \
+	else \
+	  echo "    kubectl not found — skipping namespace teardown."; \
+	fi
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 
 config-default:
