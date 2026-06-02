@@ -18,7 +18,7 @@ targets:
 	@printf "%-20s %s\n" "build"          "Compile the Java pipeline with Ivy and javac."
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
-	@printf "%-20s %s\n" "clean"          "Remove build artifacts and caches."
+	@printf "%-20s %s\n" "clean"          "Stop loop components, remove build artifacts, caches, and runtime logs."
 	@printf "%-20s %s\n" "distclean"      "Full wipe: venvs, models, ComfyUI, config, and the k3s pipeline namespace (drops DB)."
 	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
 	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
@@ -69,12 +69,17 @@ docs:
 	$(MAKE) -C loop docs
 
 clean:
+	@echo "==> Stopping loop components (if running)..."
+	@./loop.sh stop 2>/dev/null || true
+	@echo "==> Removing build artifacts and caches..."
 	latexmk -C ARCHITECTURE.tex
 	rm -f *.aux *.log *.out *.toc *.fls *.fdb_latexmk
 	rm -rf __pycache__ .pytest_cache .ruff_cache
 	$(MAKE) -C loop clean
 	$(MAKE) -C loop/tactical-llm clean
 	$(MAKE) -C pipeline clean
+	@echo "==> Removing runtime logs..."
+	@rm -rf /tmp/ai-loop
 
 # Auto-downloaded model directories are declared in .gitignore.
 # distclean reads that file directly — no git command required — so adding a
