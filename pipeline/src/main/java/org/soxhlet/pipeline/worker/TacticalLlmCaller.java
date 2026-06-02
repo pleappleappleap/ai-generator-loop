@@ -52,6 +52,7 @@ public class TacticalLlmCaller {
     private final RestClient llmClient;
     private final RestClient vlmClient;
     private final RestClient comfyuiClient;
+    private final RestClient searxngClient;
     private final GalleryBroadcastService galleryBroadcast;
     private final ChatBroadcastService chatBroadcast;
     private final ApplicationContext applicationContext;
@@ -77,6 +78,7 @@ public class TacticalLlmCaller {
             @Qualifier("tacticalLlmClient") RestClient llmClient,
             @Qualifier("vlmScorerClient") RestClient vlmClient,
             @Qualifier("comfyuiClient") RestClient comfyuiClient,
+            @Qualifier("searxngClient") RestClient searxngClient,
             @Value("${tactical-llm.system-prompt-file:loop/tactical-llm/system_prompt.md}") String systemPromptFile,
             @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirStr,
             @Value("${comfyui.models-dir:loop/ComfyUI/models}") String comfyuiModelsDirStr) {
@@ -93,6 +95,7 @@ public class TacticalLlmCaller {
         this.llmClient = llmClient;
         this.vlmClient = vlmClient;
         this.comfyuiClient = comfyuiClient;
+        this.searxngClient = searxngClient;
         this.workflowsDir = Path.of(workflowsDirStr).toAbsolutePath().normalize();
         this.comfyuiModelsDir = Path.of(comfyuiModelsDirStr).toAbsolutePath().normalize();
         this.systemPromptPath = Path.of(systemPromptFile).toAbsolutePath().normalize();
@@ -732,6 +735,14 @@ public class TacticalLlmCaller {
                     "model_type", "One of: checkpoint, lora, vae, unet, clip, t5"),
                 List.of("repo_id", "filename", "model_type")));
 
+        tools.add(buildTool("search_web",
+                "Search the web for factual information. Use this before generating an image " +
+                "whenever the user names a specific character, person, place, or real-world subject " +
+                "whose visual details you are not certain of. Also use it to correct yourself after " +
+                "the user flags a factual error. Returns titles, URLs, and snippets from the top results.",
+                Map.of("query", "Concise search query, e.g. \"Spider-Man Marvel Comics appearance costume\""),
+                List.of("query")));
+
         tools.add(buildTool("get_system_prompt",
                 "Read your current system prompt from disk. Call this after update_system_prompt " +
                 "to verify what you wrote, or any time you want to inspect or quote your own " +
@@ -783,6 +794,7 @@ public class TacticalLlmCaller {
     private String executeToolCall(String toolName, String argsJson, List<ObjectNode> conversation) {
         return switch (toolName) {
             case "analyze_image" -> executeAnalyzeImage(argsJson);
+            case "search_web" -> executeSearchWeb(argsJson);
             case "get_available_models" -> executeGetAvailableModels();
             case "get_workflow" -> executeGetWorkflow(argsJson);
             case "install_model" -> executeInstallModel(argsJson);
@@ -790,6 +802,44 @@ public class TacticalLlmCaller {
             case "update_system_prompt" -> executeUpdateSystemPrompt(argsJson, conversation);
             default -> "Unknown tool: " + toolName;
         };
+    }
+
+    private String executeSearchWeb(String argsJson) {
+        try {
+            JsonNode args = mapper.readTree(argsJson);
+            String query = args.path("query").asText("").strip();
+            if (query.isEmpty()) return "Error: query is required";
+
+            JsonNode result = searxngClient.get()
+                    .uri(u -> u.path("/search")
+                            .queryParam("q", query)
+                            .queryParam("format", "json")
+                            .queryParam("language", "en")
+                            .queryParam("categories", "general")
+                            .build())
+                    .retrieve()
+                    .body(JsonNode.class);
+
+            JsonNode results = result.path("results");
+            if (!results.isArray() || results.isEmpty()) {
+                return "No results found for: " + query;
+            }
+
+            StringBuilder sb = new StringBuilder("Web search results for: ").append(query).append("\n\n");
+            int count = Math.min(5, results.size());
+            for (int i = 0; i < count; i++) {
+                JsonNode r = results.get(i);
+                sb.append(i + 1).append(". ").append(r.path("title").asText("")).append("\n");
+                sb.append("   ").append(r.path("url").asText("")).append("\n");
+                String content = r.path("content").asText("").strip();
+                if (!content.isEmpty()) sb.append("   ").append(content).append("\n");
+                sb.append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.warning("search_web failed: " + e.getMessage());
+            return "Search failed: " + e.getMessage();
+        }
     }
 
     private String executeAnalyzeImage(String argsJson) {

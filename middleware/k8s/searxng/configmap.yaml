@@ -1,0 +1,39 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: searxng-settings
+  namespace: pipeline
+data:
+  settings.yml: |
+    use_default_settings: true
+
+    general:
+      instance_name: "soxhlet-search"
+      debug: false
+
+    search:
+      formats:
+        - html
+        - json
+
+    server:
+      secret_key: "soxhlet-local-search-key"
+      limiter: false
+      image_proxy: false
+
+    ui:
+      default_locale: en
+
+    engines:
+      - name: google
+        engine: google
+        disabled: false
+      - name: duckduckgo
+        engine: duckduckgo
+        disabled: false
+      - name: bing
+        engine: bing
+        disabled: false
+      - name: wikipedia
+        engine: wikipedia
+        disabled: false

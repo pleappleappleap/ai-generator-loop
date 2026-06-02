@@ -42,11 +42,14 @@ _start_port_forwards() {
     kubectl port-forward svc/artemis 12008:61616 12009:8161 -n "$NS" \
         >"$PIDDIR/pf-artemis.log" 2>&1 &
     echo $! > "$PIDDIR/pf-artemis.pid"
-    printf "==> Port-forwards started (postgres→12007, artemis→12008/12009)\n"
+    kubectl port-forward svc/searxng 12010:8080 -n "$NS" \
+        >"$PIDDIR/pf-searxng.log" 2>&1 &
+    echo $! > "$PIDDIR/pf-searxng.pid"
+    printf "==> Port-forwards started (postgres→12007, artemis→12008/12009, searxng→12010)\n"
 }
 
 _stop_port_forwards() {
-    for f in "$PIDDIR/pf-postgres.pid" "$PIDDIR/pf-artemis.pid"; do
+    for f in "$PIDDIR/pf-postgres.pid" "$PIDDIR/pf-artemis.pid" "$PIDDIR/pf-searxng.pid"; do
         [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null && rm -f "$f"
     done
 }
@@ -56,6 +59,7 @@ _start() {
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
     _wait_pod_ready "app=postgres" "PostgreSQL" 120
     _wait_pod_ready "app=artemis"  "Artemis"    120
+    _wait_pod_ready "app=searxng"  "SearXNG"    120
     _start_port_forwards
     _status
 }
@@ -64,7 +68,8 @@ _stop() {
     _stop_port_forwards
     _require_kubectl
     kubectl scale deployment artemis --replicas=0 -n "$NS" 2>/dev/null || true
-    echo "==> Artemis scaled to 0"
+    kubectl scale deployment searxng --replicas=0 -n "$NS" 2>/dev/null || true
+    echo "==> Artemis and SearXNG scaled to 0"
     echo "==> PostgreSQL left running — use 'middleware.sh stop --all' to fully tear down"
 }
 
@@ -84,15 +89,13 @@ _restart() {
 _status() {
     _require_kubectl
     echo "==> Middleware pods (namespace: $NS):"
-    kubectl get pods -n "$NS" -l 'app in (artemis,postgres)' 2>&1
+    kubectl get pods -n "$NS" -l 'app in (artemis,postgres,searxng)' 2>&1
     echo ""
-    _HOST=$(kubectl get nodes \
-        -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' \
-        2>/dev/null || echo "localhost")
     echo "==> Endpoints:"
     echo "  PostgreSQL:       localhost:12007  (pipeline / pipeline)"
     echo "  Artemis OpenWire: localhost:12008"
     echo "  Artemis console:  http://localhost:12009  (admin / admin)"
+    echo "  SearXNG:          http://localhost:12010"
 }
 
 _health() {
@@ -108,6 +111,12 @@ _health() {
         printf "%-22s %s\n" "artemis" "healthy"
     else
         printf "%-22s %s\n" "artemis" "not ready"
+        ok=1
+    fi
+    if _pod_ready "app=searxng"; then
+        printf "%-22s %s\n" "searxng" "healthy"
+    else
+        printf "%-22s %s\n" "searxng" "not ready"
         ok=1
     fi
     return $ok

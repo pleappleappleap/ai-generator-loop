@@ -8,3 +8,5 @@ resources:
   - artemis/pvc.yaml
   - artemis/deployment.yaml
   - artemis/service.yaml
+  - searxng/configmap.yaml
+  - searxng/deployment.yaml

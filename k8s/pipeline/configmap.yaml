@@ -17,3 +17,4 @@ data:
   SIDECARS_CLIP_SCORER_URL: http://clip-scorer:12002
   SIDECARS_ARTIFACT_SCORER_URL: http://artifact-scorer:12003
   SIDECARS_VLM_SCORER_URL: http://vlm-scorer:12004
+  SEARXNG_URL: http://searxng:8080

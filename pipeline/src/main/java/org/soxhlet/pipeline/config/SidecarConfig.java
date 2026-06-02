@@ -50,4 +50,10 @@ public class SidecarConfig {
             @Value("${comfyui.url:http://localhost:12006}") String url) {
         return RestClient.builder().baseUrl(url).build();
     }
+
+    @Bean("searxngClient")
+    public RestClient searxngClient(
+            @Value("${searxng.url:http://localhost:12010}") String url) {
+        return RestClient.builder().baseUrl(url).build();
+    }
 }
