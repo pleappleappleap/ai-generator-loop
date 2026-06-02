@@ -66,6 +66,7 @@ format:
 
 docs:
 	latexmk -pdf -interaction=nonstopmode ARCHITECTURE.tex
+	latexmk -c ARCHITECTURE.tex
 	$(MAKE) -C loop docs
 
 clean:
