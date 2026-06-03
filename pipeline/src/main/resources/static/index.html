@@ -790,22 +790,35 @@ async function deleteConversation(convId) {
   renderSidebar();
 }
 
-function switchConversation(convId) {
+async function switchConversation(convId) {
   const conv = state.conversations.find(c => c.conversation_id === convId);
   if (!conv) return;
   state.activeConvId = convId;
   subscribeConversation(convId);
-  // Auto-select the conversation's workflow if available.
+
+  // Update gallery state without re-fetching history through selectWorkflow
   const wf = (conv.workflows || [])[0] || null;
-  if (wf && state.activeWorkflow?.workflow_id !== wf.workflow_id) {
-    selectWorkflow(wf);
-  } else if (!wf) {
+  if (wf) {
+    state.activeWorkflow = { ...wf };
+    document.getElementById('gallery-title').textContent = conv.name || wf.name;
+    renderGallery();
+  } else {
     state.activeWorkflow = null;
     document.getElementById('gallery-title').textContent = conv.name || 'Untitled';
     document.getElementById('gallery-grid').innerHTML = '';
   }
-  document.getElementById('chat-messages').innerHTML =
-    `<div class="chat-msg system">Switched to "${escHtml(conv.name || 'Untitled')}".</div>`;
+
+  // Load chat history
+  const msgs = document.getElementById('chat-messages');
+  msgs.innerHTML = '';
+  document.getElementById('btn-send').disabled = true;
+  try {
+    const hist = await api('GET', `/history?conversation_id=${convId}&workflow_id=&limit=30`);
+    if (hist.chat?.length) {
+      hist.chat.forEach(m => appendChatMsg(m.role, m.content));
+    }
+  } catch {}
+
   updateChatEnabled();
   saveState();
   renderSidebar();
