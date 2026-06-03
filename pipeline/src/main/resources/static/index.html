@@ -247,7 +247,8 @@
     white-space: pre-wrap;
     word-break: break-word;
   }
-  .chat-msg.user      { background: rgba(74,158,255,0.18); align-self: flex-end; }
+  .chat-msg.user      { background: rgba(74,158,255,0.18); align-self: flex-end; white-space: normal; }
+  .chat-msg.user p    { margin: 0; }
   .chat-msg.assistant { background: var(--surface); border: 1px solid var(--border); align-self: flex-start; white-space: normal; }
   .chat-msg.system    { background: transparent; color: var(--muted); font-size: 10px; text-align: center; align-self: center; }
   .chat-msg.dl-progress {
