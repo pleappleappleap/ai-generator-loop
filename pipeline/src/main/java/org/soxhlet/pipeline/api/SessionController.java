@@ -2,11 +2,16 @@ package org.soxhlet.pipeline.api;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.soxhlet.pipeline.service.ContextService;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @RestController
 public class SessionController {
@@ -22,6 +27,47 @@ public class SessionController {
         this.jdbc = jdbc;
         this.mapper = mapper;
         this.contextService = contextService;
+    }
+
+    @GetMapping("/conversations")
+    public List<Map<String, Object>> listConversations() {
+        List<Map<String, Object>> convRows = jdbc.queryForList(
+                "SELECT conversation_id::text AS id, name FROM conversations " +
+                "WHERE status != 'archived' ORDER BY created_at DESC LIMIT 100",
+                Map.of());
+        if (convRows.isEmpty()) return List.of();
+
+        Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
+        for (Map<String, Object> r : convRows) {
+            String id = (String) r.get("id");
+            Map<String, Object> conv = new HashMap<>();
+            conv.put("conversation_id", id);
+            conv.put("name", r.get("name"));
+            conv.put("workflows", new ArrayList<>());
+            byId.put(id, conv);
+        }
+
+        List<String> ids = new ArrayList<>(byId.keySet());
+        List<Map<String, Object>> wfRows = jdbc.queryForList(
+                "SELECT workflow_id::text AS wid, conversation_id::text AS cid, " +
+                "name, COALESCE(workflow_path, '') AS workflow_path " +
+                "FROM workflows WHERE conversation_id::text IN (:ids) " +
+                "ORDER BY created_at ASC",
+                new MapSqlParameterSource("ids", ids));
+        for (Map<String, Object> wf : wfRows) {
+            String cid = (String) wf.get("cid");
+            Map<String, Object> conv = byId.get(cid);
+            if (conv == null) continue;
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> wfList = (List<Map<String, Object>>) conv.get("workflows");
+            Map<String, Object> wfEntry = new HashMap<>();
+            wfEntry.put("workflow_id", wf.get("wid"));
+            wfEntry.put("name", wf.get("name"));
+            wfEntry.put("workflow_path", wf.get("workflow_path"));
+            wfEntry.put("conversation_id", cid);
+            wfList.add(wfEntry);
+        }
+        return new ArrayList<>(byId.values());
     }
 
     @PostMapping("/session/start")

@@ -1061,14 +1061,49 @@ restoreState();
 initResizeHandles();
 renderSidebar();
 updateChatEnabled();
+connectGalleryWs();
+connectChatWs();
 
-if (state.activeWorkflow) {
-  const _initConv = state.conversations.find(c => c.conversation_id === state.activeConvId);
-  document.getElementById('gallery-title').textContent = _initConv?.name || state.activeWorkflow.name;
-  selectWorkflow(state.activeWorkflow);
-} else if (state.activeConvId) {
-  const _initConv = state.conversations.find(c => c.conversation_id === state.activeConvId);
-  if (_initConv) document.getElementById('gallery-title').textContent = _initConv.name;
+// Always load conversations from the server so IDs stay in sync with the DB.
+// Merge with localStorage to preserve expanded/images state, then reload history.
+api('GET', '/conversations').then(convs => {
+  if (!Array.isArray(convs)) return;
+
+  // Rebuild conversations from server, preserving client-only fields from localStorage
+  const prevById = {};
+  (state.conversations || []).forEach(c => { prevById[c.conversation_id] = c; });
+  state.conversations = convs.map(sc => {
+    const prev = prevById[sc.conversation_id] || {};
+    return {
+      conversation_id: sc.conversation_id,
+      name:            sc.name,
+      workflows:       sc.workflows || [],
+      expanded:        prev.expanded || false,
+    };
+  });
+
+  // Restore active IDs — validate they still exist in the server list
+  if (!state.conversations.find(c => c.conversation_id === state.activeConvId)) {
+    state.activeConvId = state.conversations[0]?.conversation_id || null;
+    state.activeWorkflow = null;
+  }
+  if (state.activeWorkflow) {
+    const wfStillExists = state.conversations.some(c =>
+      c.workflows.some(w => w.workflow_id === state.activeWorkflow.workflow_id));
+    if (!wfStillExists) state.activeWorkflow = null;
+  }
+
+  saveState();
+  renderSidebar();
+  updateChatEnabled();
+
+  // Now load history for the active conversation
+  if (!state.activeConvId) return;
+  const initConv = state.conversations.find(c => c.conversation_id === state.activeConvId);
+  if (initConv) {
+    document.getElementById('gallery-title').textContent = initConv.name || 'Untitled';
+    if (state.activeWorkflow) renderGallery();
+  }
   api('GET', `/history?conversation_id=${state.activeConvId}&workflow_id=&limit=30`)
     .then(hist => {
       if (hist.chat?.length) {
@@ -1077,10 +1112,7 @@ if (state.activeWorkflow) {
         hist.chat.forEach(m => appendChatMsg(m.role, m.content));
       }
     }).catch(() => {});
-}
-
-connectGalleryWs();
-connectChatWs();
+}).catch(() => {});
 
 </script>
 </body>
