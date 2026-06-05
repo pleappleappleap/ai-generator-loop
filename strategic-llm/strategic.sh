@@ -26,7 +26,7 @@ _stop_loop_if_running() {
         pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
             echo "==> Loop super-component is running — stopping it first..."
-            "$SOXHLET_ROOT/loop.sh" stop
+            "$SOXHLET_ROOT/loop/loop.sh" stop
             echo ""
         fi
     fi

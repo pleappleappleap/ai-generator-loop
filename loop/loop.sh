@@ -144,7 +144,7 @@ _monitor_escalation() {
     if [ -n "$pending" ]; then
         echo ""
         echo "==> Escalation detected (pipeline_events id=$pending). Starting strategic..."
-        "$SOXHLET_ROOT/strategic.sh" start
+        "$SOXHLET_ROOT/strategic-llm/strategic.sh" start
     else
         echo ""
         echo "==> Pipeline exited with no pending escalation. Loop stopped."
@@ -158,7 +158,7 @@ _stop_strategic_if_running() {
         pid=$(cat "$pid_file")
         if kill -0 "$pid" 2>/dev/null; then
             echo "==> Strategic super-component is running — stopping it first..."
-            "$SOXHLET_ROOT/strategic.sh" stop
+            "$SOXHLET_ROOT/strategic-llm/strategic.sh" stop
             echo ""
         fi
     fi

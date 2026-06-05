@@ -28,6 +28,13 @@ export SOXHLET_ROOT
 
 # ── Mode detection ─────────────────────────────────────────────────────────────
 
+_mode_script() {
+    case "$1" in
+        loop)      echo "$SOXHLET_ROOT/loop/loop.sh" ;;
+        strategic) echo "$SOXHLET_ROOT/strategic-llm/strategic.sh" ;;
+    esac
+}
+
 _detect_mode() {
     local pid
     if [ -f "$PIDDIR/strategic_llm.pid" ]; then
@@ -60,11 +67,11 @@ _start() {
 
     if [ "$current" != "none" ]; then
         echo "==> Stopping $current mode..."
-        "$SOXHLET_ROOT/${current}.sh" stop
+        "$(_mode_script "$current")" stop
         echo ""
     fi
 
-    "$SOXHLET_ROOT/${mode}.sh" start
+    "$(_mode_script "$mode")" start
 }
 
 _stop() {
@@ -73,7 +80,7 @@ _stop() {
     if [ "$current" = "none" ]; then
         echo "==> Nothing is running."
     else
-        "$SOXHLET_ROOT/${current}.sh" stop
+        "$(_mode_script "$current")" stop
     fi
 }
 
@@ -90,13 +97,13 @@ _restart() {
         echo "ERROR: Nothing is running — use '$0 start' to start." >&2
         exit 1
     fi
-    "$SOXHLET_ROOT/${current}.sh" restart
+    "$(_mode_script "$current")" restart
 }
 
 _status() {
     local current
     current=$(_detect_mode)
-    "$SOXHLET_ROOT/${current:-loop}.sh" status 2>/dev/null || "$SOXHLET_ROOT/middleware.sh" status
+    "$(_mode_script "${current:-loop}")" status 2>/dev/null || "$SOXHLET_ROOT/middleware.sh" status
 }
 
 _health() {
@@ -104,7 +111,7 @@ _health() {
     current=$(_detect_mode)
     "$SOXHLET_ROOT/middleware.sh" health || ok=1
     case "$current" in
-        loop|strategic) "$SOXHLET_ROOT/${current}.sh" health || ok=1 ;;
+        loop|strategic) "$(_mode_script "$current")" health || ok=1 ;;
         none) echo "No mode is running."; ok=1 ;;
     esac
     return $ok
