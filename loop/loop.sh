@@ -235,14 +235,14 @@ _stop_all() {
 
 _status() {
     echo "┌─ Middleware ──────────────────────────────────────────┐"
-    "$SOXHLET_ROOT/middleware.sh" health 2>/dev/null || "$SOXHLET_ROOT/middleware.sh" status
+    "$SOXHLET_ROOT/middleware.sh" health 2>/dev/null | sed 's/^/│ /'
     echo "├─ Loop ────────────────────────────────────────────────┤"
-    "$LOOP_DIR/comfyui.sh" status
-    "$LOOP_DIR/tactical_llm.sh" status
-    "$LOOP_DIR/clip_scorer.sh" status
-    "$LOOP_DIR/artifact_scorer.sh" status
-    "$LOOP_DIR/vlm_scorer.sh" status
-    "$LOOP_DIR/pipeline.sh" status
+    "$LOOP_DIR/comfyui.sh" status        | sed 's/^/│ /'
+    "$LOOP_DIR/tactical_llm.sh" status   | sed 's/^/│ /'
+    "$LOOP_DIR/clip_scorer.sh" status    | sed 's/^/│ /'
+    "$LOOP_DIR/artifact_scorer.sh" status | sed 's/^/│ /'
+    "$LOOP_DIR/vlm_scorer.sh" status     | sed 's/^/│ /'
+    "$LOOP_DIR/pipeline.sh" status       | sed 's/^/│ /'
     echo "└───────────────────────────────────────────────────────┘"
     echo ""
     echo "Logs: /tmp/ai-loop/<component>.log"
@@ -252,28 +252,30 @@ _status() {
 # ── Health ─────────────────────────────────────────────────────────────────────
 
 _health() {
-    local ok=0
+    local ok=0 _mw_out _mw_rc
     echo "┌─ Middleware ──────────────────────────────────────────┐"
-    "$SOXHLET_ROOT/middleware.sh" health || ok=1
+    _mw_out=$("$SOXHLET_ROOT/middleware.sh" health 2>/dev/null); _mw_rc=$?
+    printf '%s\n' "$_mw_out" | sed 's/^/│ /'
+    [ "$_mw_rc" -ne 0 ] && ok=1
     echo "├─ Loop ────────────────────────────────────────────────┤"
     component_check_healthy "${_COMFYUI_URL}/system_stats" \
-        && printf "%-22s %s\n" "comfyui" "healthy" \
-        || { printf "%-22s %s\n" "comfyui" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "comfyui" "healthy" \
+        || { printf "│ %-22s %s\n" "comfyui" "not ready"; ok=1; }
     component_check_healthy "${_LLM_BASE}/v1/models" \
-        && printf "%-22s %s\n" "tactical_llm" "healthy" \
-        || { printf "%-22s %s\n" "tactical_llm" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "tactical_llm" "healthy" \
+        || { printf "│ %-22s %s\n" "tactical_llm" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_CLIP_PORT}/health" \
-        && printf "%-22s %s\n" "clip_scorer" "healthy" \
-        || { printf "%-22s %s\n" "clip_scorer" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "clip_scorer" "healthy" \
+        || { printf "│ %-22s %s\n" "clip_scorer" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_ARTIFACT_PORT}/health" \
-        && printf "%-22s %s\n" "artifact_scorer" "healthy" \
-        || { printf "%-22s %s\n" "artifact_scorer" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "artifact_scorer" "healthy" \
+        || { printf "│ %-22s %s\n" "artifact_scorer" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_VLM_PORT}/health" \
-        && printf "%-22s %s\n" "vlm_scorer" "healthy" \
-        || { printf "%-22s %s\n" "vlm_scorer" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "vlm_scorer" "healthy" \
+        || { printf "│ %-22s %s\n" "vlm_scorer" "not ready"; ok=1; }
     component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
-        && printf "%-22s %s\n" "pipeline" "healthy" \
-        || { printf "%-22s %s\n" "pipeline" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "pipeline" "healthy" \
+        || { printf "│ %-22s %s\n" "pipeline" "not ready"; ok=1; }
     echo "└───────────────────────────────────────────────────────┘"
     return $ok
 }

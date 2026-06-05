@@ -61,23 +61,27 @@ _stop() {
 }
 
 _status() {
-    echo "┌─ Strategic ───────────────────────────────────────────┐"
-    "$STRATEGIC_DIR/strategic_llm.sh" status
-    "$LOOP_DIR/pipeline.sh" status
+    echo "┌─ Middleware ──────────────────────────────────────────┐"
+    "$SOXHLET_ROOT/middleware.sh" health 2>/dev/null | sed 's/^/│ /'
+    echo "├─ Strategic ───────────────────────────────────────────┤"
+    "$STRATEGIC_DIR/strategic_llm.sh" status | sed 's/^/│ /'
+    "$LOOP_DIR/pipeline.sh" status           | sed 's/^/│ /'
     echo "└───────────────────────────────────────────────────────┘"
 }
 
 _health() {
-    local ok=0
+    local ok=0 _mw_out _mw_rc
     echo "┌─ Middleware ──────────────────────────────────────────┐"
-    "$SOXHLET_ROOT/middleware.sh" health || ok=1
+    _mw_out=$("$SOXHLET_ROOT/middleware.sh" health 2>/dev/null); _mw_rc=$?
+    printf '%s\n' "$_mw_out" | sed 's/^/│ /'
+    [ "$_mw_rc" -ne 0 ] && ok=1
     echo "├─ Strategic ───────────────────────────────────────────┤"
     component_check_healthy "${_LLM_BASE}/v1/models" \
-        && printf "%-22s %s\n" "strategic_llm" "healthy" \
-        || { printf "%-22s %s\n" "strategic_llm" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "strategic_llm" "healthy" \
+        || { printf "│ %-22s %s\n" "strategic_llm" "not ready"; ok=1; }
     component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
-        && printf "%-22s %s\n" "pipeline" "healthy" \
-        || { printf "%-22s %s\n" "pipeline" "not ready"; ok=1; }
+        && printf "│ %-22s %s\n" "pipeline" "healthy" \
+        || { printf "│ %-22s %s\n" "pipeline" "not ready"; ok=1; }
     echo "└───────────────────────────────────────────────────────┘"
     return $ok
 }
