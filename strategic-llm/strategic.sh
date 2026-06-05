@@ -7,8 +7,8 @@
 #
 # Usage: strategic.sh {start|stop|restart|status|health}
 
-SOXHLET_ROOT="$(cd "$(dirname "$0")" && pwd)"
-STRATEGIC_DIR="$SOXHLET_ROOT/strategic-llm"
+STRATEGIC_DIR="$(cd "$(dirname "$0")" && pwd)"
+SOXHLET_ROOT="$(cd "$STRATEGIC_DIR/.." && pwd)"
 LOOP_DIR="$SOXHLET_ROOT/loop"
 export SOXHLET_ROOT
 . "$LOOP_DIR/lib/component.sh"
