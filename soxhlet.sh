@@ -109,10 +109,10 @@ _status() {
 _health() {
     local current ok=0
     current=$(_detect_mode)
-    "$SOXHLET_ROOT/middleware.sh" health || ok=1
     case "$current" in
         loop|strategic) "$(_mode_script "$current")" health || ok=1 ;;
-        none) echo "No mode is running."; ok=1 ;;
+        none) "$SOXHLET_ROOT/middleware.sh" health || ok=1
+              echo "No mode is running."; ok=1 ;;
     esac
     return $ok
 }

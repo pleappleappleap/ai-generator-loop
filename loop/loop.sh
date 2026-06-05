@@ -253,7 +253,9 @@ _status() {
 
 _health() {
     local ok=0
+    echo "┌─ Middleware ──────────────────────────────────────────┐"
     "$SOXHLET_ROOT/middleware.sh" health || ok=1
+    echo "├─ Loop ────────────────────────────────────────────────┤"
     component_check_healthy "${_COMFYUI_URL}/system_stats" \
         && printf "%-22s %s\n" "comfyui" "healthy" \
         || { printf "%-22s %s\n" "comfyui" "not ready"; ok=1; }
@@ -272,6 +274,7 @@ _health() {
     component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
         && printf "%-22s %s\n" "pipeline" "healthy" \
         || { printf "%-22s %s\n" "pipeline" "not ready"; ok=1; }
+    echo "└───────────────────────────────────────────────────────┘"
     return $ok
 }
 

@@ -69,12 +69,16 @@ _status() {
 
 _health() {
     local ok=0
+    echo "┌─ Middleware ──────────────────────────────────────────┐"
+    "$SOXHLET_ROOT/middleware.sh" health || ok=1
+    echo "├─ Strategic ───────────────────────────────────────────┤"
     component_check_healthy "${_LLM_BASE}/v1/models" \
         && printf "%-22s %s\n" "strategic_llm" "healthy" \
         || { printf "%-22s %s\n" "strategic_llm" "not ready"; ok=1; }
     component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
         && printf "%-22s %s\n" "pipeline" "healthy" \
         || { printf "%-22s %s\n" "pipeline" "not ready"; ok=1; }
+    echo "└───────────────────────────────────────────────────────┘"
     return $ok
 }
 
