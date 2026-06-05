@@ -4,16 +4,13 @@
 # Python ML sidecars, and the Java pipeline.
 # Middleware (Artemis + PostgreSQL) is managed separately by middleware.sh at repo root.
 #
-# Usage: loop.sh {start [--auto-escalate]|stop [--all]|restart|status|health}
+# Usage: loop.sh {start|stop [--all]|restart|status|health}
 #
-#   start [--auto-escalate]
-#               Start middleware (if needed) then all loop components.
+#   start       Start middleware (if needed) then all loop components.
 #               Blocks until every component reports healthy. Does not return
 #               until the workflow is ready to accept generation requests.
-#               With --auto-escalate: forks a background monitor that hands off
-#               to strategic.sh automatically when the pipeline exits with a
-#               pending escalation in pipeline_events. Without this flag the
-#               operator controls when (and whether) to start strategic.sh.
+#               Always forks a background monitor that hands off to strategic.sh
+#               when the pipeline exits with a pending escalation in pipeline_events.
 #   stop        Stop all loop components. Middleware is left running.
 #   stop --all  Stop loop components AND middleware.
 #   restart     stop then start (middleware stays up).
@@ -281,18 +278,13 @@ _health() {
 # ── Dispatch ───────────────────────────────────────────────────────────────────
 
 case "${1:-status}" in
-    start)
-        case "${2:-}" in
-            --auto-escalate) _AUTO_ESCALATE=1 _start ;;
-            "")              _start ;;
-            *) echo "Usage: $0 start [--auto-escalate]" >&2; exit 1 ;;
-        esac ;;
+    start)  _AUTO_ESCALATE=1 _start ;;
     stop)
         case "${2:-}" in
             --all) _stop_all ;;
             *)     _stop ;;
         esac ;;
-    restart) _stop; echo ""; _AUTO_ESCALATE=0 _start ;;
+    restart) _stop; echo ""; _AUTO_ESCALATE=1 _start ;;
     status)  _status ;;
     health)  _health ;;
     *)
