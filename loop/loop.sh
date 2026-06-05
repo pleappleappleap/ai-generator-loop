@@ -236,16 +236,16 @@ _stop_all() {
 _fmt_row() { awk '{printf "│ %-22s │ %-25s │\n", $1, substr($0,24)}'; }
 
 _status() {
-    echo "┌─ Middleware ───────────────┬───────────────────────────┐"
+    echo "┌─ Middleware ───────────┬───────────────────────────┐"
     "$SOXHLET_ROOT/middleware.sh" health 2>/dev/null | _fmt_row
-    echo "├─ Loop ─────────────────────┼───────────────────────────┤"
+    echo "├─ Loop ─────────────────┼───────────────────────────┤"
     "$LOOP_DIR/comfyui.sh" status         | _fmt_row
     "$LOOP_DIR/tactical_llm.sh" status    | _fmt_row
     "$LOOP_DIR/clip_scorer.sh" status     | _fmt_row
     "$LOOP_DIR/artifact_scorer.sh" status | _fmt_row
     "$LOOP_DIR/vlm_scorer.sh" status      | _fmt_row
     "$LOOP_DIR/pipeline.sh" status        | _fmt_row
-    echo "└─────────────────────────────┴───────────────────────────┘"
+    echo "└────────────────────────┴───────────────────────────┘"
     echo ""
     echo "Logs: /tmp/ai-loop/<component>.log"
     echo "UI:   http://localhost:12000"
@@ -255,11 +255,11 @@ _status() {
 
 _health() {
     local ok=0 _mw_out _mw_rc
-    echo "┌─ Middleware ───────────────┬───────────────────────────┐"
+    echo "┌─ Middleware ───────────┬───────────────────────────┐"
     _mw_out=$("$SOXHLET_ROOT/middleware.sh" health 2>/dev/null); _mw_rc=$?
     printf '%s\n' "$_mw_out" | _fmt_row
     [ "$_mw_rc" -ne 0 ] && ok=1
-    echo "├─ Loop ─────────────────────┼───────────────────────────┤"
+    echo "├─ Loop ─────────────────┼───────────────────────────┤"
     component_check_healthy "${_COMFYUI_URL}/system_stats" \
         && printf "│ %-22s │ %-25s │\n" "comfyui" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "comfyui" "not ready"; ok=1; }
@@ -278,7 +278,7 @@ _health() {
     component_check_healthy "$_PIPELINE_HEALTH" '"UP"' \
         && printf "│ %-22s │ %-25s │\n" "pipeline" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "pipeline" "not ready"; ok=1; }
-    echo "└─────────────────────────────┴───────────────────────────┘"
+    echo "└────────────────────────┴───────────────────────────┘"
     return $ok
 }
 
