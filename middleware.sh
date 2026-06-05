@@ -11,6 +11,13 @@ _require_kubectl() {
     fi
 }
 
+_ensure_colima() {
+    if ! colima status >/dev/null 2>&1; then
+        echo "==> Starting Colima..."
+        colima start
+    fi
+}
+
 _pod_ready() {
     local label="$1"
     kubectl get pods -n "$NS" -l "$label" \
@@ -55,6 +62,7 @@ _stop_port_forwards() {
 }
 
 _start() {
+    _ensure_colima
     _require_kubectl
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
     _wait_pod_ready "app=postgres" "PostgreSQL" 120
@@ -78,9 +86,11 @@ _stop_all() {
     _require_kubectl
     kubectl delete -k "$SOXHLET_ROOT/middleware/k8s/" 2>/dev/null || true
     echo "==> All middleware resources deleted"
+    colima stop
 }
 
 _restart() {
+    _ensure_colima
     _require_kubectl
     _stop_port_forwards
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"

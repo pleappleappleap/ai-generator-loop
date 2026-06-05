@@ -173,20 +173,26 @@ _start() {
     "$SOXHLET_ROOT/middleware.sh" start
 
     echo ""
-    echo "==> Starting ComfyUI and tactical LLM..."
+    echo "==> Starting ComfyUI, tactical LLM, and ML sidecars..."
     "$LOOP_DIR/comfyui.sh" start
     "$LOOP_DIR/tactical_llm.sh" start
-    component_wait_healthy "${_COMFYUI_URL}/system_stats"  "ComfyUI"      180
-    component_wait_healthy "${_LLM_BASE}/v1/models"        "tactical_llm" 300
-
-    echo ""
-    echo "==> Starting Python ML sidecars..."
     "$LOOP_DIR/clip_scorer.sh" start
     "$LOOP_DIR/artifact_scorer.sh" start
     "$LOOP_DIR/vlm_scorer.sh" start
-    component_wait_healthy "http://localhost:${_CLIP_PORT}/health"     "clip-scorer"     60
-    component_wait_healthy "http://localhost:${_ARTIFACT_PORT}/health" "artifact-scorer" 60
-    component_wait_healthy "http://localhost:${_VLM_PORT}/health"      "vlm-scorer"      120
+
+    component_wait_healthy "${_COMFYUI_URL}/system_stats"             "ComfyUI"         180      & _w1=$!
+    component_wait_healthy "${_LLM_BASE}/v1/models"                   "tactical_llm"    300      & _w2=$!
+    component_wait_healthy "http://localhost:${_CLIP_PORT}/health"     "clip-scorer"      60      & _w3=$!
+    component_wait_healthy "http://localhost:${_ARTIFACT_PORT}/health" "artifact-scorer"  60      & _w4=$!
+    component_wait_healthy "http://localhost:${_VLM_PORT}/health"      "vlm-scorer"      120      & _w5=$!
+
+    _start_ok=0
+    wait $_w1 || _start_ok=1
+    wait $_w2 || _start_ok=1
+    wait $_w3 || _start_ok=1
+    wait $_w4 || _start_ok=1
+    wait $_w5 || _start_ok=1
+    [ "$_start_ok" -eq 1 ] && exit 1
 
     echo ""
     echo "==> Starting Java pipeline..."
