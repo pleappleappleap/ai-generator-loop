@@ -13,8 +13,9 @@
 #               strategic automatically when the pipeline signals it.
 #   soxhlet.sh stop [--all]
 #               Stop the active mode. With --all, also stop middleware.
-#   soxhlet.sh restart
-#               Restart middleware and the currently active mode.
+#   soxhlet.sh restart [--all]
+#               Restart the currently active mode. With --all, also restart
+#               middleware (rolling kubectl restart + port-forward cycle).
 #               Errors if nothing is running.
 #   soxhlet.sh status
 #               Show status of middleware and the active mode.
@@ -100,6 +101,23 @@ _restart() {
     "$(_mode_script "$current")" restart
 }
 
+_restart_all() {
+    local current
+    current=$(_detect_mode)
+    if [ "$current" = "none" ]; then
+        echo "ERROR: Nothing is running — use '$0 start' to start." >&2
+        exit 1
+    fi
+    echo "==> Stopping $current mode..."
+    "$(_mode_script "$current")" stop
+    echo ""
+    echo "==> Restarting middleware..."
+    "$SOXHLET_ROOT/middleware.sh" restart
+    echo ""
+    echo "==> Starting $current mode..."
+    "$(_mode_script "$current")" start
+}
+
 _stopped_rows() {
     local component
     for component in "$@"; do
@@ -166,10 +184,15 @@ case "${1:-status}" in
             "")    _stop ;;
             *) echo "Usage: $0 stop [--all]" >&2; exit 1 ;;
         esac ;;
-    restart) _restart ;;
+    restart)
+        case "${2:-}" in
+            --all) _restart_all ;;
+            "")    _restart ;;
+            *) echo "Usage: $0 restart [--all]" >&2; exit 1 ;;
+        esac ;;
     status)  _status ;;
     health)  _health ;;
     *)
-        echo "Usage: $0 {start [loop|strategic] | stop [--all] | restart | status | health}" >&2
+        echo "Usage: $0 {start [loop|strategic] | stop [--all] | restart [--all] | status | health}" >&2
         exit 1 ;;
 esac
