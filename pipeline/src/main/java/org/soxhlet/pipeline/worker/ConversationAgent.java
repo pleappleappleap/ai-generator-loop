@@ -99,7 +99,7 @@ public class ConversationAgent implements Runnable {
             JsonNode decision = runReasoningLoop(messages, false);
 
             if (decision == null) {
-                mgr.chatBroadcast.sendError(conversationId, "The agent did not respond.");
+                mgr.chatBroadcast.sendError(conversationId, "The model did not respond — please try again in a moment.");
                 return;
             }
 
@@ -343,6 +343,7 @@ public class ConversationAgent implements Runnable {
                         .body(ObjectNode.class);
             } catch (Exception e) {
                 log.warning("LLM call failed (iter " + i + "): " + e.getMessage());
+                if (isTimeoutException(e)) mgr.scheduleLlmRestart();
                 return null;
             }
 
@@ -1155,6 +1156,16 @@ public class ConversationAgent implements Runnable {
             try { Thread.sleep(500); } catch (InterruptedException ignored) {}
             SpringApplication.exit(mgr.applicationContext, () -> 0);
         });
+    }
+
+    private static boolean isTimeoutException(Exception e) {
+        Throwable t = e;
+        while (t != null) {
+            if (t instanceof java.net.SocketTimeoutException) return true;
+            if (t instanceof java.util.concurrent.TimeoutException) return true;
+            t = t.getCause();
+        }
+        return false;
     }
 
     // ── Model ID resolution (called once by manager at startup) ───────────────

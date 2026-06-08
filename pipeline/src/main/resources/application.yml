@@ -49,6 +49,8 @@ sidecars:
 
 tactical-llm:
   system-prompt-file: loop/tactical-llm/system_prompt.md
+  restart-script: loop/tactical_llm.sh
+  response-timeout-seconds: 120
   url: http://localhost:12001/v1
   model: default
   temperature: 0.1

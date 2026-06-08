@@ -46,6 +46,7 @@ public class ConversationAgentManager {
     final Path workflowsDir;
     final Path comfyuiModelsDir;
     final String resolvedModelId;
+    final String llmRestartScript;
 
     public ConversationAgentManager(
             PlatformTransactionManager txManager,
@@ -61,6 +62,7 @@ public class ConversationAgentManager {
             @Qualifier("vlmScorerClient")    RestClient vlmClient,
             @Qualifier("comfyuiClient")      RestClient comfyuiClient,
             @Qualifier("searxngClient")      RestClient searxngClient,
+            @Value("${tactical-llm.restart-script:loop/tactical_llm.sh}") String llmRestartScript,
             @Value("${tactical-llm.system-prompt-file:loop/tactical-llm/system_prompt.md}") String systemPromptFile,
             @Value("${ui.workflows-dir:loop/workflows}")           String workflowsDirStr,
             @Value("${comfyui.models-dir:loop/ComfyUI/models}")    String comfyuiModelsDirStr) {
@@ -74,6 +76,7 @@ public class ConversationAgentManager {
         this.galleryBroadcast = galleryBroadcast;
         this.chatBroadcast    = chatBroadcast;
         this.applicationContext = applicationContext;
+        this.llmRestartScript = llmRestartScript;
         this.llmClient        = llmClient;
         this.vlmClient        = vlmClient;
         this.comfyuiClient    = comfyuiClient;
@@ -120,6 +123,21 @@ public class ConversationAgentManager {
         } catch (Exception e) {
             log.warning("onVerdict error: " + e.getMessage());
         }
+    }
+
+    void scheduleLlmRestart() {
+        Thread.ofVirtual().name("llm-watchdog").start(() -> {
+            log.info("LLM response timeout — restarting tactical LLM...");
+            try {
+                int rc = new ProcessBuilder(llmRestartScript, "restart")
+                        .inheritIO()
+                        .start()
+                        .waitFor();
+                log.info("Tactical LLM restart completed (exit " + rc + ")");
+            } catch (Exception e) {
+                log.warning("Tactical LLM restart failed: " + e.getMessage());
+            }
+        });
     }
 
     // ── Internal ───────────────────────────────────────────────────────────────
