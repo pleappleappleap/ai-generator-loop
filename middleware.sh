@@ -21,7 +21,7 @@ _ensure_colima() {
 _pod_ready() {
     local label="$1"
     kubectl get pods -n "$NS" -l "$label" \
-        -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' \
+        -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' \
         2>/dev/null | grep -q "True"
 }
 

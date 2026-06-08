@@ -6,6 +6,8 @@ metadata:
 spec:
   replicas: 1
   revisionHistoryLimit: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: artemis
@@ -14,6 +16,13 @@ spec:
       labels:
         app: artemis
     spec:
+      initContainers:
+        - name: remove-lock
+          image: busybox
+          command: ["sh", "-c", "rm -f /var/lib/artemis-instance/lock"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/artemis-instance
       containers:
         - name: artemis
           image: apache/activemq-artemis:latest
