@@ -19,7 +19,7 @@ targets:
 	@printf "%-20s %s\n" "format"         "Format loop/ with ruff."
 	@printf "%-20s %s\n" "docs"           "Build ARCHITECTURE.pdf from ARCHITECTURE.tex with latexmk."
 	@printf "%-20s %s\n" "clean"          "Stop loop processes; remove pipeline/build, LaTeX artifacts, __pycache__ across all modules, and /tmp/ai-loop logs."
-	@printf "%-20s %s\n" "distclean"      "Full wipe: venvs, models, ComfyUI, config, and the k3s pipeline namespace (drops DB)."
+	@printf "%-20s %s\n" "distclean"      "Full wipe: venvs, models, ComfyUI, config, k3s namespace, and all persistent data (postgres + artemis)."
 	@printf "%-20s %s\n" "config-default" "Copy config.yaml.default to config.yaml (used automatically when config.yaml is absent)."
 	@printf "%-20s %s\n" "menuconfig"     "Generate config.yaml via the interactive menuconfig.py TUI."
 	@printf "%-20s %s\n" "setup"          "Full first-time setup: prereqs, config-default, models, comfyui-nodes, middleware-apply, then build."
@@ -90,11 +90,11 @@ clean:
 MODEL_DIRS := $(shell grep -E '^loop/scorers/models/|^strategic-llm/models' .gitignore | sed 's|/*$$||')
 
 # Remove everything that can be regenerated: venvs, the ComfyUI clone,
-# auto-downloaded model files, and the k3s pipeline namespace (including the
-# Postgres PVC — all conversation/image data is lost).  Reads .gitignore and
-# .gitkeep files as the source of truth — does not require the git CLI.
-# The only hardcoded exclusions protect user-placed data that cannot be
-# re-downloaded (SDXL checkpoints, custom workflows).
+# auto-downloaded model files, the k3s pipeline namespace, and the persistent
+# data volumes (middleware/data/postgres + middleware/data/artemis).
+# Reads .gitignore and .gitkeep files as the source of truth — does not
+# require the git CLI. The only hardcoded exclusions protect user-placed data
+# that cannot be re-downloaded (SDXL checkpoints, custom workflows).
 # After distclean, restore with: make setup
 distclean: clean
 	@echo "==> Removing Python virtual environments..."
@@ -114,16 +114,20 @@ distclean: clean
 	git checkout -- loop/ComfyUI/
 	@echo "==> Removing generated config..."
 	rm -f config.yaml
-	@echo "==> Tearing down k3s pipeline namespace (drops Postgres PVC and all pipeline data)..."
+	@echo "==> Tearing down k3s pipeline namespace and persistent data..."
 	@for f in /tmp/ai-loop/pf-postgres.pid /tmp/ai-loop/pf-artemis.pid /tmp/ai-loop/pf-searxng.pid; do \
 	  [ -f "$$f" ] && kill "$$(cat $$f)" 2>/dev/null; rm -f "$$f" 2>/dev/null || true; \
 	done
 	@if command -v kubectl >/dev/null 2>&1; then \
 	  kubectl delete namespace pipeline --ignore-not-found 2>/dev/null && \
 	    echo "    namespace/pipeline deleted." || true; \
+	  kubectl delete pv soxhlet-postgres-data soxhlet-artemis-data \
+	    --ignore-not-found 2>/dev/null || true; \
 	else \
-	  echo "    kubectl not found — skipping namespace teardown."; \
+	  echo "    kubectl not found — skipping namespace and PV teardown."; \
 	fi
+	@echo "==> Removing persistent data (postgres + artemis)..."
+	rm -rf middleware/data
 	@echo "==> distclean complete. Run 'make setup' to rebuild from scratch."
 
 config-default:

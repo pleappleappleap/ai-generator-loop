@@ -14,6 +14,8 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        fsGroup: 999
       containers:
         - name: postgres
           image: pgvector/pgvector:pg17
@@ -29,6 +31,8 @@ spec:
               value: pipeline
             - name: POSTGRES_PASSWORD
               value: pipeline
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - containerPort: 5432
           resources:
@@ -46,11 +50,7 @@ spec:
               command: [pg_isready, -U, pipeline, -d, pipeline]
             initialDelaySeconds: 5
             periodSeconds: 5
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: [ReadWriteOnce]
-        resources:
-          requests:
-            storage: 20Gi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data

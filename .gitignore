@@ -34,9 +34,8 @@ loop/scorers/models/tactical/
 loop/scorers/models/artifact-detector/
 strategic-llm/models/
 
-# ── Artemis broker data ───────────────────────────────────────────────────────
-middleware/artemis-data/
-artemis-data/
+# ── Persistent data (postgres + artemis) — only wiped by make distclean ──────
+middleware/data/
 
 # ── Makefile sentinels ─────────────────────────────────────────────────────────
 loop/.k8s-installed

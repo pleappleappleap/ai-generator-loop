@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - postgres/statefulset.yaml
+  - postgres/pvc.yaml
   - postgres/service.yaml
   - artemis/pvc.yaml
   - artemis/deployment.yaml

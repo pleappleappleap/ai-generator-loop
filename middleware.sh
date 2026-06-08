@@ -64,6 +64,47 @@ _stop_port_forwards() {
 _start() {
     _ensure_colima
     _require_kubectl
+    mkdir -p "$SOXHLET_ROOT/middleware/data/postgres" \
+             "$SOXHLET_ROOT/middleware/data/artemis"
+    chmod 777 "$SOXHLET_ROOT/middleware/data/postgres" \
+              "$SOXHLET_ROOT/middleware/data/artemis"
+    kubectl apply -f - <<EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: soxhlet-postgres-data
+spec:
+  capacity:
+    storage: 20Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: $SOXHLET_ROOT/middleware/data/postgres
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: soxhlet-artemis-data
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: $SOXHLET_ROOT/middleware/data/artemis
+    type: DirectoryOrCreate
+EOF
+    for _pv in soxhlet-postgres-data soxhlet-artemis-data; do
+        _phase=$(kubectl get pv "$_pv" -o jsonpath='{.status.phase}' 2>/dev/null || echo "Missing")
+        if [ "$_phase" = "Released" ]; then
+            echo "==> Clearing stale claimRef on Released PV $_pv..."
+            kubectl patch pv "$_pv" --type=json \
+                -p '[{"op":"remove","path":"/spec/claimRef"}]' 2>/dev/null || true
+        fi
+    done
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
     _wait_pod_ready "app=postgres" "PostgreSQL" 120
     _wait_pod_ready "app=artemis"  "Artemis"    120
