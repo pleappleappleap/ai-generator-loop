@@ -100,20 +100,59 @@ _restart() {
     "$(_mode_script "$current")" restart
 }
 
+_stopped_rows() {
+    local component
+    for component in "$@"; do
+        printf "│ %-22s │ %-25s │\n" "$component" "stopped"
+    done
+}
+
+_fmt_row() { awk '{printf "│ %-22s │ %-25s │\n", $1, substr($0,24)}'; }
+
 _status() {
-    local current
+    local current _mw_out
     current=$(_detect_mode)
-    "$(_mode_script "${current:-loop}")" status 2>/dev/null || "$SOXHLET_ROOT/middleware.sh" status
+    _mw_out=$("$SOXHLET_ROOT/middleware.sh" health 2>/dev/null)
+    echo "┌─ Middleware ───────────┬───────────────────────────┐"
+    printf '%s\n' "$_mw_out" | _fmt_row
+    echo "├─ Loop ─────────────────┼───────────────────────────┤"
+    if [ "$current" = "loop" ]; then
+        "$LOOP_DIR/loop.sh" status-rows
+    else
+        _stopped_rows comfyui tactical_llm clip_scorer artifact_scorer vlm_scorer pipeline
+    fi
+    echo "├─ Strategic ────────────┼───────────────────────────┤"
+    if [ "$current" = "strategic" ]; then
+        "$SOXHLET_ROOT/strategic-llm/strategic.sh" status-rows
+    else
+        _stopped_rows strategic_llm pipeline
+    fi
+    echo "└────────────────────────┴───────────────────────────┘"
+    echo ""
+    echo "Logs: /tmp/ai-loop/<component>.log"
+    echo "UI:   http://localhost:12000"
 }
 
 _health() {
-    local current ok=0
+    local current ok=0 _mw_out _mw_rc
     current=$(_detect_mode)
-    case "$current" in
-        loop|strategic) "$(_mode_script "$current")" health || ok=1 ;;
-        none) "$SOXHLET_ROOT/middleware.sh" health || ok=1
-              echo "No mode is running."; ok=1 ;;
-    esac
+    _mw_out=$("$SOXHLET_ROOT/middleware.sh" health 2>/dev/null); _mw_rc=$?
+    [ "$_mw_rc" -ne 0 ] && ok=1
+    echo "┌─ Middleware ───────────┬───────────────────────────┐"
+    printf '%s\n' "$_mw_out" | _fmt_row
+    echo "├─ Loop ─────────────────┼───────────────────────────┤"
+    if [ "$current" = "loop" ]; then
+        "$LOOP_DIR/loop.sh" health-rows || ok=1
+    else
+        _stopped_rows comfyui tactical_llm clip_scorer artifact_scorer vlm_scorer pipeline
+    fi
+    echo "├─ Strategic ────────────┼───────────────────────────┤"
+    if [ "$current" = "strategic" ]; then
+        "$SOXHLET_ROOT/strategic-llm/strategic.sh" health-rows || ok=1
+    else
+        _stopped_rows strategic_llm pipeline
+    fi
+    echo "└────────────────────────┴───────────────────────────┘"
     return $ok
 }
 
