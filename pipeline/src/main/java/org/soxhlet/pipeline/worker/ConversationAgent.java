@@ -111,9 +111,12 @@ public class ConversationAgent implements Runnable {
             if ("generate".equals(action)) {
                 Map<String, String> state = queueNewGeneration(decision);
                 if (state != null) {
-                    if (message == null) message = "Generation submitted — watching for results.";
+                    if (message == null) message = "On it — generation submitted.";
                     mgr.galleryBroadcast.decision("", "generate", "", 1.0,
                             state.get("workflow_id"), conversationId);
+                } else {
+                    message = (message != null ? message + "\n\n" : "") +
+                              "Failed to queue generation — no workflow available or an internal error occurred.";
                 }
             }
 
@@ -1053,7 +1056,9 @@ public class ConversationAgent implements Runnable {
                 body.putArray("messages").add(mgr.mapper.createObjectNode()
                         .put("role", "user")
                         .put("content",
-                             "Respond with only a 3-6 word title for this request. " +
+                             "Respond with a short title (2-4 words) capturing the subject, " +
+                             "character, or theme of this image request. Do not include words like " +
+                             "'image', 'generate', 'picture', 'creation', or any task description. " +
                              "Title case, no punctuation, no quotes:\n" + snippet));
                 ObjectNode resp = mgr.llmClient.post()
                         .uri("/chat/completions")
