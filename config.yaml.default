@@ -134,7 +134,7 @@ system:
 tactical:
   model:
     dir: auto         # auto: {paths.scorers}/models/tactical
-    context_length: 8192
+    context_length: 32768
     temperature: 0.1  # low for deterministic decisions
     max_tokens: 512              # must cover full JSON decision + generate_prompt
     max_tokens_thinking: 1024    # thinking budget for borderline/escalate re-queries only

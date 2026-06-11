@@ -51,7 +51,7 @@ _start() {
             --model "$LLM_MODEL" \
             --port "$LLM_PORT" \
             --host 0.0.0.0 \
-            --max-tokens 128 \
+            --max-kv-size "$LLM_CTX" \
             --chat-template-args '{"enable_thinking":false}'
     else
         if [ ! -f "$LLM_MODEL" ]; then
