@@ -228,6 +228,21 @@ def _download_strategic() -> None:
         _resolve_source(source, local_dir, name)
 
 
+def _download_checkpoints() -> None:
+    comfyui_root = Path(_cfg.paths.get("comfyui", ""))
+    ckpt_dir = comfyui_root / "models" / "checkpoints"
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    for key in ("sd15", "sdxl"):
+        section = _cfg.models.get(key, {})
+        filename = section.get("checkpoint", "")
+        source = section.get("source", "")
+        if not filename or not source:
+            continue
+        print(f"==> {key.upper()} checkpoint: {filename}")
+        _resolve_source(source, str(ckpt_dir), filename)
+
+
 def _download_loras() -> None:
     loras_cfg = _cfg.models.get("loras", {})
     comfyui_root = Path(_cfg.paths.get("comfyui", ""))
@@ -259,12 +274,11 @@ def main() -> None:
     _download_vlm()
     _download_tactical()
     _download_strategic()
+    _download_checkpoints()
     _download_loras()
 
-    ckpt_dir = Path(_cfg.paths.get("comfyui", "")) / "models" / "checkpoints"
     print()
     print("==> Models done.")
-    print(f"    SDXL/Flux checkpoints → {ckpt_dir}/")
 
 
 if __name__ == "__main__":

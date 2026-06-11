@@ -31,10 +31,17 @@ models:
     pretrained: openai
 
   # ── Generative model checkpoints ──────────────────────────────────────────
+  sd15:
+    # Default SD 1.5 checkpoint — patched into any sd15_* workflow before submission.
+    # source: download via `make models` (hf:<owner>/<repo>/<filename> or civitai:<version_id>)
+    checkpoint: absolutereality_v181.safetensors
+    source: hf:Lykon/AbsoluteReality/absolutereality_v181.safetensors
+
   sdxl:
     # Filename as it appears in ComfyUI's checkpoints directory.
     # Used by comfyui_worker to patch workflows when model_type == "sdxl".
     checkpoint: ""   # e.g. realisticVisionV60B1_v51VAE.safetensors
+    source: ""
 
   flux:
     # Flux weights are split across four separate files.

@@ -27,10 +27,26 @@ public class ModelsConfig {
         return loras.getOrDefault(modelType, new ArrayList<>());
     }
 
-    public static class Sdxl {
+    private Sd15 sd15 = new Sd15();
+    public Sd15 getSd15() { return sd15; }
+    public void setSd15(Sd15 sd15) { this.sd15 = sd15; }
+
+    public static class Sd15 {
         private String checkpoint = "";
+        private String source = "";
         public String getCheckpoint() { return checkpoint; }
         public void setCheckpoint(String checkpoint) { this.checkpoint = checkpoint; }
+        public String getSource() { return source; }
+        public void setSource(String source) { this.source = source; }
+    }
+
+    public static class Sdxl {
+        private String checkpoint = "";
+        private String source = "";
+        public String getCheckpoint() { return checkpoint; }
+        public void setCheckpoint(String checkpoint) { this.checkpoint = checkpoint; }
+        public String getSource() { return source; }
+        public void setSource(String source) { this.source = source; }
     }
 
     public static class Flux {

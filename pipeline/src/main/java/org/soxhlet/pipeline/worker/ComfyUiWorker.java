@@ -319,8 +319,22 @@ public class ComfyUiWorker {
 
     private ObjectNode patchCheckpoint(ObjectNode workflow, String modelType) {
         ObjectNode w = workflow.deepCopy();
-        if ("sdxl".equals(modelType) || "sd15".equals(modelType)) {
-            String ckpt = resolveCheckpoint(modelsConfig.getSdxl().getCheckpoint());
+        if ("sd15".equals(modelType)) {
+            String ckpt = resolveCheckpoint(modelsConfig.getSd15().getCheckpoint());
+            if (ckpt != null) {
+                w.fields().forEachRemaining(e -> {
+                    if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
+                        ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
+                    }
+                });
+            }
+        } else if ("sdxl".equals(modelType)) {
+            // Prefer sd15.checkpoint as fallback when sdxl.checkpoint is unset
+            String configured = modelsConfig.getSdxl().getCheckpoint();
+            if ((configured == null || configured.isBlank()) && !modelsConfig.getSd15().getCheckpoint().isBlank()) {
+                configured = modelsConfig.getSd15().getCheckpoint();
+            }
+            String ckpt = resolveCheckpoint(configured);
             if (ckpt != null) {
                 w.fields().forEachRemaining(e -> {
                     if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
