@@ -129,6 +129,7 @@ public class ConversationAgent implements Runnable {
             }
 
             maybeAutoTitle(messages);
+            maybeExtractMemory();
 
         } catch (Exception e) {
             log.warning("processUserMessage error for " + conversationId + ": " + e.getMessage());
@@ -788,6 +789,8 @@ public class ConversationAgent implements Runnable {
 
     private List<ObjectNode> buildConversation(String convId, String extraUserMessage) {
         String system = readSystemPrompt() + "\n\n" + buildContextBlock();
+        String memory = loadConversationMemory(convId);
+        if (memory != null) system += "\n\n" + memory;
         List<ObjectNode> messages = new ArrayList<>();
         messages.add(mgr.mapper.createObjectNode().put("role", "system").put("content", system));
 
@@ -1074,6 +1077,84 @@ public class ConversationAgent implements Runnable {
                 log.info("Auto-titled " + conversationId + ": " + title);
             } catch (Exception e) {
                 log.warning("Auto-title failed: " + e.getMessage());
+            }
+        });
+    }
+
+    // ── Conversation memory ────────────────────────────────────────────────────
+
+    private String loadConversationMemory(String convId) {
+        if (convId == null) return null;
+        List<String> rows = mgr.jdbc.queryForList(
+                "SELECT content FROM conversation_memory WHERE conversation_id = :id::uuid",
+                Map.of("id", convId), String.class);
+        if (rows.isEmpty()) return null;
+        return "═══ CONVERSATION MEMORY ══════════════════════════════════════════\n" + rows.get(0) + "\n";
+    }
+
+    private void maybeExtractMemory() {
+        Thread.ofVirtual().name("mem-extract-" + conversationId.substring(0, 8)).start(() -> {
+            try {
+                List<Map<String, Object>> rows = mgr.jdbc.queryForList(
+                        "SELECT role, content FROM (" +
+                        "  SELECT role, content, created_at FROM chat_messages " +
+                        "  WHERE conversation_id = :id::uuid " +
+                        "  ORDER BY created_at DESC LIMIT 10" +
+                        ") sub ORDER BY created_at ASC",
+                        Map.of("id", conversationId));
+                if (rows.size() < 2) return;
+
+                List<String> existing = mgr.jdbc.queryForList(
+                        "SELECT content FROM conversation_memory WHERE conversation_id = :id::uuid",
+                        Map.of("id", conversationId), String.class);
+                String currentMemory = existing.isEmpty() ? null : existing.get(0);
+
+                StringBuilder transcript = new StringBuilder();
+                for (Map<String, Object> row : rows) {
+                    transcript.append(row.get("role")).append(": ")
+                              .append(row.get("content")).append("\n\n");
+                }
+
+                String extractPrompt = (currentMemory != null
+                        ? "Current memory:\n" + currentMemory + "\n\n"
+                        : "") +
+                        "Recent conversation:\n" + transcript +
+                        "\nUpdate the memory to capture any character names, physical descriptions, " +
+                        "style preferences, confirmed decisions, or stated constraints from this conversation. " +
+                        "Be concise (under 150 words). Write only the memory text, no preamble. " +
+                        "If nothing new, return the existing memory unchanged. /no_think";
+
+                ObjectNode body = mgr.mapper.createObjectNode();
+                body.put("model",       mgr.resolvedModelId);
+                body.put("temperature", 0.1);
+                body.put("max_tokens",  256);
+                body.putArray("messages").add(
+                        mgr.mapper.createObjectNode().put("role", "user").put("content", extractPrompt));
+
+                ObjectNode resp = mgr.llmClient.post()
+                        .uri("/chat/completions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body(mgr.mapper.writeValueAsBytes(body))
+                        .retrieve().body(ObjectNode.class);
+
+                String newMemory = resp.path("choices").path(0).path("message").path("content")
+                        .asText("").strip();
+                if (newMemory.contains("<think>")) {
+                    int end = newMemory.indexOf("</think>");
+                    if (end != -1) newMemory = newMemory.substring(end + 8).strip();
+                }
+                if (newMemory.isBlank()) return;
+
+                final String mem = newMemory;
+                mgr.jdbc.update(
+                        "INSERT INTO conversation_memory (conversation_id, content) " +
+                        "VALUES (:id::uuid, :content) " +
+                        "ON CONFLICT (conversation_id) DO UPDATE SET content = :content, last_updated_at = now()",
+                        Map.of("id", conversationId, "content", mem));
+
+                log.fine("Conversation memory updated for " + conversationId);
+            } catch (Exception e) {
+                log.warning("Memory extraction failed for " + conversationId + ": " + e.getMessage());
             }
         });
     }
