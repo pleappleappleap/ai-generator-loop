@@ -167,7 +167,7 @@ _stop_strategic_if_running() {
 _start() {
     _stop_strategic_if_running
     echo "==> Starting middleware..."
-    "$SOXHLET_ROOT/middleware.sh" start
+    "$SOXHLET_ROOT/middleware.sh" start || exit 1
 
     echo ""
     echo "==> Starting ComfyUI, tactical LLM, and ML sidecars..."

@@ -25,11 +25,33 @@ _pod_ready() {
         2>/dev/null | grep -q "True"
 }
 
+_wait_k3s_ready() {
+    printf "==> Waiting for k3s API"
+    local elapsed=0 interval=2
+    while ! kubectl get nodes >/dev/null 2>&1; do
+        if [ "$elapsed" -ge 60 ]; then
+            echo ""
+            echo "ERROR: k3s API server did not become ready within 60s" >&2
+            exit 1
+        fi
+        sleep "$interval"; elapsed=$((elapsed + interval)); printf "."
+    done
+    echo " ready (${elapsed}s)"
+}
+
 _wait_pod_ready() {
     local label="$1" name="$2" timeout="${3:-120}"
     printf "==> Waiting for %s" "$name"
     local elapsed=0 interval=2
     while ! _pod_ready "$label"; do
+        if kubectl get pods -n "$NS" -l "$label" \
+            -o jsonpath='{range .items[*]}{range .status.containerStatuses[*]}{.state.waiting.reason}{"\n"}{end}{end}' \
+            2>/dev/null | grep -qE 'CrashLoopBackOff|ErrImagePull|ImagePullBackOff'; then
+            echo ""
+            echo "ERROR: $name pod entered a failed state" >&2
+            kubectl get pods -n "$NS" -l "$label" >&2
+            exit 1
+        fi
         if [ "$elapsed" -ge "$timeout" ]; then
             echo ""
             echo "ERROR: $name pod did not become Ready within ${timeout}s" >&2
@@ -63,6 +85,7 @@ _stop_port_forwards() {
 
 _start() {
     _ensure_colima
+    _wait_k3s_ready
     _require_kubectl
     mkdir -p "$SOXHLET_ROOT/middleware/data/postgres" \
              "$SOXHLET_ROOT/middleware/data/artemis"
@@ -132,6 +155,7 @@ _stop_all() {
 
 _restart() {
     _ensure_colima
+    _wait_k3s_ready
     _require_kubectl
     _stop_port_forwards
     kubectl apply -k "$SOXHLET_ROOT/middleware/k8s/"
