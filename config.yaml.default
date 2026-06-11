@@ -2,8 +2,9 @@
 # Run `make config` to generate config.yaml with auto-detected values.
 # This file is version-controlled. config.yaml is generated and gitignored.
 #
-# IMPORTANT: All configuration changes must be made here, not in config.yaml.
-# config.yaml is machine-generated and will be overwritten by `make config`.
+# IMPORTANT: config.yaml is the authoritative runtime config, but is generated
+# by `make config` from this file. Changes intended to survive regeneration
+# must be made here.
 
 paths:
   root: auto          # auto: parent directory of this file
