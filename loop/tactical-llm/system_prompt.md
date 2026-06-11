@@ -239,6 +239,14 @@ rewire — redirect one input of an existing node:
   {"op": "rewire", "id": "3", "input": "positive", "to": ["ctrl_apply", 0]}
   Useful for inserting a node into an existing connection.
 
+set_input — set a literal value on an existing node's input:
+  {"op": "set_input", "id": "4", "input": "ckpt_name", "value": "sd_xl_base_1.0.safetensors"}
+  Or target by class type (patches the first matching node):
+  {"op": "set_input", "class_type": "CheckpointLoaderSimple", "input": "ckpt_name", "value": "sd_xl_base_1.0.safetensors"}
+  Use this to override checkpoint, resolution, steps, cfg, sampler, etc. on existing nodes.
+  After calling get_available_models(), always set_input the checkpoint to one that is
+  confirmed installed — never rely on whatever the workflow has hardcoded.
+
 Example — add OpenPose ControlNet conditioning:
   [
     {"op": "add_node", "id": "cn_loader", "class_type": "ControlNetLoader",

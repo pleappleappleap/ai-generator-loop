@@ -303,11 +303,25 @@ public class ComfyUiWorker {
         return "unknown";
     }
 
+    private String resolveCheckpoint(String configured) {
+        if (configured != null && !configured.isBlank()) return configured;
+        try {
+            JsonNode info = comfyClient.get().uri("/object_info/CheckpointLoaderSimple")
+                    .retrieve().body(JsonNode.class);
+            JsonNode list = info.path("CheckpointLoaderSimple").path("input")
+                    .path("required").path("ckpt_name").path(0);
+            if (list.isArray() && list.size() > 0) return list.get(0).asText();
+        } catch (Exception e) {
+            log.warning("Could not query ComfyUI checkpoints: " + e.getMessage());
+        }
+        return null;
+    }
+
     private ObjectNode patchCheckpoint(ObjectNode workflow, String modelType) {
         ObjectNode w = workflow.deepCopy();
-        if ("sdxl".equals(modelType)) {
-            String ckpt = modelsConfig.getSdxl().getCheckpoint();
-            if (ckpt != null && !ckpt.isBlank()) {
+        if ("sdxl".equals(modelType) || "sd15".equals(modelType)) {
+            String ckpt = resolveCheckpoint(modelsConfig.getSdxl().getCheckpoint());
+            if (ckpt != null) {
                 w.fields().forEachRemaining(e -> {
                     if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
                         ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
@@ -506,6 +520,21 @@ public class ComfyUiWorker {
                         ObjectNode inputs = (ObjectNode) w.get(nodeId).path("inputs");
                         inputs.set(op.get("input").asText(), resolveRef(op.get("to"), idMap));
                     }
+                }
+                case "set_input" -> {
+                    String inputKey = op.path("input").asText("");
+                    JsonNode value  = op.path("value");
+                    // Target by numeric id or by class_type
+                    String nodeId   = op.path("id").asText("");
+                    String nodeClass = op.path("class_type").asText("");
+                    w.fields().forEachRemaining(e -> {
+                        JsonNode node = e.getValue();
+                        boolean match = (!nodeId.isBlank() && nodeId.equals(e.getKey()))
+                                || (!nodeClass.isBlank() && nodeClass.equals(node.path("class_type").asText("")));
+                        if (match && node.has("inputs")) {
+                            ((ObjectNode) node.path("inputs")).set(inputKey, value);
+                        }
+                    });
                 }
             }
         }
