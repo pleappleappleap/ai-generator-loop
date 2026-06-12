@@ -137,6 +137,15 @@ public class ComfyUiWorker {
             resumeGeneration(imageUuid, promptId, payload);
         } catch (Exception e) {
             log.warning("Generation processing failed for " + imageUuid + ": " + e.getMessage());
+            String msg = e.getMessage();
+            if (msg != null && (msg.contains(" 4") || msg.contains("prompt_outputs_failed_validation"))) {
+                log.warning("Terminal client error for " + imageUuid + " — removing from pending queue to stop retry loop");
+                try {
+                    jdbc.update("DELETE FROM pending_generations WHERE image_uuid = :id::uuid", Map.of("id", imageUuid));
+                } catch (Exception ex) {
+                    log.warning("Failed to delete pending generation " + imageUuid + ": " + ex.getMessage());
+                }
+            }
         }
     }
 
