@@ -30,9 +30,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -154,13 +156,14 @@ public class ComfyUiWorker {
         // Load and patch workflow
         ObjectNode workflow = loadWorkflow(workflowPath);
         String effectiveModelType = modelType != null ? modelType : detectModelType(workflow);
-        workflow = patchCheckpoint(workflow, effectiveModelType);
         workflow = injectLoras(workflow, lorasNode, effectiveModelType);
         workflow = applyWorkflowParams(workflow, (ObjectNode) workflowParams);
         workflow = randomizeSeed(workflow);
         if (graphOps.isArray() && graphOps.size() > 0) {
             workflow = applyGraphOps(workflow, (ArrayNode) graphOps);
         }
+        // patchCheckpoint runs last so it can validate/override any checkpoint set by graph ops
+        workflow = patchCheckpoint(workflow, effectiveModelType);
 
         String promptId = existingPromptId;
         String clientId = null;
@@ -317,30 +320,54 @@ public class ComfyUiWorker {
         return null;
     }
 
+    private Set<String> fetchInstalledCheckpoints() {
+        try {
+            JsonNode info = comfyClient.get().uri("/object_info/CheckpointLoaderSimple")
+                    .retrieve().body(JsonNode.class);
+            JsonNode list = info.path("CheckpointLoaderSimple").path("input")
+                    .path("required").path("ckpt_name").path(0);
+            Set<String> names = new HashSet<>();
+            if (list.isArray()) list.forEach(n -> names.add(n.asText()));
+            return names;
+        } catch (Exception e) {
+            log.warning("Could not fetch installed checkpoints: " + e.getMessage());
+            return Set.of();
+        }
+    }
+
     private ObjectNode patchCheckpoint(ObjectNode workflow, String modelType) {
         ObjectNode w = workflow.deepCopy();
-        if ("sd15".equals(modelType)) {
-            String ckpt = resolveCheckpoint(modelsConfig.getSd15().getCheckpoint());
-            if (ckpt != null) {
-                w.fields().forEachRemaining(e -> {
-                    if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
-                        ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
+        if ("sd15".equals(modelType) || "sdxl".equals(modelType)) {
+            Set<String> installed = fetchInstalledCheckpoints();
+            // If the workflow already has a valid installed checkpoint (e.g. set via graph op), keep it
+            boolean alreadyValid = false;
+            for (JsonNode node : w) {
+                if ("CheckpointLoaderSimple".equals(node.path("class_type").asText(""))) {
+                    String current = node.path("inputs").path("ckpt_name").asText("");
+                    if (!current.isBlank() && installed.contains(current)) {
+                        alreadyValid = true;
+                        break;
                     }
-                });
+                }
             }
-        } else if ("sdxl".equals(modelType)) {
-            // Prefer sd15.checkpoint as fallback when sdxl.checkpoint is unset
-            String configured = modelsConfig.getSdxl().getCheckpoint();
-            if ((configured == null || configured.isBlank()) && !modelsConfig.getSd15().getCheckpoint().isBlank()) {
-                configured = modelsConfig.getSd15().getCheckpoint();
-            }
-            String ckpt = resolveCheckpoint(configured);
-            if (ckpt != null) {
-                w.fields().forEachRemaining(e -> {
-                    if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
-                        ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
-                    }
-                });
+            if (!alreadyValid) {
+                String configured = "sd15".equals(modelType)
+                        ? modelsConfig.getSd15().getCheckpoint()
+                        : modelsConfig.getSdxl().getCheckpoint();
+                // Fall back to sd15 checkpoint when sdxl is unconfigured
+                if ((configured == null || configured.isBlank()) && !modelsConfig.getSd15().getCheckpoint().isBlank()) {
+                    configured = modelsConfig.getSd15().getCheckpoint();
+                }
+                String ckpt = resolveCheckpoint(configured);
+                if (ckpt != null) {
+                    final String finalCkpt = ckpt;
+                    w.fields().forEachRemaining(e -> {
+                        if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
+                            ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", finalCkpt);
+                        }
+                    });
+                    log.info("patchCheckpoint: overrode invalid checkpoint with '" + ckpt + "'");
+                }
             }
         } else if ("flux".equals(modelType)) {
             ModelsConfig.Flux flux = modelsConfig.getFlux();
