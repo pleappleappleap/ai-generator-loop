@@ -94,9 +94,33 @@ public class ConversationAgent implements Runnable {
 
     // ── User message handling ──────────────────────────────────────────────────
 
+    private static boolean hasStyleKeyword(String text) {
+        String t = text.toLowerCase();
+        return t.contains("realistic") || t.contains("photorealistic") || t.contains("anime")
+            || t.contains("manga") || t.contains("cartoon") || t.contains("digital art")
+            || t.contains("oil paint") || t.contains("watercolor") || t.contains("sketch")
+            || t.contains("3d render") || t.contains("painterly") || t.contains("cinematic")
+            || t.contains("illustration") || t.contains("stylized") || t.contains("pixel art")
+            || t.contains("dark fantasy") || t.contains("gothic") || t.contains("fantasy art")
+            || t.contains("concept art") || t.contains("hyperrealistic");
+    }
+
     private void processUserMessage(String text) {
         try {
             List<ObjectNode> messages = buildConversation(conversationId);
+
+            // First turn + no explicit style → inject a mandatory reminder before the user message
+            // so the model cannot proceed to tool calls before asking about style.
+            if (messages.size() == 2 && !hasStyleKeyword(text)) {
+                messages.add(1, mgr.mapper.createObjectNode()
+                        .put("role", "system")
+                        .put("content",
+                             "MANDATORY FIRST-TURN REQUIREMENT: The user has not specified a visual style.\n" +
+                             "You MUST respond with {\"decision\": \"await_input\"} asking a single focused question about style.\n" +
+                             "Do NOT call get_available_models(). Do NOT call search_web(). Do NOT generate.\n" +
+                             "Ask about style first. Nothing else is acceptable for this turn."));
+            }
+
             JsonNode decision = runReasoningLoop(messages, false);
 
             if (decision == null) {
