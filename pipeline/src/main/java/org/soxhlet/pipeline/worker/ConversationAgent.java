@@ -596,6 +596,42 @@ public class ConversationAgent implements Runnable {
             String modelType = args.path("model_type").asText("checkpoint").strip();
             if (repoId.isEmpty() || filename.isEmpty()) return "Error: repo_id and filename are required";
 
+            // Validate file exists on HuggingFace before starting download
+            String hfUrl = "https://huggingface.co/" + repoId + "/resolve/main/" + filename;
+            try {
+                HttpClient hc = HttpClient.newBuilder()
+                        .followRedirects(HttpClient.Redirect.ALWAYS)
+                        .connectTimeout(Duration.ofSeconds(15))
+                        .build();
+                HttpResponse<Void> resp = hc.send(
+                        HttpRequest.newBuilder()
+                                .method("HEAD", HttpRequest.BodyPublishers.noBody())
+                                .uri(URI.create(hfUrl))
+                                .timeout(Duration.ofSeconds(30))
+                                .build(),
+                        HttpResponse.BodyHandlers.discarding());
+                int status = resp.statusCode();
+                if (status == 404) {
+                    return "Error: file not found on HuggingFace — " + repoId + "/" + filename +
+                           " returned 404. Call search_web to find the correct repo and filename.";
+                }
+                if (status >= 400) {
+                    return "Error: HuggingFace returned HTTP " + status + " for " + repoId + "/" + filename +
+                           ". Call search_web to verify the correct repo and filename.";
+                }
+                long contentLength = resp.headers().firstValue("content-length")
+                        .map(Long::parseLong).orElse(-1L);
+                if (contentLength > 0 && contentLength < 1_000_000) {
+                    return "Error: " + repoId + "/" + filename + " is only " + contentLength +
+                           " bytes — this is not a model file (pointer or error page). " +
+                           "Call search_web to find the correct filename.";
+                }
+                downloadExpectedSizes.put(filename, contentLength);
+            } catch (Exception e) {
+                log.warning("Pre-download HEAD check failed for " + repoId + "/" + filename + ": " + e.getMessage());
+                // Continue anyway — network issue, not a bad file
+            }
+
             String subdir = switch (modelType) {
                 case "lora"  -> "loras";
                 case "vae"   -> "vae";
@@ -615,32 +651,6 @@ public class ConversationAgent implements Runnable {
                     .start();
 
             log.info("Model download started: " + repoId + "/" + filename + " → " + destDir);
-
-            // Async HEAD to get total file size for progress reporting
-            final String finalRepoId = repoId;
-            final String finalFilename = filename;
-            Thread.ofVirtual().start(() -> {
-                try {
-                    HttpClient hc = HttpClient.newBuilder()
-                            .followRedirects(HttpClient.Redirect.ALWAYS)
-                            .connectTimeout(Duration.ofSeconds(15))
-                            .build();
-                    HttpResponse<Void> resp = hc.send(
-                            HttpRequest.newBuilder()
-                                    .method("HEAD", HttpRequest.BodyPublishers.noBody())
-                                    .uri(URI.create("https://huggingface.co/" + finalRepoId + "/resolve/main/" + finalFilename))
-                                    .timeout(Duration.ofSeconds(30))
-                                    .build(),
-                            HttpResponse.BodyHandlers.discarding());
-                    resp.headers().firstValue("content-length").ifPresent(cl -> {
-                        try { downloadExpectedSizes.put(finalFilename, Long.parseLong(cl)); }
-                        catch (NumberFormatException ignored) {}
-                    });
-                } catch (Exception e) {
-                    log.warning("HEAD request for " + finalFilename + ": " + e.getMessage());
-                }
-            });
-
             mgr.chatBroadcast.sendChunk(conversationId,
                     "Downloading **" + filename + "** from `" + repoId + "`…");
             return "Download started: " + filename + " → " + destDir +
@@ -663,7 +673,7 @@ public class ConversationAgent implements Runnable {
                     Optional<Path> found = stream
                             .filter(p -> p.getFileName().toString().equals(filename))
                             .findFirst();
-                    if (found.isPresent()) {
+                    if (found.isPresent() && found.get().toFile().length() > 10_000_000) {
                         downloadExpectedSizes.remove(filename);
                         downloadDestDirs.remove(filename);
                         log.info("wait_for_download: " + filename + " ready");
