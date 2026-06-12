@@ -156,14 +156,13 @@ public class ComfyUiWorker {
         // Load and patch workflow
         ObjectNode workflow = loadWorkflow(workflowPath);
         String effectiveModelType = modelType != null ? modelType : detectModelType(workflow);
+        workflow = patchCheckpoint(workflow, effectiveModelType);
         workflow = injectLoras(workflow, lorasNode, effectiveModelType);
         workflow = applyWorkflowParams(workflow, (ObjectNode) workflowParams);
         workflow = randomizeSeed(workflow);
         if (graphOps.isArray() && graphOps.size() > 0) {
             workflow = applyGraphOps(workflow, (ArrayNode) graphOps);
         }
-        // patchCheckpoint runs last so it can validate/override any checkpoint set by graph ops
-        workflow = patchCheckpoint(workflow, effectiveModelType);
 
         String promptId = existingPromptId;
         String clientId = null;
@@ -337,37 +336,27 @@ public class ComfyUiWorker {
 
     private ObjectNode patchCheckpoint(ObjectNode workflow, String modelType) {
         ObjectNode w = workflow.deepCopy();
-        if ("sd15".equals(modelType) || "sdxl".equals(modelType)) {
-            Set<String> installed = fetchInstalledCheckpoints();
-            // If the workflow already has a valid installed checkpoint (e.g. set via graph op), keep it
-            boolean alreadyValid = false;
-            for (JsonNode node : w) {
-                if ("CheckpointLoaderSimple".equals(node.path("class_type").asText(""))) {
-                    String current = node.path("inputs").path("ckpt_name").asText("");
-                    if (!current.isBlank() && installed.contains(current)) {
-                        alreadyValid = true;
-                        break;
+        if ("sd15".equals(modelType)) {
+            String ckpt = resolveCheckpoint(modelsConfig.getSd15().getCheckpoint());
+            if (ckpt != null) {
+                w.fields().forEachRemaining(e -> {
+                    if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
+                        ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
                     }
-                }
+                });
             }
-            if (!alreadyValid) {
-                String configured = "sd15".equals(modelType)
-                        ? modelsConfig.getSd15().getCheckpoint()
-                        : modelsConfig.getSdxl().getCheckpoint();
-                // Fall back to sd15 checkpoint when sdxl is unconfigured
-                if ((configured == null || configured.isBlank()) && !modelsConfig.getSd15().getCheckpoint().isBlank()) {
-                    configured = modelsConfig.getSd15().getCheckpoint();
-                }
-                String ckpt = resolveCheckpoint(configured);
-                if (ckpt != null) {
-                    final String finalCkpt = ckpt;
-                    w.fields().forEachRemaining(e -> {
-                        if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
-                            ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", finalCkpt);
-                        }
-                    });
-                    log.info("patchCheckpoint: overrode invalid checkpoint with '" + ckpt + "'");
-                }
+        } else if ("sdxl".equals(modelType)) {
+            String configured = modelsConfig.getSdxl().getCheckpoint();
+            if ((configured == null || configured.isBlank()) && !modelsConfig.getSd15().getCheckpoint().isBlank()) {
+                configured = modelsConfig.getSd15().getCheckpoint();
+            }
+            String ckpt = resolveCheckpoint(configured);
+            if (ckpt != null) {
+                w.fields().forEachRemaining(e -> {
+                    if ("CheckpointLoaderSimple".equals(e.getValue().path("class_type").asText(""))) {
+                        ((ObjectNode) e.getValue().path("inputs")).put("ckpt_name", ckpt);
+                    }
+                });
             }
         } else if ("flux".equals(modelType)) {
             ModelsConfig.Flux flux = modelsConfig.getFlux();

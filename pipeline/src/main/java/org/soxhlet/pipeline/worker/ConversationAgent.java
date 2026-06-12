@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
@@ -109,14 +110,26 @@ public class ConversationAgent implements Runnable {
             handleVlmEvalPrompt(decision);
 
             if ("generate".equals(action)) {
-                Map<String, String> state = queueNewGeneration(decision);
-                if (state != null) {
-                    if (message == null) message = "On it — generation submitted.";
-                    mgr.galleryBroadcast.decision("", "generate", "", 1.0,
-                            state.get("workflow_id"), conversationId);
-                } else {
-                    message = (message != null ? message + "\n\n" : "") +
-                              "Failed to queue generation — no workflow available or an internal error occurred.";
+                String ckptError = validateCheckpointGraphOps(decision);
+                if (ckptError != null) {
+                    log.warning("Checkpoint validation failed for conversation " + conversationId + ": " + ckptError);
+                    messages.add(mgr.mapper.createObjectNode().put("role", "user").put("content", ckptError));
+                    decision = runReasoningLoop(messages, false);
+                    if (decision != null) {
+                        message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
+                        action  = decision.path("decision").asText("await_input");
+                    }
+                }
+                if ("generate".equals(action)) {
+                    Map<String, String> state = queueNewGeneration(decision);
+                    if (state != null) {
+                        if (message == null) message = "On it — generation submitted.";
+                        mgr.galleryBroadcast.decision("", "generate", "", 1.0,
+                                state.get("workflow_id"), conversationId);
+                    } else {
+                        message = (message != null ? message + "\n\n" : "") +
+                                  "Failed to queue generation — no workflow available or an internal error occurred.";
+                    }
                 }
             }
 
@@ -514,6 +527,41 @@ public class ConversationAgent implements Runnable {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    private Set<String> fetchInstalledCheckpoints() {
+        try {
+            JsonNode info = mgr.comfyuiClient.get().uri("/object_info/CheckpointLoaderSimple")
+                    .retrieve().body(JsonNode.class);
+            JsonNode list = info.path("CheckpointLoaderSimple").path("input")
+                    .path("required").path("ckpt_name").path(0);
+            Set<String> names = new java.util.HashSet<>();
+            if (list.isArray()) list.forEach(n -> names.add(n.asText()));
+            return names;
+        } catch (Exception e) {
+            return Set.of();
+        }
+    }
+
+    private String validateCheckpointGraphOps(JsonNode decision) {
+        JsonNode graphOps = decision.path("generate_graph_ops");
+        if (!graphOps.isArray()) return null;
+        Set<String> installed = null;
+        for (JsonNode op : graphOps) {
+            if (!"set_input".equals(op.path("op").asText())) continue;
+            if (!"ckpt_name".equals(op.path("input").asText())) continue;
+            String requested = op.path("value").asText("");
+            if (requested.isBlank()) continue;
+            if (installed == null) installed = fetchInstalledCheckpoints();
+            if (!installed.contains(requested)) {
+                return "[GENERATION ERROR]\n" +
+                       "Checkpoint '" + requested + "' is not installed.\n" +
+                       "Installed checkpoints: " + installed + "\n" +
+                       "Call get_available_models() to see what is actually available, " +
+                       "then retry your generate decision using a set_input with an installed checkpoint name.";
+            }
+        }
+        return null;
     }
 
     private String executeGetAvailableModels() {
