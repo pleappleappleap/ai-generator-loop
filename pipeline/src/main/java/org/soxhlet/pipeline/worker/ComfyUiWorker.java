@@ -61,6 +61,7 @@ public class ComfyUiWorker {
     private final RestClient comfyClient;
     private final GalleryBroadcastService galleryBroadcast;
     private final Path workflowsDir;
+    private final Path comfyuiOutputDir;
     private final HttpClient httpClient;
 
     public ComfyUiWorker(
@@ -71,7 +72,8 @@ public class ComfyUiWorker {
             ModelsConfig modelsConfig,
             GalleryBroadcastService galleryBroadcast,
             @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam,
-            @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirParam) {
+            @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirParam,
+            @Value("${comfyui.output-dir:loop/ComfyUI/output}") String comfyuiOutputDirParam) {
         this.requiresNew = new TransactionTemplate(txManager);
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.jdbc = jdbc;
@@ -81,6 +83,7 @@ public class ComfyUiWorker {
         this.galleryBroadcast = galleryBroadcast;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
         this.workflowsDir = Path.of(workflowsDirParam).toAbsolutePath().normalize();
+        this.comfyuiOutputDir = Path.of(comfyuiOutputDirParam).toAbsolutePath().normalize();
         this.httpClient = HttpClient.newHttpClient();
     }
 
@@ -681,10 +684,12 @@ public class ComfyUiWorker {
         for (JsonNode nodeOutput : outputs) {
             if (nodeOutput.has("images")) {
                 JsonNode img = nodeOutput.get("images").get(0);
-                return comfyuiUrl + "/view"
-                        + "?filename=" + URLEncoder.encode(img.get("filename").asText(), StandardCharsets.UTF_8)
-                        + "&subfolder=" + URLEncoder.encode(img.get("subfolder").asText(), StandardCharsets.UTF_8)
-                        + "&type=" + URLEncoder.encode(img.get("type").asText(), StandardCharsets.UTF_8);
+                String filename  = img.get("filename").asText();
+                String subfolder = img.get("subfolder").asText("");
+                Path localPath = subfolder.isEmpty()
+                        ? comfyuiOutputDir.resolve(filename)
+                        : comfyuiOutputDir.resolve(subfolder).resolve(filename);
+                return localPath.toUri().toString(); // file:///absolute/path/to/image.png
             }
         }
         throw new RuntimeException("No image output found for prompt " + promptId);
