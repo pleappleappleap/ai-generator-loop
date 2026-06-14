@@ -120,6 +120,18 @@ public class ConversationAgent implements Runnable {
                         "Ask about style first. Nothing else is acceptable for this turn.");
             }
 
+            // If the prior assistant turn proposed an install and the user just approved it,
+            // inject an explicit directive so the model doesn't re-derive the plan from scratch.
+            String priorProposal = findPendingInstallProposal(messages, text);
+            if (priorProposal != null) {
+                ObjectNode sysMsg = messages.get(0);
+                sysMsg.put("content", sysMsg.path("content").asText() +
+                        "\n\nUSER APPROVED INSTALL: The user just approved your install proposal.\n" +
+                        "Your prior proposal: " + priorProposal + "\n" +
+                        "Call install_model immediately with the repo_id and filename from that proposal.\n" +
+                        "Do NOT re-derive the plan. Do NOT search again. Do NOT propose again. Just call install_model.");
+            }
+
             JsonNode decision = runReasoningLoop(messages, false);
 
             if (decision == null) {
@@ -758,6 +770,34 @@ public class ConversationAgent implements Runnable {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    private static boolean isAffirmative(String text) {
+        String t = text.toLowerCase().strip().replaceAll("[^a-z ]", "");
+        return t.equals("yes") || t.equals("yeah") || t.equals("yep") || t.equals("ok")
+            || t.equals("okay") || t.equals("sure") || t.equals("go ahead") || t.equals("go for it")
+            || t.equals("approved") || t.equals("approve") || t.equals("do it") || t.equals("proceed")
+            || t.startsWith("yes ") || t.startsWith("ok ") || t.startsWith("sure ") || t.startsWith("yeah ");
+    }
+
+    // Returns the text of the prior assistant proposal if the user's current message is an affirmative
+    // response to an install proposal made in the last assistant turn.
+    private String findPendingInstallProposal(List<ObjectNode> messages, String userText) {
+        if (!isAffirmative(userText)) return null;
+        // Walk backwards: skip the last user message, find the last assistant message before it
+        for (int i = messages.size() - 1; i >= 0; i--) {
+            String role = messages.get(i).path("role").asText("");
+            if ("user".equals(role)) continue;
+            if ("assistant".equals(role)) {
+                String content = messages.get(i).path("content").asText("").toLowerCase();
+                if ((content.contains("install") || content.contains("download"))
+                        && content.contains("approval")) {
+                    return messages.get(i).path("content").asText("");
+                }
+            }
+            break;
+        }
+        return null;
     }
 
     private String checkInstallApproval(String argsJson, List<ObjectNode> conversation, int conversationBase) {
