@@ -126,8 +126,18 @@ public class Scorer {
                 .body(JsonNode.class);
         double clipScore = clipResult.path("clip_score").asDouble(0.0);
         JsonNode imageEmbedding = clipResult.path("image_embedding");
-        String embeddingStr = (imageEmbedding == null || imageEmbedding.isNull() || imageEmbedding.isMissingNode())
-                ? null : imageEmbedding.toString();
+        // Store in pgvector text format ([f1,f2,...]) so the column needs no fixed dimension.
+        // Cast to vector at similarity query time with ::vector.
+        String embeddingStr = null;
+        if (imageEmbedding != null && imageEmbedding.isArray() && imageEmbedding.size() > 0) {
+            StringBuilder sb = new StringBuilder("[");
+            for (int k = 0; k < imageEmbedding.size(); k++) {
+                if (k > 0) sb.append(',');
+                sb.append(imageEmbedding.get(k).asDouble());
+            }
+            sb.append(']');
+            embeddingStr = sb.toString();
+        }
 
         // -- Artifact sidecar ---------------------------------------------------
         JsonNode artifactResult = artifactClient.post().uri("/score")
@@ -161,7 +171,7 @@ public class Scorer {
         Double northStarSimilarity = null;
         if (embeddingStr != null) {
             List<Double> simRows = jdbc.queryForList(
-                    "SELECT (1 - (ns.embedding <=> :emb::vector))::float8 " +
+                    "SELECT (1 - (ns.embedding::vector <=> :emb::vector))::float8 " +
                     "FROM north_star ns " +
                     "WHERE ns.superseded_at IS NULL AND ns.embedding IS NOT NULL " +
                     "ORDER BY ns.id DESC LIMIT 1",
@@ -199,7 +209,7 @@ public class Scorer {
         // -- Tx2: delete staging row, upsert scores, publish verdict -----------
         final String  finalVerdict         = verdict;
         final String  finalRejectionReason = rejectionReason;
-        final String  finalEmbedding       = embeddingStr;
+        final String  finalEmbedding        = embeddingStr;
         final Double  finalNorthStarSim    = northStarSimilarity;
 
         requiresNew.execute(status -> {
@@ -217,7 +227,7 @@ public class Scorer {
                             :imageUuid::uuid, :sessionUuid::uuid, :seqNum, :prompt,
                             :workflowPath, :workflowParams::jsonb, :workflowId::uuid, :conversationId::uuid,
                             :clipScore, :artifactScore, :vlmScores::jsonb, :vlmIssues, :vlmRecs,
-                            :verdict, :rejectionReason, :imagePath, :embedding::vector, :northStarSim
+                            :verdict, :rejectionReason, :imagePath, :embedding, :northStarSim
                         )
                         ON CONFLICT (image_uuid) DO UPDATE SET
                             clip_score            = EXCLUDED.clip_score,
