@@ -206,6 +206,8 @@ public class ConversationAgent implements Runnable {
         Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
         // Track total calls per tool name to cap expensive operations.
         Map<String, Integer> toolNameCounts = new java.util.HashMap<>();
+        // Count total loop-detection fires; after threshold force a terminal decision.
+        int loopDetectionFires = 0;
 
         for (int i = 0; i < SAFETY_LIMIT; i++) {
             boolean lastChance = (i == SAFETY_LIMIT - 1);
@@ -305,6 +307,7 @@ public class ConversationAgent implements Runnable {
                     // a few searches rather than searching until SearXNG returns the perfect result.
                     int nameCount = toolNameCounts.merge(toolName, 1, Integer::sum);
                     if ("search_web".equals(toolName) && nameCount > 5) {
+                        loopDetectionFires++;
                         log.warning("search_web cap reached [" + conversationId.substring(0, 8)
                                 + "] — directing model to proceed with available information");
                         ObjectNode toolResult = mgr.mapper.createObjectNode();
@@ -324,8 +327,24 @@ public class ConversationAgent implements Runnable {
                     String callKey = toolName + "|" + argsJson;
                     int callCount = toolCallCounts.merge(callKey, 1, Integer::sum);
                     if (callCount > 2) {
+                        loopDetectionFires++;
                         log.warning("Repeated tool call [" + conversationId.substring(0, 8) + "] x"
                                 + callCount + ": " + toolName + " — injecting loop-break nudge");
+                        if (loopDetectionFires >= 5) {
+                            // Model is stuck and ignoring nudges — force a terminal decision.
+                            log.warning("Loop detection threshold reached [" + conversationId.substring(0, 8)
+                                    + "] — forcing terminal decision");
+                            forceToolUse = false;
+                            conversation.add(mgr.mapper.createObjectNode()
+                                    .put("role", "user")
+                                    .put("content",
+                                            "You are stuck in a loop and have ignored repeated warnings. "
+                                            + "You MUST now emit a JSON decision and stop calling tools. "
+                                            + "Options: {\"decision\":\"give_up\",\"image_uuid\":\"<last uuid>\",\"message\":\"...\"} "
+                                            + "if generation is failing, or {\"decision\":\"await_input\",\"message\":\"...\"} "
+                                            + "to ask the user for direction. Do not call any more tools."));
+                            break; // break inner toolCalls loop, continue outer reasoning loop
+                        }
                         ObjectNode toolResult = mgr.mapper.createObjectNode();
                         toolResult.put("role", "tool");
                         toolResult.put("tool_call_id", toolCallId);
