@@ -119,8 +119,8 @@ compute:
     backend: auto
 
 thresholds:
-  clip: 0.25
-  artifact: 0.50
+  clip: 0.20        # Fictional characters score lower; CLIP doesn't know their appearance
+  artifact: 0.95    # AI-image-detector always fires on AI output; only reject extreme artifacts
   score_timeout_secs: 60
 
 broker:
