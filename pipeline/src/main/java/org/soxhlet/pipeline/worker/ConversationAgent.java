@@ -843,28 +843,17 @@ public class ConversationAgent implements Runnable {
     }
 
     // Returns the text of the prior assistant proposal if the user's current message is an affirmative
-    // response to an install proposal made in the last assistant turn, OR if the user has explicitly
-    // named a specific model they want installed.
+    // response to an explicit install proposal (one that asked for "approval") in the last assistant turn.
     private String findPendingInstallProposal(List<ObjectNode> messages, String userText) {
-        String lower = userText.toLowerCase();
-        // User explicitly directed a specific model install ("choose X", "use X", "install X", "download X")
-        boolean userDirected = lower.contains("absolute reality") || lower.contains("realistic vision")
-                || lower.contains("epicrealism") || lower.contains("cyberrealistic")
-                || lower.contains("dreamshaper") || lower.contains("install") || lower.contains("download");
-
+        if (!isAffirmative(userText)) return null;
         // Walk backwards: skip the last user message, find the last assistant message before it
         for (int i = messages.size() - 1; i >= 0; i--) {
             String role = messages.get(i).path("role").asText("");
             if ("user".equals(role)) continue;
             if ("assistant".equals(role)) {
                 String content = messages.get(i).path("content").asText("").toLowerCase();
-                // Explicit "approval?" proposal in prior turn
                 if ((content.contains("install") || content.contains("download"))
                         && content.contains("approval")) {
-                    return messages.get(i).path("content").asText("");
-                }
-                // Prior turn asked about checkpoints and user replied with a named model
-                if (userDirected && (content.contains("checkpoint") || content.contains("install"))) {
                     return messages.get(i).path("content").asText("");
                 }
             }
