@@ -114,7 +114,7 @@ compute:
     backend: auto
 
 thresholds:
-  clip: 0.20        # Fictional characters score lower; CLIP doesn't know their appearance
+  clip: 0.15        # Coarse category check only: catches "got fruit instead of person", not character identity
   score_timeout_secs: 60
 
 broker:
