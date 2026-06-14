@@ -4,8 +4,10 @@ Exposes POST /score → { image_uuid, clip_score, image_embedding, prompt_embedd
 Model is loaded once at startup and held resident.  Stateless: no broker connection.
 """
 
+import io
 import math
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -65,10 +67,17 @@ def embed_text(req: EmbedTextRequest) -> dict[str, Any]:
     return {"embedding": embedding}
 
 
+def _open_image(path: str) -> Image.Image:
+    if path.startswith(("http://", "https://")):
+        with urllib.request.urlopen(path) as resp:
+            return Image.open(io.BytesIO(resp.read())).convert("RGB")
+    return Image.open(path).convert("RGB")
+
+
 @app.post("/score")
 def score(req: ScoreRequest) -> dict[str, Any]:
     try:
-        image = preprocess(Image.open(req.image_path)).unsqueeze(0).to(_device)
+        image = preprocess(_open_image(req.image_path)).unsqueeze(0).to(_device)
     except OSError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     text = tokenizer([req.prompt]).to(_device)

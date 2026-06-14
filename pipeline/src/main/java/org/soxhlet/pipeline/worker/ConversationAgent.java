@@ -1023,11 +1023,9 @@ public class ConversationAgent implements Runnable {
             Path cacheDir = destDir.resolve(".cache/huggingface/download");
             if (Files.isDirectory(cacheDir)) {
                 try (var ls = Files.list(cacheDir)) {
+                    // hf CLI stores the partial file with a hashed name; match any .incomplete
                     Optional<Path> partial = ls
-                            .filter(p -> {
-                                String n = p.getFileName().toString();
-                                return n.startsWith(filename + ".") && n.endsWith(".incomplete");
-                            })
+                            .filter(p -> p.getFileName().toString().endsWith(".incomplete"))
                             .findFirst();
                     if (partial.isPresent()) downloaded = Files.size(partial.get());
                 } catch (Exception ignored) {}
