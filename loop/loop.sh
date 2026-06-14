@@ -35,8 +35,6 @@ _LLM_BASE=$(echo "$_LLM_URL" | sed 's|/v1.*||')
 _CLIP_PORT=$(yq '.sidecars.clip_scorer.port // 12002' "$CFG" 2>/dev/null)
 : "${_CLIP_PORT:=12002}"
 
-_ARTIFACT_PORT=$(yq '.sidecars.artifact_scorer.port // 12003' "$CFG" 2>/dev/null)
-: "${_ARTIFACT_PORT:=12003}"
 
 _VLM_PORT=$(yq '.sidecars.vlm_scorer.port // 12004' "$CFG" 2>/dev/null)
 : "${_VLM_PORT:=12004}"
@@ -74,8 +72,6 @@ _STRATEGIC_MODEL=$(yq '.strategic.model.model_name // "default"' "$CFG" 2>/dev/n
 : "${_STRATEGIC_MODEL:=default}"
 _CLIP_THRESHOLD=$(yq '.thresholds.clip // 0.25' "$CFG" 2>/dev/null)
 : "${_CLIP_THRESHOLD:=0.25}"
-_ARTIFACT_THRESHOLD=$(yq '.thresholds.artifact // 0.50' "$CFG" 2>/dev/null)
-: "${_ARTIFACT_THRESHOLD:=0.50}"
 
 # ── Spring Boot environment overrides ─────────────────────────────────────────
 # Exported so the Java pipeline inherits config.yaml values at startup.
@@ -174,20 +170,17 @@ _start() {
     "$LOOP_DIR/comfyui.sh" start
     "$LOOP_DIR/tactical_llm.sh" start
     "$LOOP_DIR/clip_scorer.sh" start
-    "$LOOP_DIR/artifact_scorer.sh" start
     "$LOOP_DIR/vlm_scorer.sh" start
 
     component_wait_healthy "${_COMFYUI_URL}/system_stats"             "ComfyUI"         180      & _w1=$!
     component_wait_healthy "${_LLM_BASE}/v1/models"                   "tactical_llm"    300      & _w2=$!
     component_wait_healthy "http://localhost:${_CLIP_PORT}/health"     "clip-scorer"      60      & _w3=$!
-    component_wait_healthy "http://localhost:${_ARTIFACT_PORT}/health" "artifact-scorer"  60      & _w4=$!
     component_wait_healthy "http://localhost:${_VLM_PORT}/health"      "vlm-scorer"      120      & _w5=$!
 
     _start_ok=0
     wait $_w1 || _start_ok=1
     wait $_w2 || _start_ok=1
     wait $_w3 || _start_ok=1
-    wait $_w4 || _start_ok=1
     wait $_w5 || _start_ok=1
     [ "$_start_ok" -eq 1 ] && exit 1
 
@@ -213,7 +206,6 @@ _stop() {
 
     echo "==> Stopping Python ML sidecars..."
     "$LOOP_DIR/clip_scorer.sh" stop
-    "$LOOP_DIR/artifact_scorer.sh" stop
     "$LOOP_DIR/vlm_scorer.sh" stop
 
     echo "==> Stopping ComfyUI and tactical LLM..."
@@ -239,7 +231,6 @@ _status_rows() {
     "$LOOP_DIR/comfyui.sh" status         | _fmt_row
     "$LOOP_DIR/tactical_llm.sh" status    | _fmt_row
     "$LOOP_DIR/clip_scorer.sh" status     | _fmt_row
-    "$LOOP_DIR/artifact_scorer.sh" status | _fmt_row
     "$LOOP_DIR/vlm_scorer.sh" status      | _fmt_row
     "$LOOP_DIR/pipeline.sh" status        | _fmt_row
 }
@@ -269,8 +260,6 @@ _health_rows() {
         && printf "│ %-22s │ %-25s │\n" "clip_scorer" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "clip_scorer" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_ARTIFACT_PORT}/health" \
-        && printf "│ %-22s │ %-25s │\n" "artifact_scorer" "healthy" \
-        || { printf "│ %-22s │ %-25s │\n" "artifact_scorer" "not ready"; ok=1; }
     component_check_healthy "http://localhost:${_VLM_PORT}/health" \
         && printf "│ %-22s │ %-25s │\n" "vlm_scorer" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "vlm_scorer" "not ready"; ok=1; }

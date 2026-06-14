@@ -1191,7 +1191,7 @@ public class ConversationAgent implements Runnable {
             while (System.currentTimeMillis() < deadlineMs) {
                 // Check scoring complete: images row with vlm_scores
                 List<Map<String, Object>> rows = mgr.jdbc.queryForList(
-                    "SELECT image_path, verdict, rejection_reason, clip_score, artifact_score, " +
+                    "SELECT image_path, verdict, rejection_reason, clip_score, " +
                     "       north_star_similarity, vlm_scores::text AS vlm_scores, " +
                     "       vlm_issues::text AS vlm_issues, vlm_recs::text AS vlm_recs, " +
                     "       prompt, session_uuid " +
@@ -1236,7 +1236,6 @@ public class ConversationAgent implements Runnable {
             String verdict = (String) row.get("verdict");
             String rejectionReason = (String) row.get("rejection_reason");
             double clipScore = row.get("clip_score") != null ? ((Number) row.get("clip_score")).doubleValue() : 0;
-            double artifactScore = row.get("artifact_score") != null ? ((Number) row.get("artifact_score")).doubleValue() : 1;
             Double northStarSim = row.get("north_star_similarity") != null ? ((Number) row.get("north_star_similarity")).doubleValue() : null;
             String prompt = (String) row.get("prompt");
             String sessionUuid = (String) row.get("session_uuid");
@@ -1255,7 +1254,6 @@ public class ConversationAgent implements Runnable {
             if (rejectionReason != null) sb.append("rejected:   ").append(rejectionReason).append("\n");
             sb.append("\n");
             sb.append(String.format("CLIP score:       %.4f%n", clipScore));
-            sb.append(String.format("Artifact conf:    %.4f%n", artifactScore));
             if (northStarSim != null) sb.append(String.format("North star sim:   %.4f%n", northStarSim));
 
             if (vlmScores != null && !vlmScores.isMissingNode()) {

@@ -18,12 +18,6 @@ public class SidecarConfig {
         return RestClient.builder().baseUrl(url).build();
     }
 
-    @Bean("artifactScorerClient")
-    public RestClient artifactScorerClient(
-            @Value("${sidecars.artifact-scorer.url}") String url) {
-        return RestClient.builder().baseUrl(url).build();
-    }
-
     @Bean("vlmScorerClient")
     public RestClient vlmScorerClient(
             @Value("${sidecars.vlm-scorer.url}") String url) {

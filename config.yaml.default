@@ -23,9 +23,6 @@ models:
     mmproj_source: hf:prithivMLmods/Qwen3-VL-8B-Instruct-abliterated-v2-GGUF/Qwen3-VL-8B-Instruct-abliterated-v2.mmproj-Q8_0.gguf
     context_length: 4096
     n_gpu_layers: -1                               # -1 = all layers on GPU
-  artifact_detector:
-    dir: auto          # auto: {scorers}/models/artifact-detector
-    source: hf:umm-maybe/AI-image-detector        # public repo, no token required
   clip:
     name: ViT-L-14
     pretrained: openai
@@ -104,8 +101,6 @@ compute:
                           # omit or leave blank to use the default device
   clip_scorer:
     backend: auto
-  artifact_scorer:
-    backend: auto
   vlm_scorer:
     backend: auto
   # tactical_llm and strategic_llm backend is platform-determined:
@@ -120,7 +115,6 @@ compute:
 
 thresholds:
   clip: 0.20        # Fictional characters score lower; CLIP doesn't know their appearance
-  artifact: 0.95    # AI-image-detector always fires on AI output; only reject extreme artifacts
   score_timeout_secs: 60
 
 broker:

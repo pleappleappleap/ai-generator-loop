@@ -137,7 +137,7 @@ _status() {
     if [ "$current" = "loop" ]; then
         "$LOOP_DIR/loop.sh" status-rows
     else
-        _stopped_rows comfyui tactical_llm clip_scorer artifact_scorer vlm_scorer pipeline
+        _stopped_rows comfyui tactical_llm clip_scorer vlm_scorer pipeline
     fi
     echo "├─ Strategic ────────────┼───────────────────────────┤"
     if [ "$current" = "strategic" ]; then
@@ -162,7 +162,7 @@ _health() {
     if [ "$current" = "loop" ]; then
         "$LOOP_DIR/loop.sh" health-rows || ok=1
     else
-        _stopped_rows comfyui tactical_llm clip_scorer artifact_scorer vlm_scorer pipeline
+        _stopped_rows comfyui tactical_llm clip_scorer vlm_scorer pipeline
     fi
     echo "├─ Strategic ────────────┼───────────────────────────┤"
     if [ "$current" = "strategic" ]; then

@@ -40,11 +40,7 @@ public class Scorer {
     @Value("${scoring.clip-threshold:0.25}")
     private double clipThreshold;
 
-    @Value("${scoring.artifact-threshold:0.50}")
-    private double artifactThreshold;
-
     private final RestClient clipClient;
-    private final RestClient artifactClient;
     private final RestClient vlmClient;
     private final NamedParameterJdbcTemplate jdbc;
     private final JmsTemplate jmsTemplate;
@@ -53,14 +49,12 @@ public class Scorer {
 
     public Scorer(
             @Qualifier("clipScorerClient") RestClient clipClient,
-            @Qualifier("artifactScorerClient") RestClient artifactClient,
             @Qualifier("vlmScorerClient") RestClient vlmClient,
             NamedParameterJdbcTemplate jdbc,
             JmsTemplate jmsTemplate,
             ObjectMapper mapper,
             PlatformTransactionManager txManager) {
         this.clipClient = clipClient;
-        this.artifactClient = artifactClient;
         this.vlmClient = vlmClient;
         this.jdbc = jdbc;
         this.jmsTemplate = jmsTemplate;
@@ -139,14 +133,6 @@ public class Scorer {
             embeddingStr = sb.toString();
         }
 
-        // -- Artifact sidecar ---------------------------------------------------
-        JsonNode artifactResult = artifactClient.post().uri("/score")
-                .contentType(MediaType.APPLICATION_JSON)
-                .body(Map.of("image_uuid", imageUuid, "image_path", imagePath))
-                .retrieve()
-                .body(JsonNode.class);
-        double aiConfidence = artifactResult.path("ai_confidence").asDouble(1.0);
-
         // -- VLM sidecar --------------------------------------------------------
         String vlmEvalPrompt = null;
         if (conversationId != null) {
@@ -185,9 +171,6 @@ public class Scorer {
         if (clipScore < clipThreshold) {
             verdict = "rejected";
             rejectionReason = "clip_threshold";
-        } else if (aiConfidence > artifactThreshold) {
-            verdict = "rejected";
-            rejectionReason = "artifact_threshold";
         } else {
             verdict = "candidate";
         }
@@ -221,17 +204,16 @@ public class Scorer {
                         INSERT INTO images (
                             image_uuid, session_uuid, sequence_number, prompt,
                             workflow_path, workflow_params, workflow_id, conversation_id,
-                            clip_score, artifact_score, vlm_scores, vlm_issues, vlm_recs,
+                            clip_score, vlm_scores, vlm_issues, vlm_recs,
                             verdict, rejection_reason, image_path, embedding, north_star_similarity
                         ) VALUES (
                             :imageUuid::uuid, :sessionUuid::uuid, :seqNum, :prompt,
                             :workflowPath, :workflowParams::jsonb, :workflowId::uuid, :conversationId::uuid,
-                            :clipScore, :artifactScore, :vlmScores::jsonb, :vlmIssues, :vlmRecs,
+                            :clipScore, :vlmScores::jsonb, :vlmIssues, :vlmRecs,
                             :verdict, :rejectionReason, :imagePath, :embedding, :northStarSim
                         )
                         ON CONFLICT (image_uuid) DO UPDATE SET
                             clip_score            = EXCLUDED.clip_score,
-                            artifact_score        = EXCLUDED.artifact_score,
                             vlm_scores            = EXCLUDED.vlm_scores,
                             vlm_issues            = EXCLUDED.vlm_issues,
                             vlm_recs              = EXCLUDED.vlm_recs,
@@ -251,7 +233,6 @@ public class Scorer {
                         .addValue("workflowId", workflowId)
                         .addValue("conversationId", conversationId)
                         .addValue("clipScore", clipScore)
-                        .addValue("artifactScore", aiConfidence)
                         .addValue("vlmScores", mapper.writeValueAsString(vlmScores))
                         .addValue("vlmIssues", new AbstractSqlTypeValue() {
                             @Override
@@ -280,7 +261,7 @@ public class Scorer {
                     ObjectNode verdictMsg = buildVerdictMessage(
                             imageUuid, sessionUuid, sequenceNumber, prompt,
                             workflowPath, workflowId, conversationId, imagePath,
-                            clipScore, aiConfidence, vlmScores, issues, recs, finalNorthStarSim);
+                            clipScore, vlmScores, issues, recs, finalNorthStarSim);
                     jmsTemplate.convertAndSend("loop.verdicts", mapper.writeValueAsString(verdictMsg));
                     log.info("Published verdict for " + imageUuid);
                 }
@@ -295,11 +276,10 @@ public class Scorer {
             String imageUuid, String sessionUuid, int sequenceNumber,
             String prompt, String workflowPath,
             String workflowId, String conversationId, String imagePath,
-            double clipScore, double artifactScore, ObjectNode vlmScores,
+            double clipScore, ObjectNode vlmScores,
             String[] issues, String[] recs, Double northStarSimilarity) {
         ObjectNode scores = mapper.createObjectNode()
-                .put("clip_score", clipScore)
-                .put("artifact_score", artifactScore);
+                .put("clip_score", clipScore);
         scores.set("vlm_scores", vlmScores);
         if (northStarSimilarity != null) scores.put("north_star_similarity", northStarSimilarity);
 

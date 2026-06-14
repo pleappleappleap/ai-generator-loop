@@ -42,8 +42,6 @@ management:
 sidecars:
   clip-scorer:
     url: http://localhost:12002
-  artifact-scorer:
-    url: http://localhost:12003
   vlm-scorer:
     url: http://localhost:12004
 
@@ -98,4 +96,3 @@ strategic-llm:
 
 scoring:
   clip-threshold: 0.25
-  artifact-threshold: 0.50
