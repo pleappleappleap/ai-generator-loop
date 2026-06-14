@@ -60,6 +60,7 @@ public class ComfyUiWorker {
     private final ModelsConfig modelsConfig;
     private final RestClient comfyClient;
     private final GalleryBroadcastService galleryBroadcast;
+    private final ConversationAgentManager agentManager;
     private final Path workflowsDir;
     private final HttpClient httpClient;
 
@@ -70,6 +71,7 @@ public class ComfyUiWorker {
             ObjectMapper mapper,
             ModelsConfig modelsConfig,
             GalleryBroadcastService galleryBroadcast,
+            ConversationAgentManager agentManager,
             @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam,
             @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirParam) {
         this.requiresNew = new TransactionTemplate(txManager);
@@ -79,6 +81,7 @@ public class ComfyUiWorker {
         this.mapper = mapper;
         this.modelsConfig = modelsConfig;
         this.galleryBroadcast = galleryBroadcast;
+        this.agentManager = agentManager;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
         this.workflowsDir = Path.of(workflowsDirParam).toAbsolutePath().normalize();
         this.httpClient = HttpClient.newHttpClient();
@@ -137,13 +140,23 @@ public class ComfyUiWorker {
             resumeGeneration(imageUuid, promptId, payload);
         } catch (Exception e) {
             log.warning("Generation processing failed for " + imageUuid + ": " + e.getMessage());
-            String msg = e.getMessage();
-            if (msg != null && (msg.contains(" 4") || msg.contains("prompt_outputs_failed_validation"))) {
+            String errMsg = e.getMessage();
+            if (errMsg != null && (errMsg.contains(" 4") || errMsg.contains("prompt_outputs_failed_validation"))) {
                 log.warning("Terminal client error for " + imageUuid + " - removing from pending queue to stop retry loop");
                 try {
                     jdbc.update("DELETE FROM pending_generations WHERE image_uuid = :id::uuid", Map.of("id", imageUuid));
                 } catch (Exception ex) {
                     log.warning("Failed to delete pending generation " + imageUuid + ": " + ex.getMessage());
+                }
+                // Notify the conversation agent so the model can self-diagnose and recover
+                try {
+                    JsonNode payload = mapper.readTree(payloadJson);
+                    String convId = payload.path("conversation_id").asText("");
+                    if (!convId.isBlank()) {
+                        agentManager.dispatch(convId, new AgentEvent.GenerationFailed(imageUuid, errMsg));
+                    }
+                } catch (Exception ex) {
+                    log.warning("Failed to dispatch GenerationFailed for " + imageUuid + ": " + ex.getMessage());
                 }
             }
         }

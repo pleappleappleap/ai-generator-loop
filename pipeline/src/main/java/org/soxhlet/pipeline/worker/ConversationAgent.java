@@ -89,6 +89,8 @@ public class ConversationAgent implements Runnable {
             processUserMessage(um.text());
         } else if (event instanceof AgentEvent.Verdict v) {
             processVerdict(v.imageUuid(), v.payloadJson());
+        } else if (event instanceof AgentEvent.GenerationFailed gf) {
+            processGenerationFailed(gf.imageUuid(), gf.reason());
         }
     }
 
@@ -330,6 +332,58 @@ public class ConversationAgent implements Runnable {
             }
             return null;
         });
+    }
+
+    // -- Generation failure feedback --------------------------------------------
+
+    private void processGenerationFailed(String imageUuid, String reason) {
+        try {
+            String feedbackMsg =
+                    "[GENERATION FAILED]\n" +
+                    "image_uuid: " + imageUuid + "\n\n" +
+                    "Your generation attempt was rejected before producing an image.\n" +
+                    "Reason: " + reason + "\n\n" +
+                    "Diagnose the problem and recover: check what models and workflows are " +
+                    "actually installed (get_available_models), identify what is missing, " +
+                    "and follow the appropriate protocol to fix it before retrying.";
+
+            saveChatMessage(null, "user", feedbackMsg);
+            mgr.chatBroadcast.sendChunk(conversationId,
+                    "Generation failed: " + reason + " Diagnosing...");
+            mgr.chatBroadcast.sendDone(conversationId);
+
+            List<ObjectNode> messages = buildConversation(conversationId);
+            JsonNode decision = runReasoningLoop(messages, false);
+            if (decision == null) {
+                mgr.chatBroadcast.sendError(conversationId,
+                        "Generation failed and the model did not respond. Please try again.");
+                return;
+            }
+            String message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
+            String action  = decision.path("decision").asText("await_input");
+            if ("generate".equals(action)) {
+                String ckptError = validateCheckpointGraphOps(decision);
+                if (ckptError != null) {
+                    messages.add(mgr.mapper.createObjectNode().put("role", "user").put("content", ckptError));
+                    decision = runReasoningLoop(messages, false);
+                    if (decision != null) {
+                        message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
+                        action  = decision.path("decision").asText("await_input");
+                    }
+                }
+                if ("generate".equals(action)) {
+                    Map<String, String> state = queueNewGeneration(decision);
+                    if (state != null && message == null) message = "On it. Generation submitted.";
+                }
+            }
+            if (message != null) {
+                saveChatMessage(null, "assistant", message);
+                mgr.chatBroadcast.sendChunk(conversationId, message);
+                mgr.chatBroadcast.sendDone(conversationId);
+            }
+        } catch (Exception e) {
+            log.warning("processGenerationFailed error for " + conversationId + ": " + e.getMessage());
+        }
     }
 
     // -- Reasoning loop ---------------------------------------------------------
