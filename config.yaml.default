@@ -153,7 +153,7 @@ tactical:
     max_retries: 3    # retry budget per session
     max_inpaints: 2   # inpaint budget per session
     accept_vlm_mean_min: 7.0   # minimum mean VLM score to accept a candidate
-    accept_clip_min: 0.30      # minimum CLIP score to accept a candidate
+    accept_clip_min: 0.20      # minimum CLIP score to accept a candidate (fictional characters score lower)
     thinking_score_threshold: 0.05  # re-query with thinking if best score within this margin of threshold
 
 strategic:

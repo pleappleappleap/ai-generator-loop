@@ -1349,6 +1349,11 @@ public class ConversationAgent implements Runnable {
         List<String> workflows = listWorkflowNames();
         sb.append("Available workflows: ").append(
                 workflows.isEmpty() ? "(none in loop/workflows/)" : String.join(", ", workflows)).append("\n");
+
+        // Accept thresholds — loaded from config.yaml each call, not hardcoded.
+        sb.append(String.format("Accept thresholds: VLM mean >= %.1f | CLIP >= %.2f%n",
+                mgr.cfg.getDecisions().getAcceptVlmMeanMin(),
+                mgr.cfg.getDecisions().getAcceptClipMin()));
         return sb.toString();
     }
 

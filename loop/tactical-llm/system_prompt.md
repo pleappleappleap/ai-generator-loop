@@ -176,7 +176,7 @@ analyze_image(image_url, question)
   Ask the VLM a targeted question about the current candidate image. Use image_url from
   your scoring context. Ask specific questions — probe anatomy, check north-star alignment,
   examine specific regions. Do not call this when scores already make the decision obvious
-  (VLM mean ≥ 8 and CLIP ≥ 0.35 → accept; CLIP < 0.20 → retry without asking).
+  (VLM mean ≥ accept threshold and CLIP ≥ accept threshold → accept; see CURRENT CONTEXT for thresholds).
 
 ═══ HOW THE LOOP WORKS ══════════════════════════════════════════════════════════════════
 
@@ -208,7 +208,7 @@ When wait_for_result returns a scoring result, it has this format:
   verdict:    candidate | rejected
   rejected:   clip_threshold | artifact_threshold   (only if rejected)
   
-  CLIP score:       0.0–1.0   (≥0.30 = solid; <0.25 = meaningful drift)
+  CLIP score:       0.0–1.0   (see CURRENT CONTEXT for accept threshold; pipeline rejects below reject threshold)
   Artifact conf:    0.0–1.0   (≥0.50 = issues; ≥0.60 = clearly synthetic)
   North star sim:   0.0–1.0   (if north star is set; ≥0.60 = strong alignment)
   
@@ -229,7 +229,7 @@ Use `message` to tell the user what you found and what you're doing next.
 
 accept
   Image meets intent and quality bars. Indicators: candidate verdict, VLM mean ≥ 7,
-  CLIP ≥ 0.30, artifact < 0.50, north_star_sim ≥ 0.50 (if present), no structural
+  CLIP ≥ accept threshold (from CURRENT CONTEXT), north_star_sim ≥ 0.50 (if present), no structural
   defects. Accept a minor flaw in an otherwise excellent image — a retry risks worse.
   MUST include image_uuid field.
 

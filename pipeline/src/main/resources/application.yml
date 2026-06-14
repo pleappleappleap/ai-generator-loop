@@ -59,7 +59,7 @@ tactical-llm:
     max-retries: 3
     max-inpaints: 2
     accept-vlm-mean-min: 7.0
-    accept-clip-min: 0.30
+    accept-clip-min: 0.20
 
 comfyui:
   url: http://localhost:12006
