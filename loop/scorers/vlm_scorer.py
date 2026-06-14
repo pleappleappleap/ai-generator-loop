@@ -17,6 +17,7 @@ import json
 import subprocess
 import sys
 import threading
+import tempfile
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -125,8 +126,9 @@ def _to_data_uri(image_source: str) -> str:
 def _to_mlx_image(image_source: str):
     """Resolve an image source for mlx-vlm.
 
-    mlx-vlm accepts local paths and http(s) URLs natively.
-    data: URIs are decoded to a PIL Image object.
+    Qwen3-VL's processor needs to read image dimensions from a local file to
+    compute the correct number of <image_pad> tokens. HTTP URLs are downloaded
+    to a temp file; data URIs are decoded to a PIL Image object.
     """
     if image_source.startswith("data:"):
         from PIL import Image as PILImage
@@ -134,7 +136,15 @@ def _to_mlx_image(image_source: str):
         return PILImage.open(io.BytesIO(base64.b64decode(data)))
     if image_source.startswith("file://"):
         return urllib.parse.urlparse(image_source).path
-    return image_source  # local path or http(s) URL — mlx-vlm handles both
+    if image_source.startswith(("http://", "https://")):
+        with urllib.request.urlopen(image_source) as resp:
+            data = resp.read()
+        suffix = Path(image_source.split("?")[0]).suffix or ".png"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp.write(data)
+        tmp.close()
+        return tmp.name
+    return image_source  # local path
 
 
 # ── Unified inference entry point ─────────────────────────────────────────────
