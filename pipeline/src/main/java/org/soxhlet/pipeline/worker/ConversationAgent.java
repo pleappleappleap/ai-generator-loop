@@ -433,7 +433,11 @@ public class ConversationAgent implements Runnable {
             case "analyze_image"      -> executeAnalyzeImage(argsJson);
             case "get_available_models" -> executeGetAvailableModels();
             case "get_workflow"       -> executeGetWorkflow(argsJson);
-            case "install_model"      -> executeInstallModel(argsJson);
+            case "install_model"      -> {
+                String block = checkInstallApproval(argsJson, conversation);
+                if (block != null) yield block;
+                yield executeInstallModel(argsJson);
+            }
             case "wait_for_download"  -> executeWaitForDownload(argsJson);
             case "search_web"         -> executeSearchWeb(argsJson);
             case "get_system_prompt"  -> readSystemPrompt();
@@ -750,6 +754,34 @@ public class ConversationAgent implements Runnable {
         } catch (Exception e) {
             return "Error: " + e.getMessage();
         }
+    }
+
+    private String checkInstallApproval(String argsJson, List<ObjectNode> conversation) {
+        JsonNode args;
+        try { args = mgr.mapper.readTree(argsJson); } catch (Exception e) { return null; }
+        String filename = args.path("filename").asText("").strip().toLowerCase();
+        String repoId   = args.path("repo_id").asText("").strip().toLowerCase();
+        if (filename.isEmpty()) return null;
+        // Strip extension for looser matching ("realistic_vision_v6.0_nv_b1" in "Realistic_Vision_V6.0...")
+        String stem = filename.contains(".") ? filename.substring(0, filename.lastIndexOf('.')).toLowerCase() : filename;
+
+        // Look for a prior assistant TEXT message (not a tool-call block) that mentions
+        // the filename or repo — this is the proposal the user must have seen and approved.
+        for (ObjectNode msg : conversation) {
+            if (!"assistant".equals(msg.path("role").asText(""))) continue;
+            if (msg.has("tool_calls")) continue;
+            String content = msg.path("content").asText("").toLowerCase();
+            if (content.isEmpty()) continue;
+            if (content.contains(stem) || (!repoId.isEmpty() && content.contains(repoId))) {
+                return null; // prior proposal found — approved
+            }
+        }
+        return "[INSTALL BLOCKED]\n" +
+               "You called install_model without first proposing the model to the user.\n" +
+               "You MUST emit await_input that describes the model you want to install " +
+               "(name, source repo, approximate size, and why it suits the user's request) " +
+               "and ask for explicit approval. Only call install_model after the user approves.\n" +
+               "Propose the model now.";
     }
 
     private String executeInstallModel(String argsJson) {
