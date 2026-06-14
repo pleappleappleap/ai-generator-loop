@@ -549,6 +549,12 @@ public class ConversationAgent implements Runnable {
                 Map.of("content", "The complete new system prompt text"),
                 List.of("content")));
 
+        tools.add(buildTool("check_system_status",
+                "Check the health of the pipeline: ComfyUI connectivity and queue depth, " +
+                "pending generations, and recent warnings/errors from the pipeline log. " +
+                "Call this whenever something seems wrong or a tool call fails unexpectedly.",
+                Map.of(), List.of()));
+
         return tools;
     }
 
@@ -589,6 +595,7 @@ public class ConversationAgent implements Runnable {
             case "search_web"         -> executeSearchWeb(argsJson);
             case "get_system_prompt"  -> readSystemPrompt();
             case "update_system_prompt" -> executeUpdateSystemPrompt(argsJson, conversation);
+            case "check_system_status"  -> executeCheckSystemStatus();
             default -> "Unknown tool: " + toolName;
         };
     }
@@ -656,6 +663,67 @@ public class ConversationAgent implements Runnable {
         }
 
         return null;
+    }
+
+    private String executeCheckSystemStatus() {
+        StringBuilder sb = new StringBuilder("=== SYSTEM STATUS ===\n\n");
+
+        // ComfyUI health and queue
+        try {
+            mgr.comfyuiClient.get().uri("/system_stats").retrieve().body(JsonNode.class);
+            sb.append("ComfyUI: UP\n");
+            try {
+                JsonNode queue = mgr.comfyuiClient.get().uri("/queue").retrieve().body(JsonNode.class);
+                sb.append("  Queue running: ").append(queue.path("queue_running").size()).append("\n");
+                sb.append("  Queue pending: ").append(queue.path("queue_pending").size()).append("\n");
+            } catch (Exception e) {
+                sb.append("  Queue status unavailable: ").append(e.getMessage()).append("\n");
+            }
+        } catch (Exception e) {
+            sb.append("ComfyUI: DOWN - ").append(e.getMessage()).append("\n");
+            sb.append("  This means no images can be generated until ComfyUI is restarted.\n");
+        }
+
+        // Pending generations in DB
+        try {
+            Integer pending = mgr.jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM pending_generations", Map.of(), Integer.class);
+            sb.append("Pending generations in DB: ").append(pending).append("\n");
+            if (pending != null && pending > 0) {
+                List<Map<String, Object>> stuck = mgr.jdbc.queryForList(
+                        "SELECT image_uuid::text, created_at FROM pending_generations ORDER BY created_at LIMIT 3",
+                        Map.of());
+                stuck.forEach(r -> sb.append("  - ").append(r.get("image_uuid"))
+                        .append(" (since ").append(r.get("created_at")).append(")\n"));
+            }
+        } catch (Exception e) {
+            sb.append("DB pending_generations unavailable: ").append(e.getMessage()).append("\n");
+        }
+
+        // Recent pipeline log warnings/errors
+        try {
+            Path logFile = Path.of("/tmp/ai-loop/pipeline.log");
+            if (Files.exists(logFile)) {
+                List<String> lines = Files.readAllLines(logFile);
+                List<String> errors = lines.stream()
+                        .filter(l -> l.contains(" WARN ") || l.contains(" ERROR "))
+                        .collect(Collectors.toList());
+                int start = Math.max(0, errors.size() - 5);
+                sb.append("Recent pipeline warnings/errors:\n");
+                if (errors.isEmpty()) {
+                    sb.append("  (none)\n");
+                } else {
+                    errors.subList(start, errors.size())
+                            .forEach(l -> sb.append("  ").append(l.trim()).append("\n"));
+                }
+            } else {
+                sb.append("Pipeline log not found at /tmp/ai-loop/pipeline.log\n");
+            }
+        } catch (Exception e) {
+            sb.append("Pipeline log read error: ").append(e.getMessage()).append("\n");
+        }
+
+        return sb.toString();
     }
 
     private String executeGetAvailableModels() {
