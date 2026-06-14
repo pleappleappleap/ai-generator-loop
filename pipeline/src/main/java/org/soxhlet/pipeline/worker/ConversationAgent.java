@@ -342,6 +342,16 @@ public class ConversationAgent implements Runnable {
                 Map.of("content", "The complete new system prompt text"),
                 List.of("content")));
 
+        tools.add(buildTool("validate_workflow",
+                "Validate graph_ops against a workflow before submitting. Checks that all " +
+                "referenced node IDs and class_types exist, that any ckpt_name is installed, " +
+                "and that add_node ops are well-formed. Returns VALID/INVALID plus the full " +
+                "node inventory of the workflow so you can confirm the graph is correctly assembled. " +
+                "Always call this after constructing graph_ops and before submit_generation.",
+                Map.of("workflow",   "Workflow filename (e.g. sd15_base.json)",
+                       "graph_ops",  "Array of graph op objects to validate"),
+                List.of("workflow", "graph_ops")));
+
         tools.add(buildTool("check_system_status",
                 "Check the health of the pipeline: ComfyUI connectivity and queue depth, " +
                 "pending generations, and recent warnings/errors from the pipeline log. " +
@@ -411,8 +421,9 @@ public class ConversationAgent implements Runnable {
             case "get_system_prompt"  -> readSystemPrompt();
             case "update_system_prompt" -> executeUpdateSystemPrompt(argsJson, conversation);
             case "check_system_status"  -> executeCheckSystemStatus();
-            case "submit_generation"  -> executeSubmitGeneration(argsJson);
-            case "wait_for_result"    -> executeWaitForResult(argsJson);
+            case "validate_workflow"    -> executeValidateWorkflow(argsJson);
+            case "submit_generation"    -> executeSubmitGeneration(argsJson);
+            case "wait_for_result"      -> executeWaitForResult(argsJson);
             default -> "Unknown tool: " + toolName;
         };
     }
@@ -609,6 +620,114 @@ public class ConversationAgent implements Runnable {
                         sb.append(String.format("         %s = %s%n", e.getKey(), e.getValue().asText()));
                 });
             }
+            return sb.toString();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private String executeValidateWorkflow(String argsJson) {
+        try {
+            JsonNode args = mgr.mapper.readTree(argsJson);
+            String workflowName = args.path("workflow").asText("").strip();
+            JsonNode graphOps   = args.path("graph_ops");
+
+            if (workflowName.isEmpty()) return "Error: workflow name is required";
+            Path wfPath = mgr.workflowsDir.resolve(workflowName);
+            if (!Files.exists(wfPath)) {
+                return "Error: workflow '" + workflowName + "' not found. Available: "
+                        + String.join(", ", listWorkflowNames());
+            }
+            JsonNode workflow = mgr.mapper.readTree(Files.readString(wfPath));
+
+            List<String> errors   = new ArrayList<>();
+            List<String> warnings = new ArrayList<>();
+
+            if (graphOps.isArray()) {
+                Set<String> installed = fetchInstalledCheckpoints();
+                for (JsonNode op : graphOps) {
+                    String opType = op.path("op").asText("");
+                    switch (opType) {
+                        case "set_input" -> {
+                            String nodeId    = op.path("id").asText("");
+                            String nodeClass = op.path("class_type").asText("");
+                            String inputKey  = op.path("input").asText("");
+                            JsonNode value   = op.path("value");
+
+                            if (!nodeId.isBlank() && !workflow.has(nodeId))
+                                errors.add("set_input: node id '" + nodeId + "' does not exist");
+                            if (!nodeClass.isBlank()) {
+                                boolean found = false;
+                                for (JsonNode n : workflow)
+                                    if (nodeClass.equals(n.path("class_type").asText(""))) { found = true; break; }
+                                if (!found) errors.add("set_input: no node with class_type '" + nodeClass + "' in workflow");
+                            }
+                            if ("ckpt_name".equals(inputKey) && value.isTextual()) {
+                                String ckpt = value.asText();
+                                if (!installed.contains(ckpt))
+                                    errors.add("set_input: ckpt_name '" + ckpt + "' is not installed. Installed: " + installed);
+                            }
+                        }
+                        case "rewire" -> {
+                            String nodeId = op.path("id").asText("");
+                            if (!nodeId.isBlank() && !workflow.has(nodeId))
+                                errors.add("rewire: node id '" + nodeId + "' does not exist");
+                            JsonNode to = op.path("to");
+                            if (to.isArray() && to.size() >= 1) {
+                                String targetId = to.get(0).asText("");
+                                if (!targetId.isBlank() && !workflow.has(targetId))
+                                    warnings.add("rewire: connection target '" + targetId + "' not yet in workflow (may be added by add_node)");
+                            }
+                        }
+                        case "remove_node" -> {
+                            String nodeId = op.path("id").asText("");
+                            if (!nodeId.isBlank() && !workflow.has(nodeId))
+                                warnings.add("remove_node: node id '" + nodeId + "' not found (already absent)");
+                        }
+                        case "add_node" -> {
+                            if (!op.has("class_type"))
+                                errors.add("add_node: class_type is required");
+                        }
+                        default -> warnings.add("Unknown op type: '" + opType + "'");
+                    }
+                }
+            }
+
+            StringBuilder sb = new StringBuilder();
+            if (errors.isEmpty()) {
+                sb.append("VALID - graph ops check passed\n\n");
+            } else {
+                sb.append("INVALID - ").append(errors.size()).append(" error(s) found. Fix before submitting:\n");
+                errors.forEach(e -> sb.append("  ERROR: ").append(e).append("\n"));
+                sb.append("\n");
+            }
+            if (!warnings.isEmpty()) {
+                warnings.forEach(w -> sb.append("  WARN: ").append(w).append("\n"));
+                sb.append("\n");
+            }
+
+            // Show the workflow node inventory so the model can reason about the final graph
+            sb.append("Workflow '").append(workflowName).append("' node inventory:\n");
+            List<String> nodeIds = new ArrayList<>();
+            workflow.fieldNames().forEachRemaining(nodeIds::add);
+            nodeIds.sort((a, b) -> {
+                try { return Integer.compare(Integer.parseInt(a), Integer.parseInt(b)); }
+                catch (NumberFormatException e) { return a.compareTo(b); }
+            });
+            for (String nodeId : nodeIds) {
+                JsonNode node = workflow.get(nodeId);
+                if (!node.has("class_type")) continue;
+                String ct    = node.path("class_type").asText("");
+                String title = node.path("_meta").path("title").asText("");
+                sb.append(String.format("  [%s] %s%s%n", nodeId, ct, title.isBlank() ? "" : " (\"" + title + "\")"));
+                JsonNode inputs = node.path("inputs");
+                for (String key : new String[]{"ckpt_name", "width", "height", "steps", "cfg",
+                        "sampler_name", "scheduler", "lora_name", "control_net_name"}) {
+                    if (inputs.has(key) && !inputs.get(key).isArray())
+                        sb.append(String.format("         %s = %s%n", key, inputs.get(key).asText()));
+                }
+            }
+
             return sb.toString();
         } catch (Exception e) {
             return "Error: " + e.getMessage();
