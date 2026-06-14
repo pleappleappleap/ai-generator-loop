@@ -254,9 +254,14 @@
   .chat-msg.dl-progress {
     font-family: monospace; font-size: 11px; color: var(--muted);
     background: rgba(124,92,191,0.08); border-left: 2px solid var(--accent);
-    align-self: stretch; text-align: left; padding: 5px 10px;
+    align-self: stretch; text-align: left; padding: 8px 10px;
   }
-  .chat-msg.dl-progress p { margin: 0; }
+  .chat-msg.dl-progress p { margin: 0 0 4px; }
+  .chat-msg.dl-progress p:last-child { margin-bottom: 0; }
+  .dl-bar-track { height: 5px; background: rgba(255,255,255,0.1); border-radius: 3px; overflow: hidden; margin: 4px 0; }
+  .dl-bar-fill  { height: 100%; background: var(--accent); border-radius: 3px; transition: width 0.4s ease; }
+  @keyframes dl-pulse { 0%{margin-left:-35%} 100%{margin-left:100%} }
+  .dl-bar-pulse { width: 35%; animation: dl-pulse 1.4s ease-in-out infinite; }
 
   /* Markdown elements inside assistant messages */
   .chat-msg.assistant p  { margin: 0 0 6px; }
@@ -910,9 +915,24 @@ function updateDownloadProgress(text) {
     _progressEl = document.createElement('div');
     _progressEl.className = 'chat-msg dl-progress';
     document.getElementById('chat-messages').appendChild(_progressEl);
+    scrollChat();
   }
-  _progressEl.innerHTML = renderMarkdown(text);
-  document.getElementById('chat-messages').scrollTop = document.getElementById('chat-messages').scrollHeight;
+  const pctMatch   = text.match(/(\d+)%/);
+  const nameMatch  = text.match(/\*\*([^*]+)\*\*/);
+  const sizeMatch  = text.match(/([\d.]+ \w+) \/ ([\d.]+ \w+)/);
+  const totalMatch = text.match(/([\d.]+ \w+) total/);
+  const elapsed    = text.match(/(\d+)s elapsed/);
+  const name    = nameMatch ? nameMatch[1] : text.split(' ')[0];
+  const pct     = pctMatch  ? parseInt(pctMatch[1]) : null;
+  const barHtml = pct !== null
+    ? `<div class="dl-bar-track"><div class="dl-bar-fill" style="width:${pct}%"></div></div>`
+    : `<div class="dl-bar-track"><div class="dl-bar-fill dl-bar-pulse"></div></div>`;
+  let stats = '';
+  if (pct !== null && sizeMatch) stats = `${sizeMatch[1]} / ${sizeMatch[2]} — ${pct}%`;
+  else if (totalMatch) stats = `${totalMatch[1]} total${elapsed ? ' — ' + elapsed[1] + 's elapsed' : ''}`;
+  else if (elapsed) stats = `${elapsed[1]}s elapsed`;
+  _progressEl.innerHTML = `<p><strong>${name}</strong></p>${barHtml}${stats ? '<p>' + stats + '</p>' : ''}`;
+  scrollChat();
 }
 function clearDownloadProgress() {
   if (_progressEl) { _progressEl.remove(); _progressEl = null; }
