@@ -204,6 +204,8 @@ public class ConversationAgent implements Runnable {
         boolean forceToolUse = false;
         // Track repeated identical tool calls. Key: "toolName|argsJson", value: call count.
         Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
+        // Track total calls per tool name to cap expensive operations.
+        Map<String, Integer> toolNameCounts = new java.util.HashMap<>();
 
         for (int i = 0; i < SAFETY_LIMIT; i++) {
             boolean lastChance = (i == SAFETY_LIMIT - 1);
@@ -268,6 +270,25 @@ public class ConversationAgent implements Runnable {
                     String toolCallId = toolCall.path("id").asText();
                     String toolName   = toolCall.path("function").path("name").asText();
                     String argsJson   = toolCall.path("function").path("arguments").asText("{}");
+
+                    // Cap search_web at 5 calls per turn — the model must propose after
+                    // a few searches rather than searching until SearXNG returns the perfect result.
+                    int nameCount = toolNameCounts.merge(toolName, 1, Integer::sum);
+                    if ("search_web".equals(toolName) && nameCount > 5) {
+                        log.warning("search_web cap reached [" + conversationId.substring(0, 8)
+                                + "] — directing model to proceed with available information");
+                        ObjectNode toolResult = mgr.mapper.createObjectNode();
+                        toolResult.put("role", "tool");
+                        toolResult.put("tool_call_id", toolCallId);
+                        toolResult.put("content",
+                                "[SEARCH CAP REACHED] You have searched " + nameCount + " times. "
+                                + "Further searching will not help. Use the best repo_id and filename "
+                                + "you found and propose it to the user via await_input. "
+                                + "The install_model tool validates the URL before downloading — "
+                                + "you do not need search to confirm it exists.");
+                        conversation.add(toolResult);
+                        continue;
+                    }
 
                     // Detect repeated identical tool calls — model is stuck in a loop.
                     String callKey = toolName + "|" + argsJson;

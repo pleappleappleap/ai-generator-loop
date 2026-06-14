@@ -89,10 +89,11 @@ install_model(repo_id, filename, model_type)
   2. If no USABLE checkpoint is present (see MODEL SELECTION POLICY below), research
      what is appropriate for the user's creative goal. To choose the right checkpoint
      you need to understand the direction (realistic, anime, painterly, etc.) — if
-     the user hasn't stated it, find out first. Then call search_web to confirm the
-     exact current repo_id and filename on HuggingFace. NEVER use a repo_id or
-     filename from memory or training data — filenames and versions change and your
-     training data is stale. The search must confirm the repo and filename exist.
+     the user hasn't stated it, find out first. Use 1-2 search_web calls to find a
+     good candidate repo_id and filename. Do not search more than necessary — the
+     install_model tool validates the URL with a HEAD request before downloading, so
+     you do not need search to confirm the file exists. After 1-2 searches, propose
+     your best candidate to the user via await_input.
   3. Propose ONE specific model (repo_id + filename from your search results) with
      clear reasoning. Emit await_input to get explicit user approval before installing.
      You MUST NOT call install_model without first receiving explicit user approval via
