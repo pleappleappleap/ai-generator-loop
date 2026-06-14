@@ -202,6 +202,8 @@ public class ConversationAgent implements Runnable {
         // not intermediate messages added during this loop iteration.
         int conversationBase = conversation.size();
         boolean forceToolUse = false;
+        // Track repeated identical tool calls. Key: "toolName|argsJson", value: call count.
+        Map<String, Integer> toolCallCounts = new java.util.HashMap<>();
 
         for (int i = 0; i < SAFETY_LIMIT; i++) {
             boolean lastChance = (i == SAFETY_LIMIT - 1);
@@ -266,7 +268,27 @@ public class ConversationAgent implements Runnable {
                     String toolCallId = toolCall.path("id").asText();
                     String toolName   = toolCall.path("function").path("name").asText();
                     String argsJson   = toolCall.path("function").path("arguments").asText("{}");
-                    String result     = executeToolCall(toolName, argsJson, conversation, conversationBase);
+
+                    // Detect repeated identical tool calls — model is stuck in a loop.
+                    String callKey = toolName + "|" + argsJson;
+                    int callCount = toolCallCounts.merge(callKey, 1, Integer::sum);
+                    if (callCount > 2) {
+                        log.warning("Repeated tool call [" + conversationId.substring(0, 8) + "] x"
+                                + callCount + ": " + toolName + " — injecting loop-break nudge");
+                        ObjectNode toolResult = mgr.mapper.createObjectNode();
+                        toolResult.put("role", "tool");
+                        toolResult.put("tool_call_id", toolCallId);
+                        toolResult.put("content",
+                                "[LOOP DETECTED] You have called " + toolName
+                                + " with these exact arguments " + callCount + " times and received the same result. "
+                                + "Repeating will not produce a different outcome. "
+                                + "Use the results you already have. If the search returned no useful results, "
+                                + "try a different query or propose what you know to the user via await_input.");
+                        conversation.add(toolResult);
+                        continue;
+                    }
+
+                    String result = executeToolCall(toolName, argsJson, conversation, conversationBase);
 
                     ObjectNode toolResult = mgr.mapper.createObjectNode();
                     toolResult.put("role",        "tool");
@@ -445,6 +467,8 @@ public class ConversationAgent implements Runnable {
     // -- Tool execution ---------------------------------------------------------
 
     private String executeToolCall(String toolName, String argsJson, List<ObjectNode> conversation, int conversationBase) {
+        log.info("Tool call [" + conversationId.substring(0, 8) + "]: " + toolName
+                + (argsJson.length() > 2 ? " " + argsJson.substring(0, Math.min(120, argsJson.length())) : ""));
         return switch (toolName) {
             case "analyze_image"      -> executeAnalyzeImage(argsJson);
             case "get_available_models" -> executeGetAvailableModels();
