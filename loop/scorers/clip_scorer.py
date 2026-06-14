@@ -7,6 +7,7 @@ Model is loaded once at startup and held resident.  Stateless: no broker connect
 import io
 import math
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -71,6 +72,8 @@ def _open_image(path: str) -> Image.Image:
     if path.startswith(("http://", "https://")):
         with urllib.request.urlopen(path) as resp:
             return Image.open(io.BytesIO(resp.read())).convert("RGB")
+    if path.startswith("file://"):
+        path = urllib.parse.urlparse(path).path
     return Image.open(path).convert("RGB")
 
 

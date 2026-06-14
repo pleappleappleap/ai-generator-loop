@@ -5,6 +5,7 @@ Model is loaded once at startup and held resident.  Stateless: no broker connect
 """
 
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -42,7 +43,8 @@ def health() -> dict[str, str]:
 
 @app.post("/score")
 def score(req: ScoreRequest) -> dict[str, Any]:
-    results = detector(req.image_path)
+    image_path = urllib.parse.urlparse(req.image_path).path if req.image_path.startswith("file://") else req.image_path
+    results = detector(image_path)
     ai_confidence = next((r["score"] for r in results if r["label"] == "artificial"), 0.0)
     return {
         "image_uuid": req.image_uuid,

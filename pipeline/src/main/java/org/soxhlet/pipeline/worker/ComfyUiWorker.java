@@ -156,7 +156,16 @@ public class ComfyUiWorker {
     private void resumeGeneration(String imageUuid, String existingPromptId, JsonNode msg) throws Exception {
         String prompt = msg.path("prompt").asText(null);
         String workflowPath = msg.path("workflow_path").asText("");
-        JsonNode workflowParams = msg.has("workflow_params") ? msg.get("workflow_params") : mapper.createObjectNode();
+        JsonNode rawWfParams = msg.has("workflow_params") ? msg.get("workflow_params") : null;
+        JsonNode workflowParams;
+        if (rawWfParams == null || rawWfParams.isNull() || rawWfParams.isMissingNode()) {
+            workflowParams = mapper.createObjectNode();
+        } else if (rawWfParams.isTextual()) {
+            // JSONB round-trip can deliver a JSON-encoded string instead of an object
+            workflowParams = mapper.readTree(rawWfParams.asText());
+        } else {
+            workflowParams = rawWfParams;
+        }
         JsonNode graphOps = msg.has("graph_ops") ? msg.get("graph_ops") : mapper.createArrayNode();
         JsonNode lorasNode = msg.has("loras") ? msg.get("loras") : mapper.createArrayNode();
         String modelType = msg.path("model_type").asText(null);

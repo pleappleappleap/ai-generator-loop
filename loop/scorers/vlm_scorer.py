@@ -69,16 +69,28 @@ def _ensure_quantized(base_path: str) -> str:
 
 
 if _IS_MACOS:
+    import concurrent.futures as _futures
     import mlx.core as mx  # noqa: F401  — ensure MLX is importable
     from mlx_vlm import generate as _mlx_generate
     from mlx_vlm import load as _mlx_load
+    from mlx_vlm.prompt_utils import apply_chat_template as _mlx_apply_chat_template
     from mlx_vlm.utils import load_config as _mlx_load_config
 
     _model_path = _ensure_quantized(
         str(Path(_vlm_cfg["dir"]) / _vlm_cfg.get("mlx_model_name", ""))
     )
-    _mlx_model, _mlx_processor = _mlx_load(_model_path)
-    _mlx_config = _mlx_load_config(_model_path)
+
+    # MLX GPU streams are thread-local. Load the model on a single dedicated
+    # thread and route all inference through it so the stream is always valid.
+    def _mlx_init():
+        import mlx.core as _mx
+        _mx.set_default_device(_mx.gpu)
+        model, processor = _mlx_load(_model_path)
+        config = _mlx_load_config(_model_path)
+        return model, processor, config
+
+    _mlx_executor = _futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="mlx-vlm")
+    _mlx_model, _mlx_processor, _mlx_config = _mlx_executor.submit(_mlx_init).result()
 
 else:
     from llama_cpp import Llama
@@ -154,12 +166,17 @@ def _call_vlm(image_source: str, prompt: str, max_tokens: int) -> str:
     if _IS_MACOS:
         try:
             img = _to_mlx_image(image_source)
-            with _infer_lock:
-                return _mlx_generate(
+            formatted = _mlx_apply_chat_template(
+                _mlx_processor, _mlx_config, prompt, num_images=1
+            )
+            def _run():
+                result = _mlx_generate(
                     _mlx_model, _mlx_processor,
-                    image=img, prompt=prompt,
+                    image=img, prompt=formatted,
                     max_tokens=max_tokens, temp=0.0, verbose=False,
                 )
+                return result.text if hasattr(result, "text") else str(result)
+            return _mlx_executor.submit(_run).result(timeout=120)
         except OSError:
             raise
         except Exception as exc:
