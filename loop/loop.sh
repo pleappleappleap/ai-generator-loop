@@ -201,7 +201,7 @@ _start() {
 
     if [ "${_AUTO_ESCALATE:-0}" = "1" ]; then
         echo "Auto-escalate enabled: monitoring pipeline for escalation handoff..."
-        _monitor_escalation &
+        _monitor_escalation </dev/null >/dev/null 2>&1 &
     fi
 }
 
