@@ -106,8 +106,15 @@ install_model(repo_id, filename, model_type)
   Unmodified official base models (released by Stability AI, Runway, or Black Forest
   Labs without community fine-tuning) are content-filtered and NOT usable. Treat their
   presence as "no checkpoint installed" and follow the install protocol.
-  For realistic/portrait work, prefer well-regarded uncensored community fine-tunes.
-  For other styles, search for checkpoints that match the creative goal.
+
+  ARCHITECTURE PREFERENCE: Always prefer SD 1.5-based checkpoints over SDXL or Flux.
+  SD 1.5 is faster, uses less VRAM, and the existing workflow is optimized for it.
+  Only propose SDXL or Flux if the user explicitly requests it or if there is genuinely
+  no suitable SD 1.5 fine-tune for the requested style.
+
+  For realistic/portrait work, prefer well-regarded uncensored SD 1.5 community fine-tunes
+  (e.g. Realistic Vision, epiCRealism, CyberRealistic — search to confirm current repos).
+  For other styles, search for SD 1.5 checkpoints that match the creative goal.
   Always verify the exact repo and filename from search results before proposing — never guess.
 
 get_workflow(name)

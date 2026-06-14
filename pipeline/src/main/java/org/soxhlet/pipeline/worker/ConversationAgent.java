@@ -185,6 +185,10 @@ public class ConversationAgent implements Runnable {
         int maxTokens = thinkingEnabled ? mgr.cfg.getMaxTokensThinking() : mgr.cfg.getMaxTokens();
         ArrayNode tools = buildToolDefinitions();
         List<ObjectNode> conversation = new ArrayList<>(messages);
+        // Track how many messages came from the DB (delivered to user in prior turns).
+        // checkInstallApproval only counts these as valid user-approved proposals —
+        // not intermediate messages added during this loop iteration.
+        int conversationBase = conversation.size();
         boolean forceToolUse = false;
 
         for (int i = 0; i < SAFETY_LIMIT; i++) {
@@ -250,7 +254,7 @@ public class ConversationAgent implements Runnable {
                     String toolCallId = toolCall.path("id").asText();
                     String toolName   = toolCall.path("function").path("name").asText();
                     String argsJson   = toolCall.path("function").path("arguments").asText("{}");
-                    String result     = executeToolCall(toolName, argsJson, conversation);
+                    String result     = executeToolCall(toolName, argsJson, conversation, conversationBase);
 
                     ObjectNode toolResult = mgr.mapper.createObjectNode();
                     toolResult.put("role",        "tool");
@@ -428,13 +432,13 @@ public class ConversationAgent implements Runnable {
 
     // -- Tool execution ---------------------------------------------------------
 
-    private String executeToolCall(String toolName, String argsJson, List<ObjectNode> conversation) {
+    private String executeToolCall(String toolName, String argsJson, List<ObjectNode> conversation, int conversationBase) {
         return switch (toolName) {
             case "analyze_image"      -> executeAnalyzeImage(argsJson);
             case "get_available_models" -> executeGetAvailableModels();
             case "get_workflow"       -> executeGetWorkflow(argsJson);
             case "install_model"      -> {
-                String block = checkInstallApproval(argsJson, conversation);
+                String block = checkInstallApproval(argsJson, conversation, conversationBase);
                 if (block != null) yield block;
                 yield executeInstallModel(argsJson);
             }
@@ -756,7 +760,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    private String checkInstallApproval(String argsJson, List<ObjectNode> conversation) {
+    private String checkInstallApproval(String argsJson, List<ObjectNode> conversation, int conversationBase) {
         JsonNode args;
         try { args = mgr.mapper.readTree(argsJson); } catch (Exception e) { return null; }
         String filename = args.path("filename").asText("").strip().toLowerCase();
@@ -765,9 +769,11 @@ public class ConversationAgent implements Runnable {
         // Strip extension for looser matching ("realistic_vision_v6.0_nv_b1" in "Realistic_Vision_V6.0...")
         String stem = filename.contains(".") ? filename.substring(0, filename.lastIndexOf('.')).toLowerCase() : filename;
 
-        // Look for a prior assistant TEXT message (not a tool-call block) that mentions
-        // the filename or repo — this is the proposal the user must have seen and approved.
-        for (ObjectNode msg : conversation) {
+        // Only look at messages that predate this reasoning loop (i.e., messages that were
+        // actually delivered to the user in a prior turn and saved to the DB).
+        // Messages added during THIS loop iteration do not count as user-approved proposals.
+        for (int i = 0; i < Math.min(conversationBase, conversation.size()); i++) {
+            ObjectNode msg = conversation.get(i);
             if (!"assistant".equals(msg.path("role").asText(""))) continue;
             if (msg.has("tool_calls")) continue;
             String content = msg.path("content").asText("").toLowerCase();
