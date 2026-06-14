@@ -104,13 +104,11 @@ public class ConversationAgentManager {
     public void onVerdict(String body) {
         try {
             JsonNode msg   = mapper.readTree(body);
-            String convId  = nullIfBlank(msg.path("conversation_id").asText(""));
             String imgUuid = msg.path("image_uuid").asText("");
-            if (convId == null || imgUuid.isBlank()) {
-                log.warning("Verdict missing conversation_id or image_uuid - dropping");
-                return;
-            }
-            // Persist first so it survives a crash before the agent processes it
+            if (imgUuid.isBlank()) return;
+            // Persist for crash recovery only - agent polls via wait_for_result
+            String convId = nullIfBlank(msg.path("conversation_id").asText(""));
+            if (convId == null) return;
             jdbc.update(
                 "INSERT INTO pending_decisions (image_uuid, session_uuid, verdict_payload) " +
                 "VALUES (:id::uuid, :sess::uuid, :payload::jsonb) ON CONFLICT DO NOTHING",
@@ -118,8 +116,7 @@ public class ConversationAgentManager {
                     "id",      imgUuid,
                     "sess",    msg.path("session_uuid").asText(""),
                     "payload", body));
-
-            dispatch(convId, new AgentEvent.Verdict(imgUuid, body));
+            // NOTE: Do NOT dispatch to agent - agent is polling via wait_for_result tool
         } catch (Exception e) {
             log.warning("onVerdict error: " + e.getMessage());
         }

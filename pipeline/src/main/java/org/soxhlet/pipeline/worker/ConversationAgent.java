@@ -33,7 +33,7 @@ import java.util.stream.Collectors;
 public class ConversationAgent implements Runnable {
 
     private static final Logger log = Logger.getLogger(ConversationAgent.class.getName());
-    private static final int SAFETY_LIMIT = 20;
+    private static final int SAFETY_LIMIT = 50;
 
     final String conversationId;
     private final ConversationAgentManager mgr;
@@ -87,10 +87,6 @@ public class ConversationAgent implements Runnable {
     private void processEvent(AgentEvent event) {
         if (event instanceof AgentEvent.UserMessage um) {
             processUserMessage(um.text());
-        } else if (event instanceof AgentEvent.Verdict v) {
-            processVerdict(v.imageUuid(), v.payloadJson());
-        } else if (event instanceof AgentEvent.GenerationFailed gf) {
-            processGenerationFailed(gf.imageUuid(), gf.reason());
         }
     }
 
@@ -136,29 +132,34 @@ public class ConversationAgent implements Runnable {
 
             handleVlmEvalPrompt(decision);
 
-            if ("generate".equals(action)) {
-                String ckptError = validateCheckpointGraphOps(decision);
-                if (ckptError != null) {
-                    log.warning("Checkpoint validation failed for conversation " + conversationId + ": " + ckptError);
-                    messages.add(mgr.mapper.createObjectNode().put("role", "user").put("content", ckptError));
-                    decision = runReasoningLoop(messages, false);
-                    if (decision != null) {
-                        message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
-                        action  = decision.path("decision").asText("await_input");
-                    }
-                }
-                if ("generate".equals(action)) {
-                    Map<String, String> state = queueNewGeneration(decision);
-                    if (state != null) {
-                        if (message == null) message = "On it. Generation submitted.";
-                        mgr.galleryBroadcast.decision("", "generate", "", 1.0,
-                                state.get("workflow_id"), conversationId);
-                    } else {
-                        message = (message != null ? message + "\n\n" : "") +
-                                  "Failed to queue generation. No workflow is available or an internal error occurred.";
-                    }
-                }
+            if ("accept".equals(action)) {
+                String imageUuid = decision.path("image_uuid").asText("");
+                requiresNew.execute(s -> {
+                    mgr.jdbc.update("UPDATE images SET decision = 'accepted' WHERE image_uuid = :id::uuid",
+                            Map.of("id", imageUuid));
+                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id::uuid",
+                            Map.of("id", imageUuid));
+                    return null;
+                });
+                String workflowId = workflowState != null ? workflowState.get("workflow_id") : null;
+                mgr.galleryBroadcast.decision(imageUuid, "accept",
+                        decision.path("reasoning").asText(""),
+                        decision.path("confidence").asDouble(0.0),
+                        workflowId, conversationId);
+            } else if ("give_up".equals(action)) {
+                String imageUuid = decision.path("image_uuid").asText("");
+                requiresNew.execute(s -> {
+                    mgr.jdbc.update("UPDATE images SET decision = 'give_up' WHERE image_uuid = :id::uuid",
+                            Map.of("id", imageUuid));
+                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id::uuid",
+                            Map.of("id", imageUuid));
+                    return null;
+                });
+            } else if ("escalate".equals(action)) {
+                initiateShutdown();
+                return;
             }
+            // await_input: no action needed
 
             if (message != null) {
                 saveChatMessage(null, "assistant", message);
@@ -177,214 +178,6 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // -- Verdict (scoring result) handling -------------------------------------
-
-    private void processVerdict(String imageUuid, String payloadJson) {
-        try {
-            JsonNode msg          = mgr.mapper.readTree(payloadJson);
-            String sessionUuid    = msg.path("session_uuid").asText();
-            String workflowId     = ConversationAgentManager.nullIfBlank(msg.path("workflow_id").asText(""));
-
-            // Check if conversation is cancelled
-            List<String> statusList = mgr.jdbc.queryForList(
-                    "SELECT status FROM conversations WHERE conversation_id = :id::uuid",
-                    Map.of("id", conversationId), String.class);
-            if (!statusList.isEmpty() && "cancelled".equals(statusList.get(0))) {
-                log.info("Conversation " + conversationId + " cancelled - giving up for " + imageUuid);
-                completeTx(imageUuid, msg, "give_up", null);
-                return;
-            }
-
-            Budget budget = loadBudget(sessionUuid);
-            String scoringMsg = buildScoringMessage(imageUuid, msg, budget);
-            saveChatMessage(workflowId, "user", scoringMsg);
-
-            boolean thinkFirst = shouldThink(msg, budget);
-            List<ObjectNode> messages = buildConversation(conversationId, scoringMsg);
-            JsonNode decision = runReasoningLoop(messages, thinkFirst);
-
-            if (decision != null && "escalate".equals(decision.path("decision").asText("")) && !thinkFirst) {
-                log.info("Escalate with thinking=off - retrying with thinking for " + imageUuid);
-                JsonNode second = runReasoningLoop(buildConversation(conversationId, null), true);
-                if (second != null) decision = second;
-            }
-
-            if (decision == null || !decision.has("decision")) {
-                decision = heuristicDecision(msg, budget);
-            }
-
-            String action  = decision.path("decision").asText("give_up");
-            String message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
-
-            handleVlmEvalPrompt(decision);
-
-            if (message != null) {
-                saveChatMessage(workflowId, "assistant", message);
-                mgr.chatBroadcast.sendMessage(conversationId, message);
-            }
-
-            final String finalAction = action;
-            requiresNew.execute(s -> {
-                mgr.jdbc.update(
-                        "UPDATE pending_decisions SET decision = :decision WHERE image_uuid = :id::uuid",
-                        Map.of("decision", finalAction, "id", imageUuid));
-                return null;
-            });
-
-            completeTx(imageUuid, msg, action, decision);
-
-            if ("escalate".equals(action)) {
-                initiateShutdown();
-                return;
-            }
-
-            double confidence = decision.path("confidence").asDouble(0.0);
-            String reasoning  = decision.path("reasoning").asText("");
-            mgr.galleryBroadcast.decision(imageUuid, action, reasoning, confidence, workflowId, conversationId);
-
-        } catch (Exception e) {
-            log.warning("processVerdict error for " + imageUuid + ": " + e.getMessage());
-        }
-    }
-
-    private void completeTx(String imageUuid, JsonNode msg, String action, JsonNode decision) {
-        requiresNew.execute(s -> {
-            try {
-                mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id::uuid",
-                        Map.of("id", imageUuid));
-
-                String sessionUuid    = msg.path("session_uuid").asText();
-                String workflowId     = ConversationAgentManager.nullIfBlank(msg.path("workflow_id").asText(""));
-
-                mgr.jdbc.update(
-                        "UPDATE images SET decision = :decision WHERE image_uuid = :id::uuid",
-                        Map.of("decision", action, "id", imageUuid));
-
-                switch (action) {
-                    case "accept" -> log.info("Accepted " + imageUuid);
-
-                    case "retry", "inpaint", "generate" -> {
-                        if ("inpaint".equals(action)) {
-                            log.info("Inpaint not implemented - downgrading to retry for " + imageUuid);
-                        }
-                        Budget budget = loadBudget(sessionUuid);
-                        if (budget.retriesUsed() >= budget.maxRetries()) {
-                            mgr.jdbc.update("UPDATE images SET decision = 'give_up' WHERE image_uuid = :id::uuid",
-                                    Map.of("id", imageUuid));
-                            log.info("Retry budget exhausted - giving up for " + imageUuid);
-                            break;
-                        }
-                        incrementBudget(sessionUuid, "retries_used");
-
-                        String newImageUuid = UUID.randomUUID().toString();
-                        int    newSeq       = msg.path("sequence_number").asInt(0) + 1;
-                        String retryPrompt  = decision != null
-                                ? decision.path("retry_prompt").asText(msg.path("prompt").asText(""))
-                                : msg.path("prompt").asText("");
-                        JsonNode retryParams   = decision != null && decision.has("retry_params")
-                                ? decision.get("retry_params") : mgr.mapper.createObjectNode();
-                        JsonNode retryGraphOps = decision != null && decision.has("retry_graph_ops")
-                                ? decision.get("retry_graph_ops") : mgr.mapper.createArrayNode();
-                        JsonNode retryLoras    = decision != null && decision.has("retry_loras")
-                                ? decision.get("retry_loras") : mgr.mapper.createArrayNode();
-                        String retryModel      = decision != null
-                                ? ConversationAgentManager.nullIfBlank(decision.path("retry_model").asText("")) : null;
-
-                        ObjectNode baseParams   = (ObjectNode) msg.path("scores").path("workflow_params");
-                        ObjectNode mergedParams = baseParams != null && !baseParams.isMissingNode()
-                                ? baseParams.deepCopy() : mgr.mapper.createObjectNode();
-                        if (retryParams.isObject()) {
-                            retryParams.fields().forEachRemaining(e -> mergedParams.set(e.getKey(), e.getValue()));
-                        }
-
-                        ObjectNode retryMsg = mgr.mapper.createObjectNode();
-                        retryMsg.put("image_uuid",       newImageUuid);
-                        retryMsg.put("session_uuid",     sessionUuid);
-                        retryMsg.put("sequence_number",  newSeq);
-                        retryMsg.put("workflow_path",    msg.path("workflow_path").asText(""));
-                        retryMsg.put("prompt",           retryPrompt);
-                        retryMsg.put("workflow_id",      workflowId != null ? workflowId : "");
-                        retryMsg.put("conversation_id",  conversationId);
-                        if (retryModel != null) retryMsg.put("model_type", retryModel);
-                        retryMsg.set("workflow_params",  mergedParams);
-                        retryMsg.set("graph_ops",        retryGraphOps);
-                        retryMsg.set("loras",            retryLoras);
-
-                        mgr.jmsTemplate.convertAndSend("loop.retry", mgr.mapper.writeValueAsString(retryMsg));
-                        log.info("Retry queued: " + imageUuid + " -> " + newImageUuid + " seq=" + newSeq);
-                    }
-
-                    case "give_up" -> {
-                        String reasoning = decision != null ? decision.path("reasoning").asText("") : "unknown";
-                        log.info("Give up for " + imageUuid + ": " + reasoning);
-                    }
-
-                    case "escalate" -> {
-                        String reason = decision != null ? decision.path("reasoning").asText("") : "";
-                        mgr.jdbc.update(
-                                "INSERT INTO pipeline_events (type, reason) VALUES ('mode_switch_requested', :reason)",
-                                Map.of("reason", reason));
-                        log.info("Escalation recorded for " + imageUuid + ": " + reason);
-                    }
-                }
-            } catch (Exception e) {
-                throw new RuntimeException(e);
-            }
-            return null;
-        });
-    }
-
-    // -- Generation failure feedback --------------------------------------------
-
-    private void processGenerationFailed(String imageUuid, String reason) {
-        try {
-            String feedbackMsg =
-                    "[GENERATION FAILED]\n" +
-                    "image_uuid: " + imageUuid + "\n\n" +
-                    "Your generation attempt was rejected before producing an image.\n" +
-                    "Reason: " + reason + "\n\n" +
-                    "Diagnose the problem and recover: check what models and workflows are " +
-                    "actually installed (get_available_models), identify what is missing, " +
-                    "and follow the appropriate protocol to fix it before retrying.";
-
-            saveChatMessage(null, "user", feedbackMsg);
-            mgr.chatBroadcast.sendChunk(conversationId,
-                    "Generation failed: " + reason + " Diagnosing...");
-            mgr.chatBroadcast.sendDone(conversationId);
-
-            List<ObjectNode> messages = buildConversation(conversationId);
-            JsonNode decision = runReasoningLoop(messages, false);
-            if (decision == null) {
-                mgr.chatBroadcast.sendError(conversationId,
-                        "Generation failed and the model did not respond. Please try again.");
-                return;
-            }
-            String message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
-            String action  = decision.path("decision").asText("await_input");
-            if ("generate".equals(action)) {
-                String ckptError = validateCheckpointGraphOps(decision);
-                if (ckptError != null) {
-                    messages.add(mgr.mapper.createObjectNode().put("role", "user").put("content", ckptError));
-                    decision = runReasoningLoop(messages, false);
-                    if (decision != null) {
-                        message = ConversationAgentManager.nullIfBlank(decision.path("message").asText(""));
-                        action  = decision.path("decision").asText("await_input");
-                    }
-                }
-                if ("generate".equals(action)) {
-                    Map<String, String> state = queueNewGeneration(decision);
-                    if (state != null && message == null) message = "On it. Generation submitted.";
-                }
-            }
-            if (message != null) {
-                saveChatMessage(null, "assistant", message);
-                mgr.chatBroadcast.sendChunk(conversationId, message);
-                mgr.chatBroadcast.sendDone(conversationId);
-            }
-        } catch (Exception e) {
-            log.warning("processGenerationFailed error for " + conversationId + ": " + e.getMessage());
-        }
-    }
 
     // -- Reasoning loop ---------------------------------------------------------
 
@@ -555,6 +348,28 @@ public class ConversationAgent implements Runnable {
                 "Call this whenever something seems wrong or a tool call fails unexpectedly.",
                 Map.of(), List.of()));
 
+        tools.add(buildTool("submit_generation",
+                "Submit an image generation job to ComfyUI. Returns immediately with image_uuid. " +
+                "You MUST call wait_for_result(image_uuid) afterward to get the scoring result.",
+                Map.of(
+                    "prompt",    "Comma-separated tag prompt",
+                    "workflow",  "(optional) workflow filename from get_available_models",
+                    "model",     "(optional) sd15 | flux | auto",
+                    "params",    "(optional) KSampler/EmptyLatentImage overrides object",
+                    "loras",     "(optional) array of {name, strength_model, strength_clip}",
+                    "graph_ops", "(optional) array of graph op objects"
+                ),
+                List.of("prompt")));
+
+        tools.add(buildTool("wait_for_result",
+                "Poll for the scoring result of a submitted generation. Blocks (polls every 15s) until " +
+                "scoring is complete, the generation fails, or 10 minutes elapse. Returns a [SCORING RESULT] " +
+                "block with CLIP score, VLM scores, issues, recommendations, and budget remaining. " +
+                "After reading the result, emit accept (with image_uuid), give_up (with image_uuid), " +
+                "or call submit_generation again with a revised prompt.",
+                Map.of("image_uuid", "The image_uuid returned by submit_generation"),
+                List.of("image_uuid")));
+
         return tools;
     }
 
@@ -596,6 +411,8 @@ public class ConversationAgent implements Runnable {
             case "get_system_prompt"  -> readSystemPrompt();
             case "update_system_prompt" -> executeUpdateSystemPrompt(argsJson, conversation);
             case "check_system_status"  -> executeCheckSystemStatus();
+            case "submit_generation"  -> executeSubmitGeneration(argsJson);
+            case "wait_for_result"    -> executeWaitForResult(argsJson);
             default -> "Unknown tool: " + toolName;
         };
     }
@@ -1001,6 +818,154 @@ public class ConversationAgent implements Runnable {
         }
     }
 
+    // -- New tool: submit_generation --------------------------------------------
+
+    private String executeSubmitGeneration(String argsJson) {
+        try {
+            JsonNode args = mgr.mapper.readTree(argsJson);
+            ObjectNode synth = mgr.mapper.createObjectNode();
+            synth.put("decision", "generate");
+            synth.put("generate_prompt",   args.path("prompt").asText(""));
+            if (args.has("workflow"))   synth.put("generate_workflow", args.get("workflow").asText());
+            if (args.has("model"))      synth.put("generate_model",    args.get("model").asText());
+            if (args.has("params"))     synth.set("generate_params",   args.get("params"));
+            if (args.has("loras"))      synth.set("generate_loras",    args.get("loras"));
+            if (args.has("graph_ops"))  synth.set("generate_graph_ops", args.get("graph_ops"));
+            if (args.has("vlm_eval_prompt")) handleVlmEvalPrompt(args);
+
+            String ckptError = validateCheckpointGraphOps(synth);
+            if (ckptError != null) return ckptError;
+
+            Map<String, String> state = queueNewGeneration(synth);
+            if (state == null) return "Error: failed to queue generation. Call check_system_status() to investigate.";
+
+            String imageUuid = state.get("image_uuid");
+            return mgr.mapper.createObjectNode()
+                    .put("status", "submitted")
+                    .put("image_uuid", imageUuid)
+                    .put("message", "Generation submitted. Call wait_for_result(\"" + imageUuid + "\") to poll for the result. Expect 60-120 seconds.")
+                    .toString();
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // -- New tool: wait_for_result ----------------------------------------------
+
+    private String executeWaitForResult(String argsJson) {
+        try {
+            JsonNode args = mgr.mapper.readTree(argsJson);
+            String imageUuid = args.path("image_uuid").asText("");
+            if (imageUuid.isBlank()) return "Error: image_uuid is required";
+
+            long deadlineMs = System.currentTimeMillis() + 600_000;
+
+            while (System.currentTimeMillis() < deadlineMs) {
+                // Check scoring complete: images row with vlm_scores
+                List<Map<String, Object>> rows = mgr.jdbc.queryForList(
+                    "SELECT image_path, verdict, rejection_reason, clip_score, artifact_score, " +
+                    "       north_star_similarity, vlm_scores::text AS vlm_scores, " +
+                    "       vlm_issues::text AS vlm_issues, vlm_recs::text AS vlm_recs, " +
+                    "       prompt, session_uuid " +
+                    "FROM images WHERE image_uuid = :id::uuid AND vlm_scores IS NOT NULL",
+                    Map.of("id", imageUuid));
+
+                if (!rows.isEmpty()) {
+                    return buildWaitForResultResponse(imageUuid, rows.get(0));
+                }
+
+                // Check if still in pipeline
+                boolean generating = !mgr.jdbc.queryForList(
+                    "SELECT 1 FROM pending_generations WHERE image_uuid = :id::uuid",
+                    Map.of("id", imageUuid), Integer.class).isEmpty();
+                boolean scoring = !mgr.jdbc.queryForList(
+                    "SELECT 1 FROM pending_scorings WHERE image_uuid = :id::uuid",
+                    Map.of("id", imageUuid), Integer.class).isEmpty();
+                boolean imageExists = !mgr.jdbc.queryForList(
+                    "SELECT 1 FROM images WHERE image_uuid = :id::uuid",
+                    Map.of("id", imageUuid), Integer.class).isEmpty();
+
+                if (!generating && !scoring && !imageExists) {
+                    return "[GENERATION FAILED]\nimage_uuid: " + imageUuid + "\n\n" +
+                           "The generation did not produce an image. The job disappeared from all pipeline queues.\n" +
+                           "Call check_system_status() to investigate (likely a bad checkpoint or workflow error).";
+                }
+
+                Thread.sleep(15_000);
+            }
+
+            return "Timeout: no scoring result after 10 minutes for " + imageUuid + ".\n" +
+                   "Call check_system_status() to investigate whether ComfyUI or scoring pipeline is stuck.";
+        } catch (Exception e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private String buildWaitForResultResponse(String imageUuid, Map<String, Object> row) {
+        try {
+            String imagePath = (String) row.get("image_path");
+            String imageUrl = imagePath != null ? "file://" + imagePath : "(unknown)";
+            String verdict = (String) row.get("verdict");
+            String rejectionReason = (String) row.get("rejection_reason");
+            double clipScore = row.get("clip_score") != null ? ((Number) row.get("clip_score")).doubleValue() : 0;
+            double artifactScore = row.get("artifact_score") != null ? ((Number) row.get("artifact_score")).doubleValue() : 1;
+            Double northStarSim = row.get("north_star_similarity") != null ? ((Number) row.get("north_star_similarity")).doubleValue() : null;
+            String prompt = (String) row.get("prompt");
+            String sessionUuid = (String) row.get("session_uuid");
+
+            JsonNode vlmScores = null; JsonNode vlmIssues = null; JsonNode vlmRecs = null;
+            try {
+                if (row.get("vlm_scores") != null) vlmScores = mgr.mapper.readTree((String) row.get("vlm_scores"));
+                if (row.get("vlm_issues") != null) vlmIssues = mgr.mapper.readTree((String) row.get("vlm_issues"));
+                if (row.get("vlm_recs") != null) vlmRecs = mgr.mapper.readTree((String) row.get("vlm_recs"));
+            } catch (Exception ignored) {}
+
+            StringBuilder sb = new StringBuilder("[SCORING RESULT]\n");
+            sb.append("image_uuid: ").append(imageUuid).append("\n");
+            sb.append("image_url:  ").append(imageUrl).append("\n");
+            sb.append("verdict:    ").append(verdict != null ? verdict : "candidate").append("\n");
+            if (rejectionReason != null) sb.append("rejected:   ").append(rejectionReason).append("\n");
+            sb.append("\n");
+            sb.append(String.format("CLIP score:       %.4f%n", clipScore));
+            sb.append(String.format("Artifact conf:    %.4f%n", artifactScore));
+            if (northStarSim != null) sb.append(String.format("North star sim:   %.4f%n", northStarSim));
+
+            if (vlmScores != null && !vlmScores.isMissingNode()) {
+                sb.append("\nVLM scores:\n");
+                for (String dim : new String[]{"photorealism","anatomical_coherence","interaction_plausibility",
+                        "lighting_consistency","prompt_adherence"}) {
+                    sb.append(String.format("  %-30s %s%n", dim, vlmScores.has(dim) ? vlmScores.get(dim).asText() : "n/a"));
+                }
+            }
+            if (vlmIssues != null && vlmIssues.isArray() && vlmIssues.size() > 0) {
+                sb.append("\nIssues:\n");
+                for (JsonNode issue : vlmIssues) sb.append("  - ").append(issue.asText()).append("\n");
+            }
+            if (vlmRecs != null && vlmRecs.isArray() && vlmRecs.size() > 0) {
+                sb.append("\nRecommendations:\n");
+                for (JsonNode rec : vlmRecs) sb.append("  - ").append(rec.asText()).append("\n");
+            }
+            sb.append("\nGeneration prompt: ").append(prompt != null ? prompt : "").append("\n");
+
+            if (sessionUuid != null && !sessionUuid.isBlank()) {
+                try {
+                    Budget budget = loadBudget(sessionUuid);
+                    sb.append(String.format("Budget remaining: %d retries, %d inpaints%n",
+                            budget.maxRetries() - budget.retriesUsed(),
+                            budget.maxInpaints() - budget.inpaintsUsed()));
+                } catch (Exception ignored) {}
+            }
+
+            // Save scoring result to chat history
+            String workflowId = workflowState != null ? workflowState.get("workflow_id") : null;
+            saveChatMessage(workflowId, "user", sb.toString());
+
+            return sb.toString();
+        } catch (Exception e) {
+            return "Error building result: " + e.getMessage();
+        }
+    }
+
     // -- Conversation building --------------------------------------------------
 
     private List<ObjectNode> buildConversation(String convId) {
@@ -1114,7 +1079,10 @@ public class ConversationAgent implements Runnable {
 
             mgr.jmsTemplate.convertAndSend("loop.generate", mgr.mapper.writeValueAsString(genMsg));
             log.info("Generation queued: " + imageUuid + " for conversation " + conversationId);
-            return workflowState;
+
+            Map<String, String> result = new java.util.HashMap<>(workflowState);
+            result.put("image_uuid", imageUuid);
+            return result;
         } catch (Exception e) {
             log.warning("queueNewGeneration failed: " + e.getMessage());
             return null;
@@ -1180,53 +1148,6 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // -- Scoring context --------------------------------------------------------
-
-    private String buildScoringMessage(String imageUuid, JsonNode msg, Budget budget) {
-        JsonNode scores       = msg.path("scores");
-        double clipScore      = scores.path("clip_score").asDouble(0.0);
-        double artifactScore  = scores.path("artifact_score").asDouble(1.0);
-        JsonNode vlmScores    = scores.path("vlm_scores");
-        String prompt         = msg.path("prompt").asText("");
-        String verdictType    = msg.path("verdict").asText("candidate");
-        String rejectionReason = ConversationAgentManager.nullIfBlank(msg.path("rejection_reason").asText(""));
-        String imagePath      = ConversationAgentManager.nullIfBlank(msg.path("image_path").asText(""));
-        Double northStarSim   = scores.has("north_star_similarity")
-                ? scores.path("north_star_similarity").asDouble() : null;
-        JsonNode vlmIssues    = msg.path("vlm_issues");
-        JsonNode vlmRecs      = msg.path("vlm_recs");
-
-        String imageUrl = imagePath != null ? "file://" + imagePath : "(unknown)";
-        StringBuilder sb = new StringBuilder();
-        sb.append("[SCORING RESULT]\n");
-        sb.append("image_uuid: ").append(imageUuid).append("\n");
-        sb.append("image_url:  ").append(imageUrl).append("\n");
-        sb.append("verdict:    ").append(verdictType).append("\n");
-        if (rejectionReason != null) sb.append("rejected:   ").append(rejectionReason).append("\n");
-        sb.append("\n");
-        sb.append(String.format("CLIP score:       %.4f%n", clipScore));
-        sb.append(String.format("Artifact conf:    %.4f%n", artifactScore));
-        if (northStarSim != null) sb.append(String.format("North star sim:   %.4f%n", northStarSim));
-        sb.append("\nVLM scores:\n");
-        for (String dim : new String[]{"photorealism","anatomical_coherence","interaction_plausibility",
-                "lighting_consistency","prompt_adherence"}) {
-            sb.append(String.format("  %-30s %s%n", dim, vlmScores.has(dim) ? vlmScores.get(dim).asText() : "n/a"));
-        }
-        if (vlmIssues.isArray() && vlmIssues.size() > 0) {
-            sb.append("\nIssues:\n");
-            for (JsonNode issue : vlmIssues) sb.append("  - ").append(issue.asText()).append("\n");
-        }
-        if (vlmRecs.isArray() && vlmRecs.size() > 0) {
-            sb.append("\nRecommendations:\n");
-            for (JsonNode rec : vlmRecs) sb.append("  - ").append(rec.asText()).append("\n");
-        }
-        sb.append("\nGeneration prompt: ").append(prompt).append("\n");
-        sb.append(String.format("Budget remaining: %d retries, %d inpaints%n",
-                budget.maxRetries() - budget.retriesUsed(),
-                budget.maxInpaints() - budget.inpaintsUsed()));
-        return sb.toString();
-    }
-
     // -- Budget -----------------------------------------------------------------
 
     private record Budget(int retriesUsed, int inpaintsUsed, int maxRetries, int maxInpaints) {}
@@ -1247,12 +1168,6 @@ public class ConversationAgent implements Runnable {
                 ((Number) r.get("inpaints_used")).intValue(),
                 ((Number) r.get("max_retries")).intValue(),
                 ((Number) r.get("max_inpaints")).intValue());
-    }
-
-    private void incrementBudget(String sessionUuid, String field) {
-        mgr.jdbc.update(
-                "UPDATE budget SET " + field + " = " + field + " + 1 WHERE session_uuid = :sess::uuid",
-                Map.of("sess", sessionUuid));
     }
 
     // -- Auto-title -------------------------------------------------------------
@@ -1377,46 +1292,6 @@ public class ConversationAgent implements Runnable {
                 log.warning("Memory extraction failed for " + conversationId + ": " + e.getMessage());
             }
         });
-    }
-
-    // -- Heuristic fallback -----------------------------------------------------
-
-    private JsonNode heuristicDecision(JsonNode msg, Budget budget) {
-        JsonNode scores  = msg.path("scores");
-        double clipScore = scores.path("clip_score").asDouble(0.0);
-        double vlmMean   = computeVlmMean(scores.path("vlm_scores"));
-
-        if (vlmMean >= mgr.cfg.getDecisions().getAcceptVlmMeanMin()
-                && clipScore >= mgr.cfg.getDecisions().getAcceptClipMin()) {
-            return mgr.mapper.createObjectNode()
-                    .put("decision", "accept").put("message", "Accepted. Quality thresholds met.")
-                    .put("reasoning", "Heuristic.").put("confidence", 0.7);
-        }
-        if (budget.retriesUsed() < budget.maxRetries()) {
-            return mgr.mapper.createObjectNode()
-                    .put("decision", "retry")
-                    .put("message", String.format("Retrying (vlm_mean=%.1f, clip=%.3f).", vlmMean, clipScore))
-                    .put("reasoning", "Heuristic retry.").put("confidence", 0.5)
-                    .put("retry_prompt", msg.path("prompt").asText(""));
-        }
-        return mgr.mapper.createObjectNode()
-                .put("decision", "give_up").put("message", "Budget exhausted.")
-                .put("reasoning", "Budget exhausted.").put("confidence", 1.0);
-    }
-
-    private double computeVlmMean(JsonNode vlmScores) {
-        String[] dims = {"photorealism","anatomical_coherence","interaction_plausibility",
-                         "lighting_consistency","prompt_adherence"};
-        double sum = 0; int count = 0;
-        for (String d : dims) if (vlmScores.has(d)) { sum += vlmScores.get(d).asDouble(); count++; }
-        return count > 0 ? sum / count : 0.0;
-    }
-
-    private boolean shouldThink(JsonNode msg, Budget budget) {
-        if (budget.retriesUsed() >= budget.maxRetries() && budget.inpaintsUsed() >= budget.maxInpaints()) return false;
-        double clipScore = msg.path("scores").path("clip_score").asDouble(0.0);
-        double vlmMean   = computeVlmMean(msg.path("scores").path("vlm_scores"));
-        return vlmMean >= 4.5 && vlmMean < 7.5 && clipScore >= 0.20;
     }
 
     // -- Helpers ----------------------------------------------------------------

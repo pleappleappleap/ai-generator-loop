@@ -60,7 +60,6 @@ public class ComfyUiWorker {
     private final ModelsConfig modelsConfig;
     private final RestClient comfyClient;
     private final GalleryBroadcastService galleryBroadcast;
-    private final ConversationAgentManager agentManager;
     private final Path workflowsDir;
     private final HttpClient httpClient;
 
@@ -71,7 +70,6 @@ public class ComfyUiWorker {
             ObjectMapper mapper,
             ModelsConfig modelsConfig,
             GalleryBroadcastService galleryBroadcast,
-            ConversationAgentManager agentManager,
             @Value("${comfyui.url:http://localhost:8188}") String comfyuiUrlParam,
             @Value("${ui.workflows-dir:loop/workflows}") String workflowsDirParam) {
         this.requiresNew = new TransactionTemplate(txManager);
@@ -81,7 +79,6 @@ public class ComfyUiWorker {
         this.mapper = mapper;
         this.modelsConfig = modelsConfig;
         this.galleryBroadcast = galleryBroadcast;
-        this.agentManager = agentManager;
         this.comfyClient = RestClient.builder().baseUrl(comfyuiUrlParam).build();
         this.workflowsDir = Path.of(workflowsDirParam).toAbsolutePath().normalize();
         this.httpClient = HttpClient.newHttpClient();
@@ -148,16 +145,7 @@ public class ComfyUiWorker {
                 } catch (Exception ex) {
                     log.warning("Failed to delete pending generation " + imageUuid + ": " + ex.getMessage());
                 }
-                // Notify the conversation agent so the model can self-diagnose and recover
-                try {
-                    JsonNode payload = mapper.readTree(payloadJson);
-                    String convId = payload.path("conversation_id").asText("");
-                    if (!convId.isBlank()) {
-                        agentManager.dispatch(convId, new AgentEvent.GenerationFailed(imageUuid, errMsg));
-                    }
-                } catch (Exception ex) {
-                    log.warning("Failed to dispatch GenerationFailed for " + imageUuid + ": " + ex.getMessage());
-                }
+                // Agent detects this via wait_for_result tool (missing row in all pipeline tables)
             }
         }
     }
