@@ -110,14 +110,21 @@ public class ConversationAgent implements Runnable {
             // First turn + no explicit style -> append a mandatory reminder to the system message
             // so the model cannot proceed to tool calls before asking about style.
             // (MLX server requires exactly one system message at the start; we cannot insert a second.)
-            if (messages.size() == 2 && !hasStyleKeyword(text)) {
+            if (messages.size() == 2) {
                 ObjectNode sysMsg = messages.get(0);
                 String existing = sysMsg.path("content").asText();
-                sysMsg.put("content", existing +
-                        "\n\nMANDATORY FIRST-TURN REQUIREMENT: The user has not specified a visual style.\n" +
-                        "You MUST respond with {\"decision\": \"await_input\"} asking a single focused question about style.\n" +
-                        "Do NOT call get_available_models(). Do NOT call search_web(). Do NOT generate.\n" +
-                        "Ask about style first. Nothing else is acceptable for this turn.");
+                if (!hasStyleKeyword(text)) {
+                    sysMsg.put("content", existing +
+                            "\n\nMANDATORY FIRST-TURN REQUIREMENT: The user has not specified a visual style.\n" +
+                            "You MUST respond with {\"decision\": \"await_input\"} asking a single focused question about style.\n" +
+                            "Do NOT call get_available_models(). Do NOT call search_web(). Do NOT generate.\n" +
+                            "Ask about style first. Nothing else is acceptable for this turn.");
+                } else {
+                    sysMsg.put("content", existing +
+                            "\n\nFIRST-TURN NOTE: The user has already specified a visual style. " +
+                            "Do NOT ask about style, mood, shot type, or any other stylistic preference. " +
+                            "Proceed directly: call get_available_models() and start working.");
+                }
             }
 
             // If the prior assistant turn proposed an install and the user just approved it,
