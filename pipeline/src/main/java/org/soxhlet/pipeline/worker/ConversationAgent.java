@@ -44,7 +44,7 @@ public class ConversationAgent implements Runnable {
     // Per-conversation workflow state (workflow_id, session_uuid, workflow_path)
     private Map<String, String> workflowState = null;
 
-    // Download tracking: filename → expected total bytes / destination directory
+    // Download tracking: filename -> expected total bytes / destination directory
     private final Map<String, Long> downloadExpectedSizes = new ConcurrentHashMap<>();
     private final Map<String, Path> downloadDestDirs      = new ConcurrentHashMap<>();
 
@@ -64,7 +64,7 @@ public class ConversationAgent implements Runnable {
         queue.offer(new AgentEvent.UserMessage("__stop__")); // unblock take()
     }
 
-    // ── Main loop ──────────────────────────────────────────────────────────────
+    // -- Main loop --------------------------------------------------------------
 
     @Override
     public void run() {
@@ -92,7 +92,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── User message handling ──────────────────────────────────────────────────
+    // -- User message handling --------------------------------------------------
 
     private static boolean hasStyleKeyword(String text) {
         String t = text.toLowerCase();
@@ -109,22 +109,23 @@ public class ConversationAgent implements Runnable {
         try {
             List<ObjectNode> messages = buildConversation(conversationId);
 
-            // First turn + no explicit style → inject a mandatory reminder before the user message
+            // First turn + no explicit style -> append a mandatory reminder to the system message
             // so the model cannot proceed to tool calls before asking about style.
+            // (MLX server requires exactly one system message at the start; we cannot insert a second.)
             if (messages.size() == 2 && !hasStyleKeyword(text)) {
-                messages.add(1, mgr.mapper.createObjectNode()
-                        .put("role", "system")
-                        .put("content",
-                             "MANDATORY FIRST-TURN REQUIREMENT: The user has not specified a visual style.\n" +
-                             "You MUST respond with {\"decision\": \"await_input\"} asking a single focused question about style.\n" +
-                             "Do NOT call get_available_models(). Do NOT call search_web(). Do NOT generate.\n" +
-                             "Ask about style first. Nothing else is acceptable for this turn."));
+                ObjectNode sysMsg = messages.get(0);
+                String existing = sysMsg.path("content").asText();
+                sysMsg.put("content", existing +
+                        "\n\nMANDATORY FIRST-TURN REQUIREMENT: The user has not specified a visual style.\n" +
+                        "You MUST respond with {\"decision\": \"await_input\"} asking a single focused question about style.\n" +
+                        "Do NOT call get_available_models(). Do NOT call search_web(). Do NOT generate.\n" +
+                        "Ask about style first. Nothing else is acceptable for this turn.");
             }
 
             JsonNode decision = runReasoningLoop(messages, false);
 
             if (decision == null) {
-                mgr.chatBroadcast.sendError(conversationId, "The model did not respond — please try again in a moment.");
+                mgr.chatBroadcast.sendError(conversationId, "The model did not respond. Please try again in a moment.");
                 return;
             }
 
@@ -147,12 +148,12 @@ public class ConversationAgent implements Runnable {
                 if ("generate".equals(action)) {
                     Map<String, String> state = queueNewGeneration(decision);
                     if (state != null) {
-                        if (message == null) message = "On it — generation submitted.";
+                        if (message == null) message = "On it. Generation submitted.";
                         mgr.galleryBroadcast.decision("", "generate", "", 1.0,
                                 state.get("workflow_id"), conversationId);
                     } else {
                         message = (message != null ? message + "\n\n" : "") +
-                                  "Failed to queue generation — no workflow available or an internal error occurred.";
+                                  "Failed to queue generation. No workflow is available or an internal error occurred.";
                     }
                 }
             }
@@ -174,7 +175,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── Verdict (scoring result) handling ─────────────────────────────────────
+    // -- Verdict (scoring result) handling -------------------------------------
 
     private void processVerdict(String imageUuid, String payloadJson) {
         try {
@@ -187,7 +188,7 @@ public class ConversationAgent implements Runnable {
                     "SELECT status FROM conversations WHERE conversation_id = :id::uuid",
                     Map.of("id", conversationId), String.class);
             if (!statusList.isEmpty() && "cancelled".equals(statusList.get(0))) {
-                log.info("Conversation " + conversationId + " cancelled — giving up for " + imageUuid);
+                log.info("Conversation " + conversationId + " cancelled - giving up for " + imageUuid);
                 completeTx(imageUuid, msg, "give_up", null);
                 return;
             }
@@ -201,7 +202,7 @@ public class ConversationAgent implements Runnable {
             JsonNode decision = runReasoningLoop(messages, thinkFirst);
 
             if (decision != null && "escalate".equals(decision.path("decision").asText("")) && !thinkFirst) {
-                log.info("Escalate with thinking=off — retrying with thinking for " + imageUuid);
+                log.info("Escalate with thinking=off - retrying with thinking for " + imageUuid);
                 JsonNode second = runReasoningLoop(buildConversation(conversationId, null), true);
                 if (second != null) decision = second;
             }
@@ -262,13 +263,13 @@ public class ConversationAgent implements Runnable {
 
                     case "retry", "inpaint", "generate" -> {
                         if ("inpaint".equals(action)) {
-                            log.info("Inpaint not implemented — downgrading to retry for " + imageUuid);
+                            log.info("Inpaint not implemented - downgrading to retry for " + imageUuid);
                         }
                         Budget budget = loadBudget(sessionUuid);
                         if (budget.retriesUsed() >= budget.maxRetries()) {
                             mgr.jdbc.update("UPDATE images SET decision = 'give_up' WHERE image_uuid = :id::uuid",
                                     Map.of("id", imageUuid));
-                            log.info("Retry budget exhausted — giving up for " + imageUuid);
+                            log.info("Retry budget exhausted - giving up for " + imageUuid);
                             break;
                         }
                         incrementBudget(sessionUuid, "retries_used");
@@ -308,7 +309,7 @@ public class ConversationAgent implements Runnable {
                         retryMsg.set("loras",            retryLoras);
 
                         mgr.jmsTemplate.convertAndSend("loop.retry", mgr.mapper.writeValueAsString(retryMsg));
-                        log.info("Retry queued: " + imageUuid + " → " + newImageUuid + " seq=" + newSeq);
+                        log.info("Retry queued: " + imageUuid + " -> " + newImageUuid + " seq=" + newSeq);
                     }
 
                     case "give_up" -> {
@@ -331,7 +332,7 @@ public class ConversationAgent implements Runnable {
         });
     }
 
-    // ── Reasoning loop ─────────────────────────────────────────────────────────
+    // -- Reasoning loop ---------------------------------------------------------
 
     private JsonNode runReasoningLoop(List<ObjectNode> messages, boolean thinkingEnabled) {
         int maxTokens = thinkingEnabled ? mgr.cfg.getMaxTokensThinking() : mgr.cfg.getMaxTokens();
@@ -393,7 +394,7 @@ public class ConversationAgent implements Runnable {
 
             conversation.add((ObjectNode) message.deepCopy());
 
-            // Check for tool calls by presence in the message, not finish_reason —
+            // Check for tool calls by presence in the message, not finish_reason  - 
             // local model servers often return finish_reason:"stop" even for tool calls.
             JsonNode toolCallsNode = message.path("tool_calls");
             if (toolCallsNode.isArray() && toolCallsNode.size() > 0) {
@@ -421,14 +422,14 @@ public class ConversationAgent implements Runnable {
                 // Model produced plain text instead of a tool call or JSON decision.
                 // Inject a nudge and force tool_choice:required on the next call.
                 if (!lastChance) {
-                    log.warning("LLM narrated instead of acting (" + raw.substring(0, Math.min(60, raw.length())) + "…) — forcing tool call");
+                    log.warning("LLM narrated instead of acting (" + raw.substring(0, Math.min(60, raw.length())) + "...) - forcing tool call");
                     forceToolUse = true;
                     conversation.add(mgr.mapper.createObjectNode()
                             .put("role", "user")
                             .put("content", "Call the appropriate tool now, or output your JSON decision."));
                     continue;
                 }
-                // Last chance exhausted — surface as await_input so the user sees it.
+                // Last chance exhausted - surface as await_input so the user sees it.
                 return mgr.mapper.createObjectNode()
                         .put("decision",   "await_input")
                         .put("message",    raw)
@@ -441,7 +442,7 @@ public class ConversationAgent implements Runnable {
         return null;
     }
 
-    // ── Tool definitions ───────────────────────────────────────────────────────
+    // -- Tool definitions -------------------------------------------------------
 
     private ArrayNode buildToolDefinitions() {
         ArrayNode tools = mgr.mapper.createArrayNode();
@@ -522,7 +523,7 @@ public class ConversationAgent implements Runnable {
         return tool;
     }
 
-    // ── Tool execution ─────────────────────────────────────────────────────────
+    // -- Tool execution ---------------------------------------------------------
 
     private String executeToolCall(String toolName, String argsJson, List<ObjectNode> conversation) {
         return switch (toolName) {
@@ -593,7 +594,7 @@ public class ConversationAgent implements Runnable {
             StringBuilder sb = new StringBuilder();
             appendModelList(sb, "Checkpoints", "/object_info/CheckpointLoaderSimple",
                     "CheckpointLoaderSimple", "ckpt_name",
-                    "  (none — install a checkpoint via install_model)\n");
+                    "  (none - install a checkpoint via install_model)\n");
             appendModelList(sb, "LoRAs",       "/object_info/LoraLoader",
                     "LoraLoader",             "lora_name",   "  (none installed)\n");
             appendModelList(sb, "ControlNets", "/object_info/ControlNetLoader",
@@ -684,7 +685,7 @@ public class ConversationAgent implements Runnable {
                         HttpResponse.BodyHandlers.discarding());
                 int status = resp.statusCode();
                 if (status == 404) {
-                    return "Error: file not found on HuggingFace — " + repoId + "/" + filename +
+                    return "Error: file not found on HuggingFace - " + repoId + "/" + filename +
                            " returned 404. Call search_web to find the correct repo and filename.";
                 }
                 if (status >= 400) {
@@ -695,13 +696,13 @@ public class ConversationAgent implements Runnable {
                         .map(Long::parseLong).orElse(-1L);
                 if (contentLength > 0 && contentLength < 1_000_000) {
                     return "Error: " + repoId + "/" + filename + " is only " + contentLength +
-                           " bytes — this is not a model file (pointer or error page). " +
+                           " bytes - this is not a model file (pointer or error page). " +
                            "Call search_web to find the correct filename.";
                 }
                 downloadExpectedSizes.put(filename, contentLength);
             } catch (Exception e) {
                 log.warning("Pre-download HEAD check failed for " + repoId + "/" + filename + ": " + e.getMessage());
-                // Continue anyway — network issue, not a bad file
+                // Continue anyway - network issue, not a bad file
             }
 
             String subdir = switch (modelType) {
@@ -722,10 +723,10 @@ public class ConversationAgent implements Runnable {
                     .redirectErrorStream(true)
                     .start();
 
-            log.info("Model download started: " + repoId + "/" + filename + " → " + destDir);
+            log.info("Model download started: " + repoId + "/" + filename + " -> " + destDir);
             mgr.chatBroadcast.sendChunk(conversationId,
-                    "Downloading **" + filename + "** from `" + repoId + "`…");
-            return "Download started: " + filename + " → " + destDir +
+                    "Downloading **" + filename + "** from `" + repoId + "`...");
+            return "Download started: " + filename + " -> " + destDir +
                    ". Call wait_for_download(\"" + filename + "\") now.";
         } catch (Exception e) {
             return "Error starting download: " + e.getMessage();
@@ -792,14 +793,14 @@ public class ConversationAgent implements Runnable {
         if (total > 0 && downloaded > 0) {
             double pct = Math.min(100.0, (double) downloaded / total * 100.0);
             int filled = (int) (pct / 5.0);
-            String bar = "█".repeat(filled) + "░".repeat(20 - filled);
-            return String.format("**%s** — %s / %s [%s] %.0f%%",
+            String bar = "#".repeat(filled) + ".".repeat(20 - filled);
+            return String.format("**%s** - %s / %s [%s] %.0f%%",
                     filename, humanBytes(downloaded), humanBytes(total), bar, pct);
         } else if (total > 0) {
-            return String.format("**%s** — %s total, %ds elapsed",
+            return String.format("**%s** - %s total, %ds elapsed",
                     filename, humanBytes(total), elapsedSec);
         } else {
-            return String.format("**%s** — %ds elapsed", filename, elapsedSec);
+            return String.format("**%s** - %ds elapsed", filename, elapsedSec);
         }
     }
 
@@ -854,7 +855,7 @@ public class ConversationAgent implements Runnable {
             log.info("System prompt updated (" + content.length() + " chars)");
             if (!conversation.isEmpty()) {
                 String ctx = conversation.get(0).path("content").asText("");
-                int sep = ctx.indexOf("\n\n═══ CURRENT CONTEXT");
+                int sep = ctx.indexOf("\n\n=== CURRENT CONTEXT");
                 conversation.get(0).put("content", sep >= 0 ? content + ctx.substring(sep) : content);
             }
             return "System prompt updated. Call get_system_prompt to verify.";
@@ -863,7 +864,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── Conversation building ──────────────────────────────────────────────────
+    // -- Conversation building --------------------------------------------------
 
     private List<ObjectNode> buildConversation(String convId) {
         return buildConversation(convId, null);
@@ -898,7 +899,7 @@ public class ConversationAgent implements Runnable {
     }
 
     private String buildContextBlock() {
-        StringBuilder sb = new StringBuilder("═══ CURRENT CONTEXT ═════════════════════════════════════════════\n");
+        StringBuilder sb = new StringBuilder("=== CURRENT CONTEXT =============================================\n");
 
         String northStar = mgr.contextService.northStar();
         if (northStar != null) sb.append("North star:\n").append(northStar).append("\n\n");
@@ -916,7 +917,7 @@ public class ConversationAgent implements Runnable {
         return sb.toString();
     }
 
-    // ── New generation ─────────────────────────────────────────────────────────
+    // -- New generation ---------------------------------------------------------
 
     private Map<String, String> queueNewGeneration(JsonNode decision) {
         try {
@@ -1002,7 +1003,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── VLM eval prompt ────────────────────────────────────────────────────────
+    // -- VLM eval prompt --------------------------------------------------------
 
     private void handleVlmEvalPrompt(JsonNode decision) {
         String evalPrompt = ConversationAgentManager.nullIfBlank(decision.path("vlm_eval_prompt").asText(""));
@@ -1017,7 +1018,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── Chat message persistence ───────────────────────────────────────────────
+    // -- Chat message persistence -----------------------------------------------
 
     void saveChatMessage(String workflowId, String role, String content) {
         if (content == null || content.isBlank()) return;
@@ -1042,7 +1043,7 @@ public class ConversationAgent implements Runnable {
         }
     }
 
-    // ── Scoring context ────────────────────────────────────────────────────────
+    // -- Scoring context --------------------------------------------------------
 
     private String buildScoringMessage(String imageUuid, JsonNode msg, Budget budget) {
         JsonNode scores       = msg.path("scores");
@@ -1089,7 +1090,7 @@ public class ConversationAgent implements Runnable {
         return sb.toString();
     }
 
-    // ── Budget ─────────────────────────────────────────────────────────────────
+    // -- Budget -----------------------------------------------------------------
 
     private record Budget(int retriesUsed, int inpaintsUsed, int maxRetries, int maxInpaints) {}
 
@@ -1117,7 +1118,7 @@ public class ConversationAgent implements Runnable {
                 Map.of("sess", sessionUuid));
     }
 
-    // ── Auto-title ─────────────────────────────────────────────────────────────
+    // -- Auto-title -------------------------------------------------------------
 
     private void maybeAutoTitle(List<ObjectNode> messages) {
         List<String> names = mgr.jdbc.queryForList(
@@ -1163,7 +1164,7 @@ public class ConversationAgent implements Runnable {
         });
     }
 
-    // ── Conversation memory ────────────────────────────────────────────────────
+    // -- Conversation memory ----------------------------------------------------
 
     private String loadConversationMemory(String convId) {
         if (convId == null) return null;
@@ -1171,7 +1172,7 @@ public class ConversationAgent implements Runnable {
                 "SELECT content FROM conversation_memory WHERE conversation_id = :id::uuid",
                 Map.of("id", convId), String.class);
         if (rows.isEmpty()) return null;
-        return "═══ CONVERSATION MEMORY ══════════════════════════════════════════\n" + rows.get(0) + "\n";
+        return "=== CONVERSATION MEMORY ==========================================\n" + rows.get(0) + "\n";
     }
 
     private void maybeExtractMemory() {
@@ -1241,7 +1242,7 @@ public class ConversationAgent implements Runnable {
         });
     }
 
-    // ── Heuristic fallback ─────────────────────────────────────────────────────
+    // -- Heuristic fallback -----------------------------------------------------
 
     private JsonNode heuristicDecision(JsonNode msg, Budget budget) {
         JsonNode scores  = msg.path("scores");
@@ -1251,7 +1252,7 @@ public class ConversationAgent implements Runnable {
         if (vlmMean >= mgr.cfg.getDecisions().getAcceptVlmMeanMin()
                 && clipScore >= mgr.cfg.getDecisions().getAcceptClipMin()) {
             return mgr.mapper.createObjectNode()
-                    .put("decision", "accept").put("message", "Accepted — quality thresholds met.")
+                    .put("decision", "accept").put("message", "Accepted. Quality thresholds met.")
                     .put("reasoning", "Heuristic.").put("confidence", 0.7);
         }
         if (budget.retriesUsed() < budget.maxRetries()) {
@@ -1281,7 +1282,7 @@ public class ConversationAgent implements Runnable {
         return vlmMean >= 4.5 && vlmMean < 7.5 && clipScore >= 0.20;
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────────
+    // -- Helpers ----------------------------------------------------------------
 
     private List<String> listWorkflowNames() {
         try {
@@ -1319,7 +1320,7 @@ public class ConversationAgent implements Runnable {
     }
 
     private void initiateShutdown() {
-        log.info("Escalation — initiating shutdown");
+        log.info("Escalation - initiating shutdown");
         Thread.ofVirtual().start(() -> {
             try { Thread.sleep(500); } catch (InterruptedException ignored) {}
             SpringApplication.exit(mgr.applicationContext, () -> 0);
@@ -1336,7 +1337,7 @@ public class ConversationAgent implements Runnable {
         return false;
     }
 
-    // ── Model ID resolution (called once by manager at startup) ───────────────
+    // -- Model ID resolution (called once by manager at startup) ---------------
 
     static String resolveModelId(String configured, RestClient llmClient, ObjectMapper mapper) {
         if (configured != null && !configured.isBlank()

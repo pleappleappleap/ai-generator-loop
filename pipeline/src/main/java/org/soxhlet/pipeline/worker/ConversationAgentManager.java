@@ -86,7 +86,7 @@ public class ConversationAgentManager {
         this.comfyuiModelsDir = Path.of(comfyuiModelsDirStr).toAbsolutePath().normalize();
         this.resolvedModelId  = ConversationAgent.resolveModelId(cfg.getModel(), llmClient, mapper);
 
-        log.info("ConversationAgentManager ready — model: " + this.resolvedModelId);
+        log.info("ConversationAgentManager ready - model: " + this.resolvedModelId);
     }
 
     /** Route any event to the persistent agent for this conversation. */
@@ -107,7 +107,7 @@ public class ConversationAgentManager {
             String convId  = nullIfBlank(msg.path("conversation_id").asText(""));
             String imgUuid = msg.path("image_uuid").asText("");
             if (convId == null || imgUuid.isBlank()) {
-                log.warning("Verdict missing conversation_id or image_uuid — dropping");
+                log.warning("Verdict missing conversation_id or image_uuid - dropping");
                 return;
             }
             // Persist first so it survives a crash before the agent processes it
@@ -127,7 +127,7 @@ public class ConversationAgentManager {
 
     void scheduleLlmRestart() {
         Thread.ofVirtual().name("llm-watchdog").start(() -> {
-            log.info("LLM response timeout — restarting tactical LLM...");
+            log.info("LLM response timeout - restarting tactical LLM...");
             try {
                 int rc = new ProcessBuilder(llmRestartScript, "restart")
                         .inheritIO()
@@ -140,7 +140,7 @@ public class ConversationAgentManager {
         });
     }
 
-    // ── Internal ───────────────────────────────────────────────────────────────
+    // -- Internal ---------------------------------------------------------------
 
     private ConversationAgent createAgent(String conversationId) {
         ConversationAgent agent = new ConversationAgent(conversationId, this);

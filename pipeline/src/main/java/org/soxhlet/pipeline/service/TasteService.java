@@ -95,7 +95,7 @@ public class TasteService {
             if (comment != null && !comment.isBlank()) prompt.append(" | comment: ").append(comment);
             prompt.append("\n");
         }
-        prompt.append("\nRespond with the paragraph only — no preamble, no JSON.");
+        prompt.append("\nRespond with the paragraph only - no preamble, no JSON.");
 
         try {
             ObjectNode messages = mapper.createObjectNode();

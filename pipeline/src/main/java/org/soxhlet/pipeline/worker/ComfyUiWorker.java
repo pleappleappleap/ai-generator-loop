@@ -89,7 +89,7 @@ public class ComfyUiWorker {
         httpClient.close();
     }
 
-    // ── JMS listeners — stage only, return immediately ─────────────────────────
+    // -- JMS listeners - stage only, return immediately -------------------------
     // Tx1: JMS ACK + staging INSERT commit together when the @Transactional method
     // returns. The poller below picks up the row and does the long ComfyUI work.
 
@@ -117,7 +117,7 @@ public class ComfyUiWorker {
                         "payload", body));
     }
 
-    // ── Polling loop — processes staged work (normal path + crash recovery) ────
+    // -- Polling loop - processes staged work (normal path + crash recovery) ----
     // fixedDelay ensures only one execution is in flight at a time; the long
     // ComfyUI call naturally gates the next poll.
 
@@ -139,7 +139,7 @@ public class ComfyUiWorker {
             log.warning("Generation processing failed for " + imageUuid + ": " + e.getMessage());
             String msg = e.getMessage();
             if (msg != null && (msg.contains(" 4") || msg.contains("prompt_outputs_failed_validation"))) {
-                log.warning("Terminal client error for " + imageUuid + " — removing from pending queue to stop retry loop");
+                log.warning("Terminal client error for " + imageUuid + " - removing from pending queue to stop retry loop");
                 try {
                     jdbc.update("DELETE FROM pending_generations WHERE image_uuid = :id::uuid", Map.of("id", imageUuid));
                 } catch (Exception ex) {
@@ -292,7 +292,7 @@ public class ComfyUiWorker {
                         .addValue("maxInpaints", maxInpaints));
     }
 
-    // ── Workflow patching ──────────────────────────────────────────────────────
+    // -- Workflow patching ------------------------------------------------------
 
     private ObjectNode loadWorkflow(String workflowPath) throws Exception {
         Path resolved = Path.of(workflowPath).toAbsolutePath().normalize();
@@ -387,7 +387,7 @@ public class ComfyUiWorker {
     private ObjectNode injectLoras(ObjectNode workflow, JsonNode lorasNode, String modelType) {
         if (!lorasNode.isArray() || lorasNode.size() == 0) return workflow;
 
-        // Build registry: name → config entry
+        // Build registry: name -> config entry
         Map<String, ModelsConfig.LoraEntry> registry = new HashMap<>();
         for (ModelsConfig.LoraEntry e : modelsConfig.lorasFor(modelType)) {
             registry.put(e.getName(), e);
@@ -405,7 +405,7 @@ public class ComfyUiWorker {
                 resolved.put("name", entry.getName());
             } else {
                 // Treat name as filename directly (for manually-installed LoRAs not in config)
-                log.info("LoRA '" + name + "' not in config registry — using as filename directly");
+                log.info("LoRA '" + name + "' not in config registry - using as filename directly");
                 resolved.put("filename", name);
                 resolved.put("strength_model", req.has("strength_model") ? req.get("strength_model").asDouble() : 1.0);
                 resolved.put("strength_clip",  req.has("strength_clip")  ? req.get("strength_clip").asDouble()  : 1.0);
@@ -595,7 +595,7 @@ public class ComfyUiWorker {
         return null;
     }
 
-    // ── ComfyUI HTTP + WebSocket ───────────────────────────────────────────────
+    // -- ComfyUI HTTP + WebSocket -----------------------------------------------
 
     private String[] submitWorkflow(ObjectNode workflow, String promptOverride) throws Exception {
         if (promptOverride != null && !promptOverride.isBlank()) {
@@ -689,7 +689,7 @@ public class ComfyUiWorker {
         throw new RuntimeException("No image output found for prompt " + promptId);
     }
 
-    // ── Utilities ──────────────────────────────────────────────────────────────
+    // -- Utilities --------------------------------------------------------------
 
     private static String nullIfBlank(String s) {
         return (s == null || s.isBlank()) ? null : s;

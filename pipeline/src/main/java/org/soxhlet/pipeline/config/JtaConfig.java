@@ -38,7 +38,7 @@ public class JtaConfig {
 
     /**
      * Plain (non-XA) DataSource for Narayana's JDBC object store.
-     * A separate non-XA connection is required — using an XA connection for the
+     * A separate non-XA connection is required - using an XA connection for the
      * transaction log itself would be circular. A pool of 2 is ample for the
      * prepare/commit write rate.
      *

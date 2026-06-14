@@ -33,7 +33,7 @@ public class WorkflowController {
         this.mapper = mapper;
     }
 
-    // ── POST /workflow/new ─────────────────────────────────────────────────────
+    // -- POST /workflow/new -----------------------------------------------------
 
     @PostMapping("/workflow/new")
     public Map<String, Object> workflowNew(@RequestBody Map<String, Object> req) {
@@ -82,7 +82,7 @@ public class WorkflowController {
                 "workflow_path", workflowPath);
     }
 
-    // ── POST /workflow/{id}/resume ─────────────────────────────────────────────
+    // -- POST /workflow/{id}/resume ---------------------------------------------
 
     @PostMapping("/workflow/{workflowId}/resume")
     public Map<String, Object> workflowResume(
@@ -138,7 +138,7 @@ public class WorkflowController {
                 "workflow_path", workflowPath);
     }
 
-    // ── POST /workflow/{id}/start-run ──────────────────────────────────────────
+    // -- POST /workflow/{id}/start-run ------------------------------------------
 
     @PostMapping("/workflow/{workflowId}/start-run")
     public Map<String, Object> workflowStartRun(
@@ -182,7 +182,7 @@ public class WorkflowController {
         }
     }
 
-    // ── Budget helper ──────────────────────────────────────────────────────────
+    // -- Budget helper ----------------------------------------------------------
 
     private String insertBudget(String workflowId, String conversationId,
                                  int maxRetries, int maxInpaints) {

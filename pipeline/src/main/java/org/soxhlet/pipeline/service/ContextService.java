@@ -66,7 +66,7 @@ public class ContextService {
                 embeddingStr = result.get("embedding").toString();
             }
         } catch (Exception e) {
-            log.warning("CLIP /embed_text failed for north_star — storing without embedding: " + e.getMessage());
+            log.warning("CLIP /embed_text failed for north_star - storing without embedding: " + e.getMessage());
         }
 
         jdbc.update("UPDATE north_star SET superseded_at = now() WHERE superseded_at IS NULL", Map.of());

@@ -69,7 +69,7 @@ public class Scorer {
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    // ── JMS listener — stage only, return immediately ──────────────────────────
+    // -- JMS listener - stage only, return immediately --------------------------
 
     @Transactional
     @JmsListener(destination = "loop.generated")
@@ -84,7 +84,7 @@ public class Scorer {
                         "payload", body));
     }
 
-    // ── Polling loop — processes staged work (normal path + crash recovery) ────
+    // -- Polling loop - processes staged work (normal path + crash recovery) ----
 
     @Scheduled(fixedDelay = 2000)
     public void pollAndProcess() {
@@ -103,7 +103,7 @@ public class Scorer {
         }
     }
 
-    // ── Core scoring logic ─────────────────────────────────────────────────────
+    // -- Core scoring logic -----------------------------------------------------
 
     private void scoreImage(String imageUuid, JsonNode msg) throws Exception {
         String sessionUuid      = msg.get("session_uuid").asText();
@@ -118,7 +118,7 @@ public class Scorer {
 
         log.info("Scoring image " + imageUuid);
 
-        // ── CLIP sidecar ───────────────────────────────────────────────────────
+        // -- CLIP sidecar -------------------------------------------------------
         JsonNode clipResult = clipClient.post().uri("/score")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("image_uuid", imageUuid, "image_path", imagePath, "prompt", prompt))
@@ -129,7 +129,7 @@ public class Scorer {
         String embeddingStr = (imageEmbedding == null || imageEmbedding.isNull() || imageEmbedding.isMissingNode())
                 ? null : imageEmbedding.toString();
 
-        // ── Artifact sidecar ───────────────────────────────────────────────────
+        // -- Artifact sidecar ---------------------------------------------------
         JsonNode artifactResult = artifactClient.post().uri("/score")
                 .contentType(MediaType.APPLICATION_JSON)
                 .body(Map.of("image_uuid", imageUuid, "image_path", imagePath))
@@ -137,7 +137,7 @@ public class Scorer {
                 .body(JsonNode.class);
         double aiConfidence = artifactResult.path("ai_confidence").asDouble(1.0);
 
-        // ── VLM sidecar ────────────────────────────────────────────────────────
+        // -- VLM sidecar --------------------------------------------------------
         String vlmEvalPrompt = null;
         if (conversationId != null) {
             List<String> prompts = jdbc.queryForList(
@@ -157,7 +157,7 @@ public class Scorer {
                 .retrieve()
                 .body(JsonNode.class);
 
-        // ── North star similarity ──────────────────────────────────────────────
+        // -- North star similarity ----------------------------------------------
         Double northStarSimilarity = null;
         if (embeddingStr != null) {
             List<Double> simRows = jdbc.queryForList(
@@ -169,7 +169,7 @@ public class Scorer {
             if (!simRows.isEmpty()) northStarSimilarity = simRows.get(0);
         }
 
-        // ── Threshold logic ────────────────────────────────────────────────────
+        // -- Threshold logic ----------------------------------------------------
         String verdict;
         String rejectionReason = null;
         if (clipScore < clipThreshold) {
@@ -182,7 +182,7 @@ public class Scorer {
             verdict = "candidate";
         }
 
-        // ── VLM sub-fields ─────────────────────────────────────────────────────
+        // -- VLM sub-fields -----------------------------------------------------
         ArrayNode issuesNode = vlmResult.has("issues")
                 ? (ArrayNode) vlmResult.get("issues") : mapper.createArrayNode();
         ArrayNode recsNode = vlmResult.has("recommendations")
@@ -196,7 +196,7 @@ public class Scorer {
             if (vlmResult.has(field)) vlmScores.set(field, vlmResult.get(field));
         }
 
-        // ── Tx2: delete staging row, upsert scores, publish verdict ───────────
+        // -- Tx2: delete staging row, upsert scores, publish verdict -----------
         final String  finalVerdict         = verdict;
         final String  finalRejectionReason = rejectionReason;
         final String  finalEmbedding       = embeddingStr;

@@ -29,7 +29,7 @@ public class HistoryController {
             return Map.of("ok", true, "chat", List.of(), "feedback", List.of());
         }
 
-        // Chat messages — all for the conversation, or workflow-scoped if provided
+        // Chat messages - all for the conversation, or workflow-scoped if provided
         List<Map<String, Object>> chatRaw = jdbc.queryForList(
                 "SELECT role, content, created_at::text FROM (" +
                 "  SELECT role, content, created_at FROM chat_messages " +
