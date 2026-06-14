@@ -275,17 +275,30 @@ public class ConversationAgent implements Runnable {
                     // as a tool instead of emitting it as JSON, treat it as the actual decision.
                     if ("await_input".equals(toolName) || "accept".equals(toolName)
                             || "give_up".equals(toolName) || "escalate".equals(toolName)) {
-                        log.warning("Model called '" + toolName + "' as tool — treating as JSON decision");
                         try {
                             JsonNode decArgs = mgr.mapper.readTree(argsJson);
-                            ObjectNode decision = mgr.mapper.createObjectNode();
-                            decision.put("decision", toolName);
-                            if (decArgs.has("message"))    decision.set("message",    decArgs.get("message"));
-                            if (decArgs.has("image_uuid")) decision.set("image_uuid", decArgs.get("image_uuid"));
-                            if (decArgs.has("reasoning"))  decision.set("reasoning",  decArgs.get("reasoning"));
-                            decision.put("confidence", 0.8);
-                            return decision;
+                            String decMsg = decArgs.path("message").asText("").strip();
+                            if (!decMsg.isEmpty()) {
+                                log.warning("Model called '" + toolName + "' as tool — treating as JSON decision");
+                                ObjectNode decision = mgr.mapper.createObjectNode();
+                                decision.put("decision", toolName);
+                                decision.set("message", decArgs.get("message"));
+                                if (decArgs.has("image_uuid")) decision.set("image_uuid", decArgs.get("image_uuid"));
+                                if (decArgs.has("reasoning"))  decision.set("reasoning",  decArgs.get("reasoning"));
+                                decision.put("confidence", 0.8);
+                                return decision;
+                            }
                         } catch (Exception ignored) {}
+                        // Empty message — model is stuck in tool_choice:required and can't emit JSON.
+                        // Back off forcing so the next iteration allows a proper JSON decision.
+                        log.warning("Model called '" + toolName + "' as tool with empty message — releasing tool_choice constraint");
+                        forceToolUse = false;
+                        conversation.add(mgr.mapper.createObjectNode()
+                                .put("role", "tool")
+                                .put("tool_call_id", toolCall.path("id").asText())
+                                .put("content", "Output your proposal as a JSON decision: "
+                                        + "{\"decision\":\"await_input\",\"message\":\"<your question>\"}"));
+                        break; // break inner loop, continue outer loop with forceToolUse=false
                     }
 
                     // Cap search_web at 5 calls per turn — the model must propose after
