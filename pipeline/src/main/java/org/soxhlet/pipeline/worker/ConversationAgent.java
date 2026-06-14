@@ -208,6 +208,8 @@ public class ConversationAgent implements Runnable {
         Map<String, Integer> toolNameCounts = new java.util.HashMap<>();
         // Count total loop-detection fires; after threshold force a terminal decision.
         int loopDetectionFires = 0;
+        // Track prompts submitted this turn — submit_generation must vary the prompt each time.
+        Set<String> usedPrompts = new java.util.HashSet<>();
 
         for (int i = 0; i < SAFETY_LIMIT; i++) {
             boolean lastChance = (i == SAFETY_LIMIT - 1);
@@ -356,6 +358,25 @@ public class ConversationAgent implements Runnable {
                                 + "try a different query or propose what you know to the user via await_input.");
                         conversation.add(toolResult);
                         continue;
+                    }
+
+                    // submit_generation must use a new prompt every time.
+                    if ("submit_generation".equals(toolName)) {
+                        try {
+                            String submittedPrompt = mgr.mapper.readTree(argsJson).path("prompt").asText("").strip();
+                            if (!submittedPrompt.isEmpty() && !usedPrompts.add(submittedPrompt)) {
+                                log.warning("Duplicate prompt blocked [" + conversationId.substring(0, 8) + "]: " + submittedPrompt.substring(0, Math.min(80, submittedPrompt.length())));
+                                ObjectNode toolResult = mgr.mapper.createObjectNode();
+                                toolResult.put("role", "tool");
+                                toolResult.put("tool_call_id", toolCallId);
+                                toolResult.put("content",
+                                        "[DUPLICATE PROMPT] You already submitted this exact prompt. "
+                                        + "Each generation attempt MUST use a meaningfully different prompt. "
+                                        + "Review the scoring feedback and change the prompt before resubmitting.");
+                                conversation.add(toolResult);
+                                continue;
+                            }
+                        } catch (Exception ignored) {}
                     }
 
                     String result = executeToolCall(toolName, argsJson, conversation, conversationBase);
