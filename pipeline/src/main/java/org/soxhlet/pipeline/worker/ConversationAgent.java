@@ -570,22 +570,37 @@ public class ConversationAgent implements Runnable {
 
     private String validateCheckpointGraphOps(JsonNode decision) {
         JsonNode graphOps = decision.path("generate_graph_ops");
-        if (!graphOps.isArray()) return null;
-        Set<String> installed = null;
-        for (JsonNode op : graphOps) {
-            if (!"set_input".equals(op.path("op").asText())) continue;
-            if (!"ckpt_name".equals(op.path("input").asText())) continue;
-            String requested = op.path("value").asText("");
-            if (requested.isBlank()) continue;
-            if (installed == null) installed = fetchInstalledCheckpoints();
-            if (!installed.contains(requested)) {
-                return "[GENERATION ERROR]\n" +
-                       "Checkpoint '" + requested + "' is not installed.\n" +
-                       "Installed checkpoints: " + installed + "\n" +
-                       "Call get_available_models() to see what is actually available, " +
-                       "then retry your generate decision using a set_input with an installed checkpoint name.";
+
+        // Check whether the model specified a checkpoint in graph_ops
+        String requestedCheckpoint = null;
+        if (graphOps.isArray()) {
+            for (JsonNode op : graphOps) {
+                if (!"set_input".equals(op.path("op").asText())) continue;
+                if (!"ckpt_name".equals(op.path("input").asText())) continue;
+                String v = op.path("value").asText("");
+                if (!v.isBlank()) { requestedCheckpoint = v; break; }
             }
         }
+
+        Set<String> installed = fetchInstalledCheckpoints();
+
+        if (requestedCheckpoint != null && !installed.contains(requestedCheckpoint)) {
+            return "[GENERATION ERROR]\n" +
+                   "Checkpoint '" + requestedCheckpoint + "' is not installed.\n" +
+                   "Installed checkpoints: " + installed + "\n" +
+                   "Call get_available_models() to see what is actually available, " +
+                   "then retry your generate decision using a set_input with an installed checkpoint name.";
+        }
+
+        if (installed.isEmpty()) {
+            return "[GENERATION ERROR]\n" +
+                   "No checkpoints are installed. You cannot generate without one.\n" +
+                   "Follow the install_model protocol: call get_available_models() to confirm, " +
+                   "call search_web to find the right checkpoint for the user's creative goal, " +
+                   "propose ONE specific model with repo_id and filename, then emit await_input " +
+                   "to get explicit user approval before calling install_model.";
+        }
+
         return null;
     }
 
