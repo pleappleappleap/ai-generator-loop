@@ -263,7 +263,25 @@ public class ConversationAgent implements Runnable {
 
             String raw    = message.path("content").asText("").strip();
             JsonNode parsed = parseDecisionJson(raw);
-            if (parsed != null) return parsed;
+            if (parsed != null) {
+                // Catch await_input used as narration: model wrapped "Let me check..."
+                // in a JSON decision instead of calling the tool. Only a genuine question
+                // to the user justifies stopping the loop.
+                if (!lastChance
+                        && "await_input".equals(parsed.path("decision").asText(""))
+                        && !parsed.path("message").asText("").contains("?")) {
+                    String stall = parsed.path("message").asText("");
+                    log.warning("Model stalled with await_input but no question ("
+                            + stall.substring(0, Math.min(80, stall.length())) + ") - forcing tool call");
+                    forceToolUse = true;
+                    conversation.add(mgr.mapper.createObjectNode()
+                            .put("role", "user")
+                            .put("content", "You emitted await_input without asking a question. "
+                                    + "Do not announce tool calls — call the tool directly now."));
+                    continue;
+                }
+                return parsed;
+            }
 
             if (!raw.isEmpty()) {
                 // Model produced plain text instead of a tool call or JSON decision.

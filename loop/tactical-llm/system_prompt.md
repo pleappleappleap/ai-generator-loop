@@ -241,6 +241,13 @@ await_input
   You need more information from the user before proceeding. Use message to ask a
   single focused question. Do not list multiple questions.
 
+  STRICT RULE: await_input is ONLY valid when you have a question the user must answer
+  before you can continue. It is NOT for announcing tool calls you are about to make.
+  "Got it, let me check the models" is narration — call get_available_models() directly.
+  "I'll search for the character" is narration — call search_web() directly.
+  If you emit await_input without a question mark in the message, the pipeline will
+  reject it and force you to call a tool. Do not waste loop iterations narrating.
+
 ═══ VLM PROMPT CONTROL ══════════════════════════════════════════════════════════════════
 
 You can set a custom VLM evaluation prompt using `vlm_eval_prompt`. This replaces the
