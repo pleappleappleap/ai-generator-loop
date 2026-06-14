@@ -436,8 +436,8 @@
     <div class="chat-msg system">Discuss your creative direction. Start a new conversation to begin.</div>
   </div>
   <div id="chat-input-row">
-    <textarea id="chat-input" placeholder="Create a conversation to start chatting…" rows="2"></textarea>
-    <button id="btn-send" disabled>Send</button>
+    <textarea id="chat-input" placeholder="Describe your vision to start a new conversation…" rows="2"></textarea>
+    <button id="btn-send">Send</button>
   </div>
 </aside>
 
@@ -508,11 +508,10 @@ function setLoading(btnId, loading, label) {
 }
 
 function updateChatEnabled() {
-  const enabled = Boolean(state.activeConvId);
-  document.getElementById('btn-send').disabled = !enabled;
-  document.getElementById('chat-input').placeholder = enabled
+  document.getElementById('btn-send').disabled = false;
+  document.getElementById('chat-input').placeholder = state.activeConvId
     ? 'Describe your vision…'
-    : 'Create a conversation to start chatting…';
+    : 'Describe your vision to start a new conversation…';
 }
 
 // ── WebSocket setup ────────────────────────────────────────────────────────────
@@ -999,10 +998,18 @@ document.getElementById('btn-new-session').onclick = async () => {
 
 
 // Chat input
-document.getElementById('btn-send').onclick = () => {
+document.getElementById('btn-send').onclick = async () => {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
   if (!text) return;
+  if (!state.activeConvId) {
+    try {
+      await createConversation('Untitled');
+    } catch (e) {
+      status(`Error: ${e.message}`);
+      return;
+    }
+  }
   input.value = '';
   sendChat(text);
 };
