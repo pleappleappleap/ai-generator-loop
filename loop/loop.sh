@@ -259,7 +259,6 @@ _health_rows() {
     component_check_healthy "http://localhost:${_CLIP_PORT}/health" \
         && printf "│ %-22s │ %-25s │\n" "clip_scorer" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "clip_scorer" "not ready"; ok=1; }
-    component_check_healthy "http://localhost:${_ARTIFACT_PORT}/health" \
     component_check_healthy "http://localhost:${_VLM_PORT}/health" \
         && printf "│ %-22s │ %-25s │\n" "vlm_scorer" "healthy" \
         || { printf "│ %-22s │ %-25s │\n" "vlm_scorer" "not ready"; ok=1; }
