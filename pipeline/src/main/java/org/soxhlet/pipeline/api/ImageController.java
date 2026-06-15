@@ -34,8 +34,8 @@ public class ImageController {
     @GetMapping("/image/{imageUuid}")
     public ResponseEntity<byte[]> getImage(@PathVariable String imageUuid) {
         List<String> paths = jdbc.queryForList(
-                "SELECT image_path FROM images WHERE image_uuid = :id::uuid AND image_path IS NOT NULL",
-                Map.of("id", imageUuid), String.class);
+                "SELECT image_path FROM images WHERE image_uuid = :id AND image_path IS NOT NULL",
+                Map.of("id", java.util.UUID.fromString(imageUuid)), String.class);
 
         if (paths.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)

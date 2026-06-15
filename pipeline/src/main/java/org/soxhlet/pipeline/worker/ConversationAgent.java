@@ -154,10 +154,10 @@ public class ConversationAgent implements Runnable {
             if ("accept".equals(action)) {
                 String imageUuid = decision.path("image_uuid").asText("");
                 requiresNew.execute(s -> {
-                    mgr.jdbc.update("UPDATE images SET decision = 'accepted' WHERE image_uuid = :id::uuid",
-                            Map.of("id", imageUuid));
-                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id::uuid",
-                            Map.of("id", imageUuid));
+                    mgr.jdbc.update("UPDATE images SET decision = 'accepted' WHERE image_uuid = :id",
+                            Map.of("id", UUID.fromString(imageUuid)));
+                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id",
+                            Map.of("id", UUID.fromString(imageUuid)));
                     return null;
                 });
                 String workflowId = workflowState != null ? workflowState.get("workflow_id") : null;
@@ -168,10 +168,10 @@ public class ConversationAgent implements Runnable {
             } else if ("give_up".equals(action)) {
                 String imageUuid = decision.path("image_uuid").asText("");
                 requiresNew.execute(s -> {
-                    mgr.jdbc.update("UPDATE images SET decision = 'give_up' WHERE image_uuid = :id::uuid",
-                            Map.of("id", imageUuid));
-                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id::uuid",
-                            Map.of("id", imageUuid));
+                    mgr.jdbc.update("UPDATE images SET decision = 'give_up' WHERE image_uuid = :id",
+                            Map.of("id", UUID.fromString(imageUuid)));
+                    mgr.jdbc.update("DELETE FROM pending_decisions WHERE image_uuid = :id",
+                            Map.of("id", UUID.fromString(imageUuid)));
                     return null;
                 });
             } else if ("escalate".equals(action)) {
@@ -679,7 +679,7 @@ public class ConversationAgent implements Runnable {
             sb.append("Pending generations in DB: ").append(pending).append("\n");
             if (pending != null && pending > 0) {
                 List<Map<String, Object>> stuck = mgr.jdbc.queryForList(
-                        "SELECT image_uuid::text, created_at FROM pending_generations ORDER BY created_at LIMIT 3",
+                        "SELECT image_uuid, created_at FROM pending_generations ORDER BY created_at LIMIT 3",
                         Map.of());
                 stuck.forEach(r -> sb.append("  - ").append(r.get("image_uuid"))
                         .append(" (since ").append(r.get("created_at")).append(")\n"));
@@ -1199,26 +1199,26 @@ public class ConversationAgent implements Runnable {
                 // Check scoring complete: images row with vlm_scores
                 List<Map<String, Object>> rows = mgr.jdbc.queryForList(
                     "SELECT image_path, verdict, rejection_reason, clip_score, " +
-                    "       north_star_similarity, vlm_scores::text AS vlm_scores, " +
-                    "       vlm_issues::text AS vlm_issues, vlm_recs::text AS vlm_recs, " +
+                    "       north_star_similarity, vlm_scores, vlm_issues, vlm_recs, " +
                     "       prompt, session_uuid " +
-                    "FROM images WHERE image_uuid = :id::uuid AND vlm_scores IS NOT NULL",
-                    Map.of("id", imageUuid));
+                    "FROM images WHERE image_uuid = :id AND vlm_scores IS NOT NULL",
+                    Map.of("id", UUID.fromString(imageUuid)));
 
                 if (!rows.isEmpty()) {
                     return buildWaitForResultResponse(imageUuid, rows.get(0));
                 }
 
                 // Check if still in pipeline
+                UUID imageUuidObj = UUID.fromString(imageUuid);
                 boolean generating = !mgr.jdbc.queryForList(
-                    "SELECT 1 FROM pending_generations WHERE image_uuid = :id::uuid",
-                    Map.of("id", imageUuid), Integer.class).isEmpty();
+                    "SELECT 1 FROM pending_generations WHERE image_uuid = :id",
+                    Map.of("id", imageUuidObj), Integer.class).isEmpty();
                 boolean scoring = !mgr.jdbc.queryForList(
-                    "SELECT 1 FROM pending_scorings WHERE image_uuid = :id::uuid",
-                    Map.of("id", imageUuid), Integer.class).isEmpty();
+                    "SELECT 1 FROM pending_scorings WHERE image_uuid = :id",
+                    Map.of("id", imageUuidObj), Integer.class).isEmpty();
                 boolean imageExists = !mgr.jdbc.queryForList(
-                    "SELECT 1 FROM images WHERE image_uuid = :id::uuid",
-                    Map.of("id", imageUuid), Integer.class).isEmpty();
+                    "SELECT 1 FROM images WHERE image_uuid = :id",
+                    Map.of("id", imageUuidObj), Integer.class).isEmpty();
 
                 if (!generating && !scoring && !imageExists) {
                     return "[GENERATION FAILED]\nimage_uuid: " + imageUuid + "\n\n" +
@@ -1245,13 +1245,24 @@ public class ConversationAgent implements Runnable {
             double clipScore = row.get("clip_score") != null ? ((Number) row.get("clip_score")).doubleValue() : 0;
             Double northStarSim = row.get("north_star_similarity") != null ? ((Number) row.get("north_star_similarity")).doubleValue() : null;
             String prompt = (String) row.get("prompt");
-            String sessionUuid = (String) row.get("session_uuid");
+            String sessionUuid = row.get("session_uuid").toString();
 
             JsonNode vlmScores = null; JsonNode vlmIssues = null; JsonNode vlmRecs = null;
             try {
-                if (row.get("vlm_scores") != null) vlmScores = mgr.mapper.readTree((String) row.get("vlm_scores"));
-                if (row.get("vlm_issues") != null) vlmIssues = mgr.mapper.readTree((String) row.get("vlm_issues"));
-                if (row.get("vlm_recs") != null) vlmRecs = mgr.mapper.readTree((String) row.get("vlm_recs"));
+                if (row.get("vlm_scores") != null)
+                    vlmScores = mgr.mapper.readTree(row.get("vlm_scores").toString());
+                if (row.get("vlm_issues") != null) {
+                    Object[] arr = (Object[]) ((java.sql.Array) row.get("vlm_issues")).getArray();
+                    ArrayNode node = mgr.mapper.createArrayNode();
+                    for (Object e : arr) node.add(e != null ? e.toString() : "");
+                    vlmIssues = node;
+                }
+                if (row.get("vlm_recs") != null) {
+                    Object[] arr = (Object[]) ((java.sql.Array) row.get("vlm_recs")).getArray();
+                    ArrayNode node = mgr.mapper.createArrayNode();
+                    for (Object e : arr) node.add(e != null ? e.toString() : "");
+                    vlmRecs = node;
+                }
             } catch (Exception ignored) {}
 
             StringBuilder sb = new StringBuilder("[SCORING RESULT]\n");
@@ -1316,10 +1327,10 @@ public class ConversationAgent implements Runnable {
             List<Map<String, Object>> rows = mgr.jdbc.queryForList(
                     "SELECT role, content FROM (" +
                     "  SELECT role, content, created_at FROM chat_messages " +
-                    "  WHERE conversation_id = :convId::uuid " +
+                    "  WHERE conversation_id = :convId " +
                     "  ORDER BY created_at DESC LIMIT 60" +
                     ") sub ORDER BY created_at ASC",
-                    Map.of("convId", convId));
+                    Map.of("convId", UUID.fromString(convId)));
             for (Map<String, Object> row : rows) {
                 messages.add(mgr.mapper.createObjectNode()
                         .put("role",    (String) row.get("role"))
@@ -1386,12 +1397,12 @@ public class ConversationAgent implements Runnable {
                 mgr.jdbc.update(
                         "INSERT INTO budget (session_uuid, workflow_id, conversation_id, " +
                         "max_retries, max_inpaints, expires_at) " +
-                        "VALUES (:sess::uuid, :wfId::uuid, :convId::uuid, :maxRetries, :maxInpaints, " +
+                        "VALUES (:sess, :wfId, :convId, :maxRetries, :maxInpaints, " +
                         "now() + interval '24 hours')",
                         new MapSqlParameterSource()
-                                .addValue("sess",       sessionUuid)
-                                .addValue("wfId",       wfId)
-                                .addValue("convId",     conversationId)
+                                .addValue("sess",       UUID.fromString(sessionUuid))
+                                .addValue("wfId",       UUID.fromString(wfId))
+                                .addValue("convId",     UUID.fromString(conversationId))
                                 .addValue("maxRetries", 3)
                                 .addValue("maxInpaints", 2));
 
@@ -1431,9 +1442,9 @@ public class ConversationAgent implements Runnable {
         try {
             List<String> ids = mgr.jdbc.queryForList(
                     "INSERT INTO workflows (conversation_id, name, workflow_path, max_retries, max_inpaints) " +
-                    "VALUES (:convId::uuid, :name, :path, :maxRetries, :maxInpaints) RETURNING workflow_id::text",
+                    "VALUES (:convId, :name, :path, :maxRetries, :maxInpaints) RETURNING workflow_id",
                     new MapSqlParameterSource()
-                            .addValue("convId",     conversationId)
+                            .addValue("convId",     UUID.fromString(conversationId))
                             .addValue("name",       name)
                             .addValue("path",       workflowPath)
                             .addValue("maxRetries", maxRetries)
@@ -1454,8 +1465,8 @@ public class ConversationAgent implements Runnable {
         try {
             mgr.jdbc.update(
                     "INSERT INTO session_vlm_prompts (conversation_id, eval_prompt) " +
-                    "VALUES (:convId::uuid, :prompt)",
-                    Map.of("convId", conversationId, "prompt", evalPrompt));
+                    "VALUES (:convId, :prompt)",
+                    Map.of("convId", UUID.fromString(conversationId), "prompt", evalPrompt));
         } catch (Exception e) {
             log.warning("handleVlmEvalPrompt failed: " + e.getMessage());
         }
@@ -1469,17 +1480,17 @@ public class ConversationAgent implements Runnable {
             if (workflowId != null) {
                 mgr.jdbc.update(
                         "INSERT INTO chat_messages (conversation_id, workflow_id, role, content) " +
-                        "VALUES (:convId::uuid, :wfId::uuid, :role, :content)",
+                        "VALUES (:convId, :wfId, :role, :content)",
                         new MapSqlParameterSource()
-                                .addValue("convId",   conversationId)
-                                .addValue("wfId",     workflowId)
+                                .addValue("convId",   UUID.fromString(conversationId))
+                                .addValue("wfId",     UUID.fromString(workflowId))
                                 .addValue("role",     role)
                                 .addValue("content",  content));
             } else {
                 mgr.jdbc.update(
                         "INSERT INTO chat_messages (conversation_id, role, content) " +
-                        "VALUES (:convId::uuid, :role, :content)",
-                        Map.of("convId", conversationId, "role", role, "content", content));
+                        "VALUES (:convId, :role, :content)",
+                        Map.of("convId", UUID.fromString(conversationId), "role", role, "content", content));
             }
         } catch (Exception e) {
             log.warning("saveChatMessage failed: " + e.getMessage());
@@ -1493,8 +1504,8 @@ public class ConversationAgent implements Runnable {
     private Budget loadBudget(String sessionUuid) {
         List<Map<String, Object>> rows = mgr.jdbc.queryForList(
                 "SELECT retries_used, inpaints_used, max_retries, max_inpaints " +
-                "FROM budget WHERE session_uuid = :sess::uuid",
-                Map.of("sess", sessionUuid));
+                "FROM budget WHERE session_uuid = :sess",
+                Map.of("sess", UUID.fromString(sessionUuid)));
         if (rows.isEmpty()) {
             return new Budget(0, 0,
                     mgr.cfg.getDecisions().getMaxRetries(),
@@ -1512,8 +1523,8 @@ public class ConversationAgent implements Runnable {
 
     private void maybeAutoTitle(List<ObjectNode> messages) {
         List<String> names = mgr.jdbc.queryForList(
-                "SELECT name FROM conversations WHERE conversation_id = :id::uuid",
-                Map.of("id", conversationId), String.class);
+                "SELECT name FROM conversations WHERE conversation_id = :id",
+                Map.of("id", UUID.fromString(conversationId)), String.class);
         if (names.isEmpty() || !"Untitled".equals(names.get(0))) return;
 
         String firstUserMsg = messages.stream()
@@ -1544,8 +1555,8 @@ public class ConversationAgent implements Runnable {
                 String title = resp.path("choices").path(0).path("message").path("content")
                         .asText("").strip().replaceAll("[\"']", "");
                 if (title.isBlank() || title.length() > 80) return;
-                mgr.jdbc.update("UPDATE conversations SET name = :name WHERE conversation_id = :id::uuid",
-                        Map.of("name", title, "id", conversationId));
+                mgr.jdbc.update("UPDATE conversations SET name = :name WHERE conversation_id = :id",
+                        Map.of("name", title, "id", UUID.fromString(conversationId)));
                 mgr.chatBroadcast.sendRename(conversationId, title);
                 log.info("Auto-titled " + conversationId + ": " + title);
             } catch (Exception e) {
@@ -1559,8 +1570,8 @@ public class ConversationAgent implements Runnable {
     private String loadConversationMemory(String convId) {
         if (convId == null) return null;
         List<String> rows = mgr.jdbc.queryForList(
-                "SELECT content FROM conversation_memory WHERE conversation_id = :id::uuid",
-                Map.of("id", convId), String.class);
+                "SELECT content FROM conversation_memory WHERE conversation_id = :id",
+                Map.of("id", UUID.fromString(convId)), String.class);
         if (rows.isEmpty()) return null;
         return "=== CONVERSATION MEMORY ==========================================\n" + rows.get(0) + "\n";
     }
@@ -1571,15 +1582,15 @@ public class ConversationAgent implements Runnable {
                 List<Map<String, Object>> rows = mgr.jdbc.queryForList(
                         "SELECT role, content FROM (" +
                         "  SELECT role, content, created_at FROM chat_messages " +
-                        "  WHERE conversation_id = :id::uuid " +
+                        "  WHERE conversation_id = :id " +
                         "  ORDER BY created_at DESC LIMIT 10" +
                         ") sub ORDER BY created_at ASC",
-                        Map.of("id", conversationId));
+                        Map.of("id", UUID.fromString(conversationId)));
                 if (rows.size() < 2) return;
 
                 List<String> existing = mgr.jdbc.queryForList(
-                        "SELECT content FROM conversation_memory WHERE conversation_id = :id::uuid",
-                        Map.of("id", conversationId), String.class);
+                        "SELECT content FROM conversation_memory WHERE conversation_id = :id",
+                        Map.of("id", UUID.fromString(conversationId)), String.class);
                 String currentMemory = existing.isEmpty() ? null : existing.get(0);
 
                 StringBuilder transcript = new StringBuilder();
@@ -1621,9 +1632,9 @@ public class ConversationAgent implements Runnable {
                 final String mem = newMemory;
                 mgr.jdbc.update(
                         "INSERT INTO conversation_memory (conversation_id, content) " +
-                        "VALUES (:id::uuid, :content) " +
+                        "VALUES (:id, :content) " +
                         "ON CONFLICT (conversation_id) DO UPDATE SET content = :content, last_updated_at = now()",
-                        Map.of("id", conversationId, "content", mem));
+                        Map.of("id", UUID.fromString(conversationId), "content", mem));
 
                 log.fine("Conversation memory updated for " + conversationId);
             } catch (Exception e) {

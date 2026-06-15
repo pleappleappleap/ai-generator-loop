@@ -38,9 +38,9 @@ public class ContextService {
         if (workflowId == null || workflowId.isBlank()) return null;
         List<String> rows = jdbc.queryForList(
                 "SELECT content FROM session_direction " +
-                "WHERE workflow_id = :wfId::uuid AND superseded_at IS NULL " +
+                "WHERE workflow_id = :wfId AND superseded_at IS NULL " +
                 "ORDER BY id DESC LIMIT 1",
-                Map.of("wfId", workflowId), String.class);
+                Map.of("wfId", java.util.UUID.fromString(workflowId)), String.class);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -48,9 +48,9 @@ public class ContextService {
         if (workflowId == null || workflowId.isBlank()) return null;
         List<String> rows = jdbc.queryForList(
                 "SELECT content FROM taste_synthesis " +
-                "WHERE workflow_id = :wfId::uuid " +
+                "WHERE workflow_id = :wfId " +
                 "ORDER BY id DESC LIMIT 1",
-                Map.of("wfId", workflowId), String.class);
+                Map.of("wfId", java.util.UUID.fromString(workflowId)), String.class);
         return rows.isEmpty() ? null : rows.get(0);
     }
 
@@ -74,7 +74,7 @@ public class ContextService {
         if (embeddingStr != null) {
             jdbc.update(
                     "INSERT INTO north_star (content, embedding, created_by) " +
-                    "VALUES (:content, :embedding::vector, :createdBy)",
+                    "VALUES (:content, :embedding, :createdBy)",
                     Map.of("content", content, "embedding", embeddingStr, "createdBy", createdBy));
         } else {
             jdbc.update(

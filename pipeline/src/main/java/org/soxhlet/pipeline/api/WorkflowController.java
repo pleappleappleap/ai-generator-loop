@@ -50,14 +50,13 @@ public class WorkflowController {
             return Map.of("ok", false, "error", "conversation_id required");
         }
 
-        // Create workflow
         List<String> wfIds = jdbc.queryForList(
                 "INSERT INTO workflows (conversation_id, name, workflow_path, description, " +
                 "budget_policy, max_retries, max_inpaints) " +
-                "VALUES (:convId::uuid, :name, :path, :desc, :policy, :maxR, :maxI) " +
-                "RETURNING workflow_id::text",
+                "VALUES (:convId, :name, :path, :desc, :policy, :maxR, :maxI) " +
+                "RETURNING workflow_id",
                 new MapSqlParameterSource()
-                        .addValue("convId", conversationId)
+                        .addValue("convId", UUID.fromString(conversationId))
                         .addValue("name", name)
                         .addValue("path", workflowPath)
                         .addValue("desc", description)
@@ -71,7 +70,6 @@ public class WorkflowController {
         }
         String workflowId = wfIds.get(0);
 
-        // Create first run (budget row)
         String runId = insertBudget(workflowId, conversationId, maxRetries, maxInpaints);
 
         return Map.of(
@@ -90,22 +88,21 @@ public class WorkflowController {
             @RequestBody(required = false) Map<String, Object> req) {
 
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT conversation_id::text, workflow_path, budget_policy, " +
-                "max_retries, max_inpaints FROM workflows WHERE workflow_id = :id::uuid",
-                Map.of("id", workflowId));
+                "SELECT conversation_id, workflow_path, budget_policy, " +
+                "max_retries, max_inpaints FROM workflows WHERE workflow_id = :id",
+                Map.of("id", UUID.fromString(workflowId)));
 
         if (rows.isEmpty()) {
             return Map.of("ok", false, "error", "workflow not found");
         }
         Map<String, Object> wf = rows.get(0);
 
-        String conversationId = (String) wf.get("conversation_id");
+        String conversationId = wf.get("conversation_id").toString();
         String workflowPath = (String) wf.get("workflow_path");
         String budgetPolicy = (String) wf.get("budget_policy");
         int maxRetries = ((Number) wf.get("max_retries")).intValue();
         int maxInpaints = ((Number) wf.get("max_inpaints")).intValue();
 
-        // Apply overrides from request body
         if (req != null) {
             if (req.get("budget_policy") != null) budgetPolicy = req.get("budget_policy").toString();
             if (req.get("max_retries") != null) maxRetries = ((Number) req.get("max_retries")).intValue();
@@ -115,12 +112,11 @@ public class WorkflowController {
         int effectiveRetries = maxRetries;
         int effectiveInpaints = maxInpaints;
 
-        // For accumulated policy, carry over remaining budget from last run
         if ("accumulated".equals(budgetPolicy)) {
             List<Map<String, Object>> last = jdbc.queryForList(
                     "SELECT retries_used, inpaints_used FROM budget " +
-                    "WHERE workflow_id = :wfId::uuid ORDER BY created_at DESC LIMIT 1",
-                    Map.of("wfId", workflowId));
+                    "WHERE workflow_id = :wfId ORDER BY created_at DESC LIMIT 1",
+                    Map.of("wfId", UUID.fromString(workflowId)));
             if (!last.isEmpty()) {
                 int prevRetries = ((Number) last.get(0).get("retries_used")).intValue();
                 int prevInpaints = ((Number) last.get(0).get("inpaints_used")).intValue();
@@ -190,12 +186,12 @@ public class WorkflowController {
         jdbc.update(
                 "INSERT INTO budget (session_uuid, workflow_id, conversation_id, " +
                 "max_retries, max_inpaints, expires_at) " +
-                "VALUES (:sess::uuid, :wfId::uuid, :convId::uuid, " +
+                "VALUES (:sess, :wfId, :convId, " +
                 ":maxR, :maxI, now() + interval '24 hours')",
                 new MapSqlParameterSource()
-                        .addValue("sess", sessionUuid)
-                        .addValue("wfId", workflowId)
-                        .addValue("convId", conversationId)
+                        .addValue("sess", UUID.fromString(sessionUuid))
+                        .addValue("wfId", UUID.fromString(workflowId))
+                        .addValue("convId", conversationId != null ? UUID.fromString(conversationId) : null)
                         .addValue("maxR", maxRetries)
                         .addValue("maxI", maxInpaints));
         return sessionUuid;

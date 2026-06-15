@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @RestController
@@ -32,14 +33,14 @@ public class SessionController {
     @GetMapping("/conversations")
     public List<Map<String, Object>> listConversations() {
         List<Map<String, Object>> convRows = jdbc.queryForList(
-                "SELECT conversation_id::text AS id, name FROM conversations " +
+                "SELECT conversation_id AS id, name FROM conversations " +
                 "WHERE status != 'archived' ORDER BY created_at DESC LIMIT 100",
                 Map.of());
         if (convRows.isEmpty()) return List.of();
 
         Map<String, Map<String, Object>> byId = new LinkedHashMap<>();
         for (Map<String, Object> r : convRows) {
-            String id = (String) r.get("id");
+            String id = r.get("id").toString();
             Map<String, Object> conv = new HashMap<>();
             conv.put("conversation_id", id);
             conv.put("name", r.get("name"));
@@ -47,21 +48,21 @@ public class SessionController {
             byId.put(id, conv);
         }
 
-        List<String> ids = new ArrayList<>(byId.keySet());
+        List<UUID> uuidIds = byId.keySet().stream().map(UUID::fromString).collect(Collectors.toList());
         List<Map<String, Object>> wfRows = jdbc.queryForList(
-                "SELECT workflow_id::text AS wid, conversation_id::text AS cid, " +
+                "SELECT workflow_id AS wid, conversation_id AS cid, " +
                 "name, COALESCE(workflow_path, '') AS workflow_path " +
-                "FROM workflows WHERE conversation_id::text IN (:ids) " +
+                "FROM workflows WHERE conversation_id IN (:ids) " +
                 "ORDER BY created_at ASC",
-                new MapSqlParameterSource("ids", ids));
+                new MapSqlParameterSource("ids", uuidIds));
         for (Map<String, Object> wf : wfRows) {
-            String cid = (String) wf.get("cid");
+            String cid = wf.get("cid").toString();
             Map<String, Object> conv = byId.get(cid);
             if (conv == null) continue;
             @SuppressWarnings("unchecked")
             List<Map<String, Object>> wfList = (List<Map<String, Object>>) conv.get("workflows");
             Map<String, Object> wfEntry = new HashMap<>();
-            wfEntry.put("workflow_id", wf.get("wid"));
+            wfEntry.put("workflow_id", wf.get("wid").toString());
             wfEntry.put("name", wf.get("name"));
             wfEntry.put("workflow_path", wf.get("workflow_path"));
             wfEntry.put("conversation_id", cid);
@@ -76,7 +77,7 @@ public class SessionController {
         if (name.isBlank()) name = "Untitled";
 
         List<String> ids = jdbc.queryForList(
-                "INSERT INTO conversations (name) VALUES (:name) RETURNING conversation_id::text",
+                "INSERT INTO conversations (name) VALUES (:name) RETURNING conversation_id",
                 Map.of("name", name), String.class);
 
         if (ids.isEmpty()) {
@@ -88,8 +89,8 @@ public class SessionController {
     @DeleteMapping("/conversations/{conversationId}")
     public Map<String, Object> deleteConversation(@PathVariable String conversationId) {
         int updated = jdbc.update(
-                "UPDATE conversations SET status = 'archived' WHERE conversation_id = :id::uuid",
-                Map.of("id", conversationId));
+                "UPDATE conversations SET status = 'archived' WHERE conversation_id = :id",
+                Map.of("id", UUID.fromString(conversationId)));
         if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
         return Map.of("ok", true);
     }
@@ -98,8 +99,8 @@ public class SessionController {
     public Map<String, Object> cancelConversation(@PathVariable String conversationId) {
         int updated = jdbc.update(
                 "UPDATE conversations SET status = 'cancelled' " +
-                "WHERE conversation_id = :id::uuid",
-                Map.of("id", conversationId));
+                "WHERE conversation_id = :id",
+                Map.of("id", UUID.fromString(conversationId)));
         if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
         return Map.of("ok", true);
     }
@@ -111,8 +112,8 @@ public class SessionController {
         String name = req.get("name") != null ? req.get("name").toString().strip() : "";
         if (name.isBlank()) return Map.of("ok", false, "error", "name is required");
         int updated = jdbc.update(
-                "UPDATE conversations SET name = :name WHERE conversation_id = :id::uuid",
-                Map.of("name", name, "id", conversationId));
+                "UPDATE conversations SET name = :name WHERE conversation_id = :id",
+                Map.of("name", name, "id", UUID.fromString(conversationId)));
         if (updated == 0) return Map.of("ok", false, "error", "conversation not found");
         return Map.of("ok", true);
     }

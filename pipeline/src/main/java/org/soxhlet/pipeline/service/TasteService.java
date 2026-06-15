@@ -53,14 +53,14 @@ public class TasteService {
                 SELECT uf.rating, uf.comment, i.prompt, i.vlm_scores, i.vlm_issues
                 FROM user_feedback uf
                 JOIN images i ON i.image_uuid = uf.image_uuid
-                WHERE uf.workflow_id = :wfId::uuid
+                WHERE uf.workflow_id = :wfId
                   AND uf.created_at > COALESCE(
                       (SELECT created_at FROM taste_synthesis
-                       WHERE workflow_id = :wfId::uuid ORDER BY id DESC LIMIT 1),
+                       WHERE workflow_id = :wfId ORDER BY id DESC LIMIT 1),
                       '1970-01-01')
                 ORDER BY uf.created_at DESC
                 """,
-                Map.of("wfId", workflowId));
+                Map.of("wfId", java.util.UUID.fromString(workflowId)));
 
         if (recent.size() < synthesisThreshold) return;
 
@@ -71,11 +71,11 @@ public class TasteService {
         jdbc.update(
                 """
                 INSERT INTO taste_synthesis (conversation_id, workflow_id, content, source_feedback_count)
-                VALUES (:convId::uuid, :wfId::uuid, :content, :count)
+                VALUES (:convId, :wfId, :content, :count)
                 """,
                 new MapSqlParameterSource()
-                        .addValue("convId", conversationId)
-                        .addValue("wfId", workflowId)
+                        .addValue("convId", conversationId != null ? java.util.UUID.fromString(conversationId) : null)
+                        .addValue("wfId", java.util.UUID.fromString(workflowId))
                         .addValue("content", synthesised)
                         .addValue("count", recent.size()));
         log.info("Taste synthesis written for workflow " + workflowId);

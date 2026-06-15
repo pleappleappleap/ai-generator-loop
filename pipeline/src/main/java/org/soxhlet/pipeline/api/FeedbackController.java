@@ -8,6 +8,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
+import java.util.UUID;
 import java.util.logging.Logger;
 
 @RestController
@@ -41,11 +42,11 @@ public class FeedbackController {
         try {
             jdbc.update(
                     "INSERT INTO user_feedback (image_uuid, workflow_id, session_uuid, rating, comment) " +
-                    "VALUES (:imageUuid::uuid, :wfId::uuid, :sess::uuid, :rating, :comment)",
+                    "VALUES (:imageUuid, :wfId, :sess, :rating, :comment)",
                     new MapSqlParameterSource()
-                            .addValue("imageUuid", imageUuid)
-                            .addValue("wfId", workflowId)
-                            .addValue("sess", runId)
+                            .addValue("imageUuid", UUID.fromString(imageUuid))
+                            .addValue("wfId", workflowId != null ? UUID.fromString(workflowId) : null)
+                            .addValue("sess", UUID.fromString(runId))
                             .addValue("rating", rating)
                             .addValue("comment", comment));
         } catch (Exception e) {
@@ -58,8 +59,8 @@ public class FeedbackController {
             try {
                 // Look up conversation_id for this workflow
                 var rows = jdbc.queryForList(
-                        "SELECT conversation_id::text FROM workflows WHERE workflow_id = :id::uuid",
-                        Map.of("id", workflowId), String.class);
+                        "SELECT conversation_id FROM workflows WHERE workflow_id = :id",
+                        Map.of("id", UUID.fromString(workflowId)), String.class);
                 String conversationId = rows.isEmpty() ? null : rows.get(0);
                 tasteService.onFeedbackAdded(workflowId, conversationId);
             } catch (Exception e) {

@@ -20,11 +20,14 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 
+import org.postgresql.util.PGobject;
+
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.sql.Types;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.logging.Logger;
 import java.util.stream.StreamSupport;
 
@@ -71,11 +74,11 @@ public class Scorer {
         JsonNode msg = mapper.readTree(body);
         jdbc.update(
                 "INSERT INTO pending_scorings (image_uuid, session_uuid, payload) " +
-                "VALUES (:id::uuid, :sess::uuid, :payload::jsonb) ON CONFLICT DO NOTHING",
+                "VALUES (:id, :sess, :payload) ON CONFLICT DO NOTHING",
                 Map.of(
-                        "id", msg.get("image_uuid").asText(),
-                        "sess", msg.get("session_uuid").asText(),
-                        "payload", body));
+                        "id",      UUID.fromString(msg.get("image_uuid").asText()),
+                        "sess",    UUID.fromString(msg.get("session_uuid").asText()),
+                        "payload", pgObj("jsonb", body)));
     }
 
     // -- Polling loop - processes staged work (normal path + crash recovery) ----
@@ -83,12 +86,12 @@ public class Scorer {
     @Scheduled(fixedDelay = 2000)
     public void pollAndProcess() {
         List<Map<String, Object>> rows = jdbc.queryForList(
-                "SELECT image_uuid::text, payload::text FROM pending_scorings LIMIT 1",
+                "SELECT image_uuid, payload FROM pending_scorings LIMIT 1",
                 Map.of());
         if (rows.isEmpty()) return;
         Map<String, Object> row = rows.get(0);
-        String imageUuid  = (String) row.get("image_uuid");
-        String payloadJson = (String) row.get("payload");
+        String imageUuid   = row.get("image_uuid").toString();
+        String payloadJson = row.get("payload").toString();
         try {
             JsonNode msg = mapper.readTree(payloadJson);
             scoreImage(imageUuid, msg);
@@ -138,8 +141,8 @@ public class Scorer {
         if (conversationId != null) {
             List<String> prompts = jdbc.queryForList(
                     "SELECT eval_prompt FROM session_vlm_prompts " +
-                    "WHERE conversation_id = :convId::uuid ORDER BY created_at DESC LIMIT 1",
-                    Map.of("convId", conversationId), String.class);
+                    "WHERE conversation_id = :convId ORDER BY created_at DESC LIMIT 1",
+                    Map.of("convId", UUID.fromString(conversationId)), String.class);
             if (!prompts.isEmpty()) vlmEvalPrompt = prompts.get(0);
         }
         java.util.Map<String, Object> vlmReqBody = new java.util.HashMap<>();
@@ -157,11 +160,11 @@ public class Scorer {
         Double northStarSimilarity = null;
         if (embeddingStr != null) {
             List<Double> simRows = jdbc.queryForList(
-                    "SELECT (1 - (ns.embedding::vector <=> :emb::vector))::float8 " +
+                    "SELECT (1 - (ns.embedding::vector <=> :emb)) " +
                     "FROM north_star ns " +
                     "WHERE ns.superseded_at IS NULL AND ns.embedding IS NOT NULL " +
                     "ORDER BY ns.id DESC LIMIT 1",
-                    Map.of("emb", embeddingStr), Double.class);
+                    Map.of("emb", pgObj("vector", embeddingStr)), Double.class);
             if (!simRows.isEmpty()) northStarSimilarity = simRows.get(0);
         }
 
@@ -197,8 +200,8 @@ public class Scorer {
 
         requiresNew.execute(status -> {
             try {
-                jdbc.update("DELETE FROM pending_scorings WHERE image_uuid = :id::uuid",
-                        Map.of("id", imageUuid));
+                jdbc.update("DELETE FROM pending_scorings WHERE image_uuid = :id",
+                        Map.of("id", UUID.fromString(imageUuid)));
 
                 String sql = """
                         INSERT INTO images (
@@ -207,9 +210,9 @@ public class Scorer {
                             clip_score, vlm_scores, vlm_issues, vlm_recs,
                             verdict, rejection_reason, image_path, embedding, north_star_similarity
                         ) VALUES (
-                            :imageUuid::uuid, :sessionUuid::uuid, :seqNum, :prompt,
-                            :workflowPath, :workflowParams::jsonb, :workflowId::uuid, :conversationId::uuid,
-                            :clipScore, :vlmScores::jsonb, :vlmIssues, :vlmRecs,
+                            :imageUuid, :sessionUuid, :seqNum, :prompt,
+                            :workflowPath, :workflowParams, :workflowId, :conversationId,
+                            :clipScore, :vlmScores, :vlmIssues, :vlmRecs,
                             :verdict, :rejectionReason, :imagePath, :embedding, :northStarSim
                         )
                         ON CONFLICT (image_uuid) DO UPDATE SET
@@ -224,16 +227,16 @@ public class Scorer {
                         """;
 
                 MapSqlParameterSource params = new MapSqlParameterSource()
-                        .addValue("imageUuid", imageUuid)
-                        .addValue("sessionUuid", sessionUuid)
+                        .addValue("imageUuid", UUID.fromString(imageUuid))
+                        .addValue("sessionUuid", UUID.fromString(sessionUuid))
                         .addValue("seqNum", sequenceNumber)
                         .addValue("prompt", prompt)
                         .addValue("workflowPath", workflowPath)
-                        .addValue("workflowParams", workflowParamsJson)
-                        .addValue("workflowId", workflowId)
-                        .addValue("conversationId", conversationId)
+                        .addValue("workflowParams", pgObj("jsonb", workflowParamsJson))
+                        .addValue("workflowId", workflowId != null ? UUID.fromString(workflowId) : null)
+                        .addValue("conversationId", conversationId != null ? UUID.fromString(conversationId) : null)
                         .addValue("clipScore", clipScore)
-                        .addValue("vlmScores", mapper.writeValueAsString(vlmScores))
+                        .addValue("vlmScores", pgObj("jsonb", mapper.writeValueAsString(vlmScores)))
                         .addValue("vlmIssues", new AbstractSqlTypeValue() {
                             @Override
                             protected Object createTypeValue(Connection conn, int sqlType, String typeName)
@@ -305,5 +308,16 @@ public class Scorer {
 
     private static String nullIfBlank(String s) {
         return (s == null || s.isBlank()) ? null : s;
+    }
+
+    private static PGobject pgObj(String type, String value) {
+        try {
+            PGobject o = new PGobject();
+            o.setType(type);
+            o.setValue(value);
+            return o;
+        } catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 }

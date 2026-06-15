@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 @RestController
 public class HistoryController {
@@ -29,37 +30,50 @@ public class HistoryController {
             return Map.of("ok", true, "chat", List.of(), "feedback", List.of());
         }
 
-        // Chat messages - all for the conversation, or workflow-scoped if provided
         List<Map<String, Object>> chatRaw = jdbc.queryForList(
-                "SELECT role, content, created_at::text FROM (" +
+                "SELECT role, content, created_at FROM (" +
                 "  SELECT role, content, created_at FROM chat_messages " +
-                "  WHERE conversation_id = :convId::uuid " +
+                "  WHERE conversation_id = :convId " +
                 "  ORDER BY created_at DESC LIMIT :limit" +
                 ") sub ORDER BY created_at ASC",
-                Map.of("convId", conversationId, "limit", limit));
+                Map.of("convId", UUID.fromString(conversationId), "limit", limit));
 
-        // Recent user feedback for this workflow (or conversation)
         List<Map<String, Object>> feedbackRaw;
         if (!workflowId.isBlank()) {
             feedbackRaw = jdbc.queryForList(
-                    "SELECT uf.rating, uf.comment, uf.image_uuid::text, uf.created_at::text " +
+                    "SELECT uf.rating, uf.comment, uf.image_uuid, uf.created_at " +
                     "FROM user_feedback uf " +
-                    "WHERE uf.workflow_id = :wfId::uuid " +
+                    "WHERE uf.workflow_id = :wfId " +
                     "ORDER BY uf.created_at DESC LIMIT 20",
-                    Map.of("wfId", workflowId));
+                    Map.of("wfId", UUID.fromString(workflowId)));
         } else {
             feedbackRaw = jdbc.queryForList(
-                    "SELECT uf.rating, uf.comment, uf.image_uuid::text, uf.created_at::text " +
+                    "SELECT uf.rating, uf.comment, uf.image_uuid, uf.created_at " +
                     "FROM user_feedback uf " +
                     "JOIN images i ON i.image_uuid = uf.image_uuid " +
-                    "WHERE i.conversation_id = :convId::uuid " +
+                    "WHERE i.conversation_id = :convId " +
                     "ORDER BY uf.created_at DESC LIMIT 20",
-                    Map.of("convId", conversationId));
+                    Map.of("convId", UUID.fromString(conversationId)));
         }
 
         return Map.of(
                 "ok", true,
-                "chat", chatRaw,
-                "feedback", feedbackRaw);
+                "chat", toStringDates(chatRaw),
+                "feedback", toStringDates(feedbackRaw));
+    }
+
+    private static List<Map<String, Object>> toStringDates(List<Map<String, Object>> rows) {
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> row : rows) {
+            Map<String, Object> m = new HashMap<>(row);
+            for (String key : m.keySet()) {
+                Object v = m.get(key);
+                if (v != null && !(v instanceof String) && !(v instanceof Number) && !(v instanceof Boolean)) {
+                    m.put(key, v.toString());
+                }
+            }
+            out.add(m);
+        }
+        return out;
     }
 }
