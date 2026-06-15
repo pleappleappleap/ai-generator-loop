@@ -17,6 +17,9 @@
 #               Restart the currently active mode. With --all, also restart
 #               middleware (rolling kubectl restart + port-forward cycle).
 #               Errors if nothing is running.
+#   soxhlet.sh repair artemis
+#               Clear the Artemis lock directory and restart the Artemis pod.
+#               Use when Artemis is stuck in Init:Error after an unclean shutdown.
 #   soxhlet.sh status
 #               Show status of middleware and the active mode.
 #   soxhlet.sh health
@@ -190,9 +193,14 @@ case "${1:-status}" in
             "")    _restart ;;
             *) echo "Usage: $0 restart [--all]" >&2; exit 1 ;;
         esac ;;
+    repair)
+        case "${2:-}" in
+            artemis) "$SOXHLET_ROOT/middleware.sh" repair-artemis ;;
+            *) echo "Usage: $0 repair artemis" >&2; exit 1 ;;
+        esac ;;
     status)  _status ;;
     health)  _health ;;
     *)
-        echo "Usage: $0 {start [loop|strategic] | stop [--all] | restart [--all] | status | health}" >&2
+        echo "Usage: $0 {start [loop|strategic] | stop [--all] | restart [--all] | repair artemis | status | health}" >&2
         exit 1 ;;
 esac

@@ -153,6 +153,22 @@ _stop_all() {
     colima stop
 }
 
+_repair_artemis() {
+    _ensure_colima
+    _wait_k3s_ready
+    _require_kubectl
+    echo "==> Scaling Artemis down..."
+    kubectl scale deployment artemis --replicas=0 -n "$NS" 2>/dev/null || true
+    echo "==> Removing Artemis lock directory..."
+    rm -rf "$SOXHLET_ROOT/middleware/data/artemis/lock"
+    echo "==> Scaling Artemis up..."
+    kubectl scale deployment artemis --replicas=1 -n "$NS"
+    _wait_pod_ready "app=artemis" "Artemis" 120
+    _stop_port_forwards
+    _start_port_forwards
+    echo "==> Artemis repaired."
+}
+
 _restart() {
     _ensure_colima
     _wait_k3s_ready
@@ -204,14 +220,15 @@ _health() {
 }
 
 case "${1:-status}" in
-    start)   _start ;;
+    start)          _start ;;
     stop)
         case "${2:-}" in
-            --all) _stop_all ;;
-            *)     _stop ;;
+            --all)  _stop_all ;;
+            *)      _stop ;;
         esac ;;
-    restart) _restart ;;
-    status)  _status ;;
-    health)  _health ;;
-    *)       echo "Usage: $0 {start|stop [--all]|restart|status|health}" >&2; exit 1 ;;
+    restart)        _restart ;;
+    repair-artemis) _repair_artemis ;;
+    status)         _status ;;
+    health)         _health ;;
+    *)       echo "Usage: $0 {start|stop [--all]|restart|repair-artemis|status|health}" >&2; exit 1 ;;
 esac
